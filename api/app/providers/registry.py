@@ -104,25 +104,9 @@ class DatabaseProvider(Provider):
         return ProbeResult(True, "postgres reachable", True)
 
 
-class TunnelProvider(Provider):
-    """cloudflared is the only ingress. No inbound port is ever opened (G1.2)."""
-
-    name = "tunnel"
-
-    def __init__(self, settings: Settings) -> None:
-        self._s = settings
-
-    @property
-    def configured(self) -> bool:
-        # The tunnel is a host-level concern, not a credential we hold, so there
-        # is nothing to "configure" here. The probe alone decides health, and in
-        # dev it will honestly say cloudflared is not running (I-8).
-        return True
-
-    async def probe(self) -> ProbeResult:
-        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            try:
-                r = await client.get(self._s.tunnel_metrics_url)
-            except httpx.RequestError as exc:
-                return ProbeResult(False, f"cloudflared metrics unreachable: {exc}")
-        return ProbeResult(r.status_code == 200, f"cloudflared metrics -> {r.status_code}", True)
+# TunnelProvider was removed deliberately. See the note in main.py: cloudflared
+# binds 127.0.0.1:2000 on the HOST, and this process runs in a container whose
+# only route to the host is the bridge gateway (172.17.0.1), where nothing is
+# listening. Binding the metrics endpoint wider would fix the probe and make a
+# metrics bind failure able to take down ingress -- a worse trade than losing
+# one row on a dashboard. The tunnel is supervised by systemd instead.

@@ -23,7 +23,6 @@ from api.app.providers.registry import (
     EternitasProvider,
     GiteaProvider,
     R2Provider,
-    TunnelProvider,
 )
 from api.app.routes import health
 
@@ -86,7 +85,14 @@ async def lifespan(app: FastAPI):
         GiteaProvider(settings),
         R2Provider(settings),
         EternitasProvider(settings),
-        TunnelProvider(settings),
+        # NOTE: the tunnel is deliberately NOT probed from here. cloudflared
+        # binds its metrics on the host's loopback, so a container can never
+        # reach it -- the check would be permanently red no matter what the
+        # tunnel is doing. A check that structurally cannot succeed is worse
+        # than no check: it trains people to ignore the dashboard, which is
+        # exactly how a fleet canary goes 37 days dead without anyone noticing.
+        # Tunnel health is a host concern and lives where it can be observed:
+        # systemd Restart=always, plus the runbook's `systemctl status`.
     ]
 
     yield

@@ -66,6 +66,14 @@ async def health_full(request: Request, response: Response) -> dict:
         "status": status,
         "commit_sha": info.commit_sha,
         "checks": checks,
+        # Named, not hidden. An observer should never have to wonder whether a
+        # missing check means healthy or means forgotten.
+        "not_checked_here": {
+            "tunnel": (
+                "host-scoped: cloudflared binds host loopback and is supervised "
+                "by systemd (windygit-tunnel). Verify with `systemctl status`."
+            )
+        },
         # Grandma-words, and the D-9 vocabulary law binds this string.
         "speak": (
             "Everything is working."
