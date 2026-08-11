@@ -44,6 +44,10 @@ services:
       # G6.2 — SSH access is deferred to R1. The tunnel does HTTPS cleanly and
       # no v0 user needs SSH. Recorded as deferred, not forgotten.
       GITEA__server__DISABLE_SSH: "true"
+      # Setting the LFS storage backend does NOT turn LFS on. Without this the
+      # batch endpoint 404s and the client reports "Repository or object not
+      # found", which reads like a permissions problem and is not one.
+      GITEA__server__LFS_START_SERVER: "true"
       # G7.1 — CI on our own hardware. This is the whole verification payoff.
       GITEA__actions__ENABLED: "true"
       # D-9 vocabulary law reaches the product name itself.
