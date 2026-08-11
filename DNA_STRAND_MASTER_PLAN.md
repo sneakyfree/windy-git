@@ -324,6 +324,13 @@ and landed in R2 at `lfs/34/2d/…`, with **no local `lfs/` directory on the hos
 - **G5.5** **Version history UI with one giant Undo.** Grandma-words throughout, and D-9 binds every string: "version", "save point", "restore" — **never "commit," never "a Git"** on this surface.
 - **G5.6** `POST /{id}/restore {version_seq}` — lossless, and itself a new version. **Undo is never destructive.**
 - **G5.7** Quota events double as storage-plan cross-sell hooks (§0.5).
+- **G5.9** ⚠️ **Service callers need an on-behalf-of identity.** Verified live on
+  2026-08-11: a repo created through `X-Service-Token` lands in a `u-system`
+  namespace, because the service caller has no identity of its own. That is
+  correct for `/internal/*` plumbing and **wrong for anything a person owns** —
+  the Cloud portal must pass the acting user, and this cell must refuse to
+  create a user-owned repo without one. Until then, service-created repos are
+  ops artifacts, not customer data.
 - **G5.8** *Accept — the strand's whole point in one test:* a Cloud folder is git-enabled, a second human is granted `writer`, that human edits a file through the portal, the owner restores the previous version, and **at no point does either user encounter the word "commit," "repo," "branch," or "Git."**
 
 ## Strand G6 — Git protocol surface

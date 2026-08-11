@@ -291,8 +291,12 @@ async def list_versions(
     return {
         "versions": versions,
         "count": len(versions),
+        # "There are 1 saved versions" is the kind of sloppiness the vocabulary
+        # law exists to catch. Copy is design material, not decoration (I-9).
         "speak": (
-            f"There are {len(versions)} saved versions of '{repo.display_name}'. "
+            f"'{repo.display_name}' has 1 saved version. You can go back to it."
+            if len(versions) == 1
+            else f"'{repo.display_name}' has {len(versions)} saved versions. "
             "You can go back to any of them."
             if versions
             else f"'{repo.display_name}' is empty so far."
