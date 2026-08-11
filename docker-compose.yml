@@ -72,7 +72,12 @@ services:
       # default; without this, uploads fail with an opaque checksum error that
       # reads like a credential problem and is not one.
       GITEA__storage__MINIO_CHECKSUM_ALGORITHM: md5
-      GITEA__lfs__STORAGE_TYPE: minio
+      # ⚠️ Do NOT add `GITEA__lfs__STORAGE_TYPE`. Naming a storage type inside
+      # [lfs] creates a SEPARATE storage section that does not inherit the
+      # endpoint or credentials from [storage], so Gitea boots into a crash loop
+      # with "Endpoint: does not follow ip address or domain name standards" —
+      # an error that names the symptom and not the cause. LFS inherits the
+      # [storage] defaults above on its own; avatars proved it by working.
     volumes:
       # I-3: git object databases on a POSIX filesystem. Never object storage.
       - ${GIT_DATA_ROOT:-./data/gitea}:/data
