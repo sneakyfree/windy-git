@@ -284,3 +284,68 @@ def test_g43_r2_checksum_trap_is_pinned():
     """R2 rejects the checksum algorithm S3 clients send by default."""
     compose = (ROOT / "docker-compose.yml").read_text()
     assert "MINIO_CHECKSUM_ALGORITHM" in compose
+
+
+# --------------------------------------------------------------------------
+# G3.6 — the trust status-code law. This is the one with a live sibling bypass.
+# --------------------------------------------------------------------------
+def test_g36_trust_client_never_soft_allows():
+    """A sibling maps HTTP 400 and 429 to 'unreachable' and then soft-ALLOWS.
+    That is inducible: an attacker who wants the check skipped only has to make
+    the check rate-limit itself at 100/min/IP."""
+    src = (ROOT / "api" / "app" / "auth.py").read_text()
+    assert "raise passport_unresolvable" in src
+    # There must be no return path out of resolve_passport other than a verified
+    # 200 or a raise.
+    body = src[src.index("async def resolve_passport") : src.index("async def get_caller")]
+    returns = [ln for ln in body.splitlines() if ln.strip().startswith("return")]
+    assert len(returns) == 1, f"resolve_passport has {len(returns)} return paths; expected exactly 1"
+
+
+def test_g36_unverified_human_jwt_is_refused_in_production():
+    """I-8 applied to ourselves: an unverified JWT is an authentication bypass,
+    not a shortcut. Until G3.2's JWKS verifier exists, production refuses."""
+    from api.app.config import Settings
+
+    assert Settings().require_verified_jwt is True
+    src = (ROOT / "api" / "app" / "auth.py").read_text()
+    assert "human_signin_not_ready" in src
+
+
+def test_no_auth_bypass_env_var_anywhere():
+    """The desktop control server is the best Principle-#5 artifact in the
+    ecosystem partly because it has NO bypass env var. Copied on purpose."""
+    src = (ROOT / "api" / "app" / "auth.py").read_text()
+    for banned in ("SKIP_AUTH", "DISABLE_AUTH", "ALLOW_INSECURE", "AUTH_BYPASS", "DEV_MODE"):
+        assert banned not in src
+
+
+# --------------------------------------------------------------------------
+# G5.3 — the shelter's grant model
+# --------------------------------------------------------------------------
+def test_g53_grant_requires_exactly_one_grantee_in_the_database():
+    """Enforced by a CHECK constraint, not by application code. This ecosystem
+    already has a core invariant enforced only in app code across two files."""
+    src = (ROOT / "alembic" / "versions" / "001_genesis.py").read_text()
+    assert "ck_grant_exactly_one_grantee" in src
+    assert "(grantee_identity_id IS NULL) <> (grantee_passport IS NULL)" in src
+
+
+def test_g53_agent_grants_expire_by_default():
+    from api.app.config import Settings
+
+    assert Settings().agent_grant_default_days == 90
+
+
+def test_g55_shelter_strings_avoid_developer_vocabulary():
+    """D-9/I-9: a person restoring last Tuesday's work should not have to learn
+    a vocabulary first. Check the strings users actually see."""
+    import re as _re
+
+    src = (ROOT / "api" / "app" / "routes" / "repos.py").read_text()
+    speaks = _re.findall(r'"speak":\s*\(?\s*\n?\s*f?"([^"]+)"', src)
+    assert speaks, "no speak strings found to audit"
+    for s in speaks:
+        low = s.lower()
+        for jargon in ("commit", "repository", "branch", "sha", "push"):
+            assert jargon not in low, f"developer vocabulary in a user string: {s!r}"

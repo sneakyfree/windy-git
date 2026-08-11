@@ -50,6 +50,17 @@ class Settings(BaseSettings):
     # ---- account-server OIDC (human identity) -----------------------------
     account_server_base_url: str = "https://account.windyword.ai"
 
+    # Internal callers (the Cloud portal calling /internal/*). A first-class
+    # caller class, not a bypass: unset means service calls are REFUSED.
+    service_token: str = ""
+
+    # ⚠️ FAIL-CLOSED GATE. Full RS256/ES256 JWKS verification lands in G3.2.
+    # Until it does, the human token path must not be reachable in production —
+    # accepting an unverified JWT is not a shortcut, it is an authentication
+    # bypass. Agents are unaffected: their authority comes from a live Eternitas
+    # trust lookup, not from anything the token asserts about itself.
+    require_verified_jwt: bool = True
+
     # ---- storage law (I-3, G4.4) ------------------------------------------
     # Git object databases MUST live on a POSIX filesystem. A test asserts this
     # path does not resolve to a network mount.

@@ -13,7 +13,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from api.app.buildinfo import get_build_info
 from api.app.config import get_settings
@@ -24,7 +24,7 @@ from api.app.providers.registry import (
     GiteaProvider,
     R2Provider,
 )
-from api.app.routes import health
+from api.app.routes import health, repos
 
 logging.basicConfig(
     level=logging.INFO,
@@ -80,6 +80,9 @@ async def lifespan(app: FastAPI):
 
     app.state.settings = settings
     app.state.engine = engine
+    app.state.sessionmaker = (
+        async_sessionmaker(engine, expire_on_commit=False) if engine is not None else None
+    )
     app.state.providers = [
         DatabaseProvider(engine),
         GiteaProvider(settings),
@@ -112,6 +115,7 @@ app = FastAPI(
 )
 
 app.include_router(health.router)
+app.include_router(repos.router)
 
 
 @app.exception_handler(RepairPointer)
