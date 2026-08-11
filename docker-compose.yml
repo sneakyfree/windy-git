@@ -1,0 +1,60 @@
+# G0.5 — committed, secrets stripped.
+#
+# Three compose files that wire production to its databases currently exist in
+# exactly one place on earth (SOTU section 5.6.3): windy-pro's postgres override,
+# Mind's WireGuard override, and WindyCloud's kit0 override — the last of which
+# had to be reconstructed after an `rsync --delete` ate it once. This cell will
+# not add a fourth. Real values come from .env, which is gitignored.
+
+name: windy-git
+
+services:
+  api:
+    build:
+      context: .
+      args:
+        # I-12: baked at build time. A runtime COMMIT_SHA override is ignored.
+        COMMIT_SHA: ${COMMIT_SHA_BUILD:-}
+        BUILT_AT: ${BUILT_AT:-}
+    env_file: [.env]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://windygit:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/windygit
+      GITEA_BASE_URL: http://gitea:3000
+    ports: ["8600:8600"]
+    depends_on: {db: {condition: service_healthy}}
+    restart: unless-stopped
+
+  gitea:
+    # G2.1 — PIN AN EXACT VERSION. Never `latest`. Record it in SUBSTRATE.md.
+    image: docker.io/gitea/gitea:1.24.6
+    environment:
+      GITEA__database__DB_TYPE: postgres
+      GITEA__database__HOST: db:5432
+      GITEA__database__NAME: gitea
+      GITEA__database__USER: gitea
+      GITEA__database__PASSWD: ${GITEA_DB_PASSWORD:?set GITEA_DB_PASSWORD}
+      GITEA__repository__DEFAULT_BRANCH: main
+      GITEA__server__ROOT_URL: ${GITEA_ROOT_URL:-http://localhost:3000/}
+      # G2.2 — OIDC only. No local password login, no self-registration.
+      GITEA__service__DISABLE_REGISTRATION: "true"
+      GITEA__service__ALLOW_ONLY_EXTERNAL_REGISTRATION: "true"
+      GITEA__lfs__PATH: /data/lfs
+    volumes:
+      # I-3: git object databases on a POSIX filesystem. Never object storage.
+      - ${GIT_DATA_ROOT:-./data/gitea}:/data
+    ports: ["3000:3000"]
+    depends_on: {db: {condition: service_healthy}}
+    restart: unless-stopped
+
+  db:
+    image: docker.io/library/postgres:16-alpine
+    environment:
+      POSTGRES_USER: windygit
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}
+      POSTGRES_DB: windygit
+    volumes: ["./data/pg:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U windygit"]
+      interval: 5s
+      retries: 10
+    restart: unless-stopped

@@ -24,3 +24,6 @@ cloudflared/*.json
 
 # OS
 .DS_Store
+*.egg-info/
+data/
+.venv/
