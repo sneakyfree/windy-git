@@ -234,3 +234,53 @@ def test_g05_no_secret_literals_committed():
         text = path.read_text(encoding="utf-8", errors="ignore")
         for pattern in patterns:
             assert not pattern.search(text), f"credential literal in {path}"
+
+
+# --------------------------------------------------------------------------
+# G2.1 / G2.7 — the Gitea version is PINNED, and drift is a failure
+# --------------------------------------------------------------------------
+def test_g21_gitea_version_is_pinned_not_latest():
+    compose = (ROOT / "docker-compose.yml").read_text()
+    m = re.search(r"image:\s*\S*gitea/gitea:(\S+)", compose)
+    assert m, "no gitea image pin found"
+    assert m.group(1) != "latest", "G2.1: pin an exact Gitea version, never `latest`"
+    assert re.match(r"^\d+\.\d+\.\d+$", m.group(1)), f"not an exact version: {m.group(1)}"
+
+
+def test_g24_gitea_license_travels_with_us():
+    """MIT's one obligation. Cheap to honour, embarrassing to miss."""
+    assert (ROOT / "LICENSES" / "gitea-MIT.txt").exists()
+    assert "MIT" in (ROOT / "LICENSES" / "gitea-MIT.txt").read_text()
+
+
+# --------------------------------------------------------------------------
+# G4.3 — the two Gitea storage traps that cost a crash loop each
+# --------------------------------------------------------------------------
+def test_g43_no_lfs_storage_type_override():
+    """Naming a storage type inside [lfs] creates a SEPARATE storage section
+    that does not inherit endpoint or credentials from [storage], and Gitea
+    crash-loops with an error that names the symptom and not the cause."""
+    # Check real settings only — the compose file deliberately NAMES this key in
+    # a warning comment so the next person does not re-add it.
+    active = [
+        ln for ln in (ROOT / "docker-compose.yml").read_text().splitlines()
+        if ln.strip() and not ln.strip().startswith("#")
+    ]
+    assert not any("GITEA__lfs__STORAGE_TYPE" in ln for ln in active)
+
+
+def test_g43_lfs_server_is_actually_enabled():
+    """Setting the storage backend does NOT turn LFS on. Without this the batch
+    endpoint 404s and the client says 'Repository or object not found', which
+    reads like a permissions problem and is not one."""
+    active = [
+        ln for ln in (ROOT / "docker-compose.yml").read_text().splitlines()
+        if ln.strip() and not ln.strip().startswith("#")
+    ]
+    assert any("GITEA__server__LFS_START_SERVER" in ln for ln in active)
+
+
+def test_g43_r2_checksum_trap_is_pinned():
+    """R2 rejects the checksum algorithm S3 clients send by default."""
+    compose = (ROOT / "docker-compose.yml").read_text()
+    assert "MINIO_CHECKSUM_ALGORITHM" in compose

@@ -265,6 +265,54 @@ Strands G0–G4 are sequential. G5–G12 are concurrent once G4 lands.
 - **G4.6** Quota: on push, call the kernel's quota check; over-quota → refuse with a repair-pointer error whose `speak` is grandma-words and whose `remediation_tool` names the upgrade path (Storage-Kingdom cross-sell hook, §0.5). **We emit the hook; the kernel owns the price** (I-11).
 - **G4.7** Object-count and byte accounting per repo, recomputed nightly, exposed on `GET /{id}/status`.
 
+## Strand G4A — Gitea/R2 traps paid for on 2026-08-11
+
+Four failures hit while wiring G2–G4 live. Each cost a crash loop or a dead end,
+and each presents as a different problem than it is. All four are now pinned by
+tests in `api/tests/test_invariants.py`.
+
+- **G4A.1 — `[lfs] STORAGE_TYPE` breaks storage inheritance.** Naming a storage
+  type inside `[lfs]` creates a **separate** storage section that does *not*
+  inherit the endpoint or credentials from `[storage]`. Gitea crash-loops on
+  `Endpoint: does not follow ip address or domain name standards` — an error that
+  names the symptom and not the cause. **Let LFS inherit `[storage]`.** Avatars
+  initialising correctly is the tell that the rest of the config is fine.
+- **G4A.2 — setting the storage backend does not turn LFS on.** `[server]
+  LFS_START_SERVER = true` is separate. Without it the batch endpoint 404s and
+  the client reports *"Repository or object not found"*, which reads like a
+  permissions or credentials problem and is neither.
+- **G4A.3 — ⚠️ Gitea's env-to-ini SETS but never UNSETS.** Removing a `GITEA__*`
+  variable from compose does **not** remove the line from the persisted
+  `app.ini`. The container will keep booting with a setting that no longer exists
+  anywhere in the repo, so the config in git and the config in production
+  silently disagree — the exact class of drift this whole cell exists to end.
+  **To remove a setting you must edit `app.ini` on the host**
+  (`/srv/windygit/git/gitea/conf/app.ini`), not just the compose file.
+- **G4A.4 — R2 rejects the default S3 checksum algorithm.** Set
+  `MINIO_CHECKSUM_ALGORITHM = md5` or uploads fail with an opaque checksum error.
+
+### G4A.5 — ⚠️ Cloudflare's 100-second limit caps a push, and it shapes G10
+
+A plain (non-LFS) push of an 8 MB file over the tunnel died with **HTTP 524**.
+Cloudflare's proxy times out at ~100 s on the Free plan, and Grant's residential
+upstream measured ~19 KB/s during the LFS test, so anything large is a coin flip.
+
+This is not a bug to fix; it is a constraint that **dictates the model-hub
+architecture**:
+
+1. **The LFS threshold (G4.5) is load-bearing, not tidiness.** Anything big must
+   go via LFS, because a large blob inside a git pack has no way to be resumed
+   or offloaded.
+2. **G10 must serve LFS objects via presigned R2 URLs — client straight to R2 —
+   rather than proxying blobs through the tunnel.** That removes the 100 s
+   ceiling, removes Grant's home upstream from the path entirely, and is exactly
+   what Hugging Face does. Until that lands, model repos are capped by whatever
+   fits in 100 seconds.
+
+**Verified working on 2026-08-11:** a 3 MB LFS object pushed through the tunnel
+and landed in R2 at `lfs/34/2d/…`, with **no local `lfs/` directory on the host**
+— I-3 confirmed by measurement rather than by assertion.
+
 ## Strand G5 — THE SHELTER (permissions plane over Windy Cloud) · **the v0 product**
 
 *This strand is the one that ships first and the one that has no competitor. Windy Cloud today has no sharing, no permissions and no versioning of any kind (D-8).*
