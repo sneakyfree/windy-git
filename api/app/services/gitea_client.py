@@ -13,6 +13,7 @@ a marriage.
 
 from __future__ import annotations
 
+import secrets
 from typing import Any
 
 import httpx
@@ -53,17 +54,20 @@ class GiteaClient:
         r = await self._request("GET", f"/users/{username}")
         if r.status_code == 200:
             return r.json()
+        # Gitea requires a password field on admin user-create and rejects null
+        # with a bare 400. Nobody ever uses this one: humans arrive through OIDC
+        # and agents through scoped passport-bound tokens, and local password
+        # sign-in is disabled server-wide. So we generate a credential that is
+        # never stored, never returned and never recoverable — an unusable
+        # password is safer than a blank one or a shared default.
         r = await self._request(
             "POST",
             "/admin/users",
             json={
                 "username": username,
                 "email": email,
-                "password": None,
+                "password": secrets.token_urlsafe(48),
                 "must_change_password": False,
-                # Humans arrive through OIDC and agents through scoped tokens.
-                # Nobody gets a password on this system.
-                "login_name": username,
             },
         )
         if r.status_code not in (200, 201):
