@@ -154,8 +154,18 @@ class MirrorService:
             except ValueError:
                 lag = None
 
+        # A mirror that has NEVER run is not the same thing as one that is
+        # behind, and collapsing the two is how a backup that was never made
+        # gets read as a backup that is merely stale. Gitea reports the epoch
+        # for "not yet", which arithmetic turns into a 56-year lag and a
+        # confident "degraded".
+        never_synced = not last or last.startswith("1970-01-01")
+
         # I-4: lag over the threshold is a P2, not a shrug.
-        if lag is None:
+        if never_synced:
+            state = "pending"
+            lag = None
+        elif lag is None:
             state = "unknown"
         elif lag > self._s.mirror_lag_p2_seconds:
             state = "degraded"
@@ -164,6 +174,6 @@ class MirrorService:
         return {
             "state": state,
             "lag_seconds": lag,
-            "last_success_at": last,
+            "last_success_at": None if never_synced else last,
             "remote": m.get("remote_address"),
         }

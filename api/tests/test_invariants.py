@@ -383,3 +383,13 @@ def test_owner_namespace_is_derived_from_the_repo_not_the_caller():
     body = src[src.index("async def list_versions") : src.index("async def create_grant")]
     assert "_repo_owner_login(repo)" in body
     assert "_owner_login(caller)" not in body
+
+
+def test_i04_never_synced_is_not_reported_as_merely_behind():
+    """Collapsing 'never ran' into 'behind' is how a backup that was never made
+    gets read as a backup that is merely stale. Gitea reports the epoch for
+    'not yet', which arithmetic turns into a 56-year lag and a confident
+    'degraded'."""
+    src = (ROOT / "api" / "app" / "services" / "mirror.py").read_text()
+    assert "never_synced" in src
+    assert '"pending"' in src

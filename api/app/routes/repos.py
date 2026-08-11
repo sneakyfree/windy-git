@@ -514,6 +514,7 @@ async def mirror_status(
         "healthy": "A second copy of this project is up to date.",
         "degraded": "The second copy is behind. Your work here is safe.",
         "absent": "There is no second copy of this project yet.",
+        "pending": "The second copy is set up and hasn't run yet.",
         "unconfigured": "Off-site copies aren't switched on yet.",
         "unknown": "We can't tell how the second copy is doing right now.",
     }[status["state"]]
