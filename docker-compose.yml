@@ -53,7 +53,22 @@ services:
       # G2.2 — OIDC only. No local password login, no self-registration.
       GITEA__service__DISABLE_REGISTRATION: "true"
       GITEA__service__ALLOW_ONLY_EXTERNAL_REGISTRATION: "true"
-      GITEA__lfs__PATH: /data/lfs
+      # G4.3 — heavy bytes to R2 at ZERO egress. Git object databases stay on
+      # local NVMe (I-3); this covers LFS, attachments, packages, avatars and
+      # Actions artifacts, which is where GitHub's painful bills actually come
+      # from and where R2's free egress is a structural, permanent advantage.
+      GITEA__storage__STORAGE_TYPE: minio
+      GITEA__storage__MINIO_ENDPOINT: ${R2_ACCOUNT_ID}.r2.cloudflarestorage.com
+      GITEA__storage__MINIO_ACCESS_KEY_ID: ${R2_ACCESS_KEY_ID}
+      GITEA__storage__MINIO_SECRET_ACCESS_KEY: ${R2_SECRET_ACCESS_KEY}
+      GITEA__storage__MINIO_BUCKET: ${R2_BUCKET_LFS:-windy-git-lfs}
+      GITEA__storage__MINIO_LOCATION: auto
+      GITEA__storage__MINIO_USE_SSL: "true"
+      # ⚠️ THE R2 TRAP. R2 rejects the checksum algorithm S3 clients send by
+      # default; without this, uploads fail with an opaque checksum error that
+      # reads like a credential problem and is not one.
+      GITEA__storage__MINIO_CHECKSUM_ALGORITHM: md5
+      GITEA__lfs__STORAGE_TYPE: minio
     volumes:
       # I-3: git object databases on a POSIX filesystem. Never object storage.
       - ${GIT_DATA_ROOT:-./data/gitea}:/data

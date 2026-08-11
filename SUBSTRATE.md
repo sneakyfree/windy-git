@@ -72,10 +72,28 @@ consulted, so a perfect service presents as "the app is broken."
 All in the fleet lockbox, injected by env, **never committed**. `make check`
 fails on any `cfat_` / `cfut_` / `gh[pousr]_` / `et_plt_` literal in the tree.
 
-⚠️ The R2 credential should be **scoped to this cell**. The sites cell ended up
-holding the account-wide god token because v4 R2 object endpoints reject
-restricted tokens. Whichever we end up with, record it here — an account-wide
-token is an acceptable named debt and an unacceptable invisible one.
+### ⚠️ NAMED DEBT — the R2 credential is account-wide
+
+**As of 2026-08-11 this cell holds the Cloudflare god token as its R2
+credential.** R2's S3 credentials are derived from an API token (access key id =
+the token's id, secret = SHA-256 of its value), and **no token available to this
+session has permission to mint a new one** — creating tokens is dashboard-only
+or needs a token-creating token. So the wiring was proven with the god token
+rather than blocked on it.
+
+This is recorded, not hidden, because an account-wide token is an acceptable
+named debt and an unacceptable invisible one.
+
+**GATE: this must be replaced with a scoped R2 token BEFORE strand G7 lands
+CI runners on this host.** I-5 says runners execute untrusted code and must not
+share a kernel with credentials scoped beyond their own job; a god token with
+R2 + Workers + Pages + WAF + SSL rights sitting on the same box as a runner is
+exactly the thing I-5 exists to prevent.
+
+Minting one is a two-minute job in the Cloudflare dashboard: **R2 → Manage R2
+API Tokens → Create → Object Read & Write, scoped to the three `windy-git-*`
+buckets.** Then set `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` in
+`/srv/windygit/src/.env` and redeploy.
 
 ⚠️ The Cloudflare **god token has Zone:Read but no DNS:Edit.** Use the DNS:Edit
 token for record creation.
