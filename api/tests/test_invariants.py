@@ -349,3 +349,37 @@ def test_g55_shelter_strings_avoid_developer_vocabulary():
         low = s.lower()
         for jargon in ("commit", "repository", "branch", "sha", "push"):
             assert jargon not in low, f"developer vocabulary in a user string: {s!r}"
+
+
+# --------------------------------------------------------------------------
+# I-4 — never a one-way door
+# --------------------------------------------------------------------------
+def test_i04_mirror_syncs_on_every_save_not_just_a_timer():
+    """An hourly window means an hour of work can be the thing you lose, and the
+    window is invisible until it costs you."""
+    src = (ROOT / "api" / "app" / "services" / "mirror.py").read_text()
+    assert '"sync_on_commit": True' in src
+
+
+def test_i04_unconfigured_mirror_is_never_reported_healthy():
+    """A mirror nobody checks is a belief, not a backup. An unconfigured one
+    reports 'unconfigured' — never 'healthy'."""
+    src = (ROOT / "api" / "app" / "services" / "mirror.py").read_text()
+    assert '"state": "unconfigured"' in src
+    assert "if not self.configured:" in src
+
+
+def test_i04_mirror_lag_threshold_is_set():
+    from api.app.config import Settings
+
+    assert Settings().mirror_lag_p2_seconds == 3600
+
+
+def test_owner_namespace_is_derived_from_the_repo_not_the_caller():
+    """Deriving the namespace from the caller is right only while the caller is
+    the owner, and addresses the wrong namespace the moment a collaborator asks
+    — surfacing as 'not found', which is the hardest kind of bug to see."""
+    src = (ROOT / "api" / "app" / "routes" / "repos.py").read_text()
+    body = src[src.index("async def list_versions") : src.index("async def create_grant")]
+    assert "_repo_owner_login(repo)" in body
+    assert "_owner_login(caller)" not in body

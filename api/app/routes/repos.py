@@ -31,6 +31,8 @@ from api.app.errors import RepairPointer
 from api.app.models.core import (
     CreatedVia,
     GrantRole,
+    Mirror,
+    MirrorState,
     Repo,
     RepoGrant,
     RepoState,
@@ -39,6 +41,7 @@ from api.app.models.core import (
     Visibility,
 )
 from api.app.services.gitea_client import GiteaClient
+from api.app.services.mirror import MirrorService
 
 router = APIRouter(prefix="/api/v1/repos", tags=["repos"])
 
@@ -109,6 +112,18 @@ def _sessionmaker(request: Request) -> async_sessionmaker[AsyncSession]:
             remediation_tool=None,
         )
     return maker
+
+
+def _repo_owner_login(repo: Repo) -> str:
+    """The owning login for a repo as STORED, not as inferred from the caller.
+
+    Deriving this from the caller works only while the caller is the owner, and
+    silently addresses the wrong namespace the moment a collaborator calls. That
+    class of bug reads as "not found" and is very hard to see.
+    """
+    if repo.passport:
+        return f"agent-{repo.passport.lower().replace('-', '')}"
+    return f"u-{repo.identity_id[:24]}"
 
 
 def _owner_login(caller: Caller) -> str:
@@ -272,11 +287,14 @@ async def list_versions(
     """
     async with _sessionmaker(request)() as session:
         repo = await _load_repo(session, repo_id, caller)
-        owner = _owner_login(caller) if repo.passport == caller.passport else None
+        # Derive the namespace from the REPO, never from the caller: the
+        # caller-derived form is right only while the caller is the owner, and
+        # addresses the wrong namespace the moment a collaborator asks. It then
+        # surfaces as "not found", which is about the hardest bug to see.
+        owner, slug, display = _repo_owner_login(repo), repo.slug, repo.display_name
 
     gitea = GiteaClient(request.app.state.settings)
-    owner = owner or f"u-{repo.identity_id[:24]}"
-    commits = await gitea.list_commits(owner, repo.slug)
+    commits = await gitea.list_commits(owner, slug)
 
     versions = [
         {
@@ -294,12 +312,12 @@ async def list_versions(
         # "There are 1 saved versions" is the kind of sloppiness the vocabulary
         # law exists to catch. Copy is design material, not decoration (I-9).
         "speak": (
-            f"'{repo.display_name}' has 1 saved version. You can go back to it."
+            f"'{display}' has 1 saved version. You can go back to it."
             if len(versions) == 1
-            else f"'{repo.display_name}' has {len(versions)} saved versions. "
+            else f"'{display}' has {len(versions)} saved versions. "
             "You can go back to any of them."
             if versions
-            else f"'{repo.display_name}' is empty so far."
+            else f"'{display}' is empty so far."
         ),
     }
 
@@ -438,3 +456,65 @@ async def get_repo(
         "recorded_versions": len(versions),
         "state": repo.state.value,
     }
+
+
+# --------------------------------------------------------------------------
+# I-4 / G11 — the off-site copy
+# --------------------------------------------------------------------------
+@router.post("/{repo_id}/mirror", status_code=201)
+async def enable_mirror(
+    repo_id: uuid.UUID,
+    request: Request,
+    caller: Annotated[Caller, Depends(get_caller)],
+) -> dict:
+    """Turn on the continuous off-site copy.
+
+    Deliberately idempotent and deliberately loud on failure: a mirror that
+    quietly stopped working is worse than no mirror, because it is a backup you
+    believe in.
+    """
+    settings = request.app.state.settings
+    async with _sessionmaker(request)() as session:
+        repo = await _load_repo(session, repo_id, caller)
+        owner = _repo_owner_login(repo)
+        display, slug = repo.display_name, repo.slug
+        private = repo.visibility != Visibility.public
+
+    mirror = MirrorService(settings)
+    remote = await mirror.ensure_github_repo(slug, display, private)
+    await mirror.attach_push_mirror(owner, slug, remote)
+
+    async with _sessionmaker(request)() as session:
+        session.add(
+            Mirror(repo_id=repo_id, remote_url=remote, direction="push", state=MirrorState.healthy)
+        )
+        await session.commit()
+
+    return {
+        "remote": remote,
+        "sync_on_commit": True,
+        "speak": "A second copy of this project is now kept somewhere else, automatically.",
+        "state_proof": {"remote": remote},
+        "next_actions": ["windy_git.mirror_status"],
+    }
+
+
+@router.get("/{repo_id}/mirror")
+async def mirror_status(
+    repo_id: uuid.UUID,
+    request: Request,
+    caller: Annotated[Caller, Depends(get_caller)],
+) -> dict:
+    async with _sessionmaker(request)() as session:
+        repo = await _load_repo(session, repo_id, caller)
+        owner, slug = _repo_owner_login(repo), repo.slug
+
+    status = await MirrorService(request.app.state.settings).status(owner, slug)
+    speak = {
+        "healthy": "A second copy of this project is up to date.",
+        "degraded": "The second copy is behind. Your work here is safe.",
+        "absent": "There is no second copy of this project yet.",
+        "unconfigured": "Off-site copies aren't switched on yet.",
+        "unknown": "We can't tell how the second copy is doing right now.",
+    }[status["state"]]
+    return {**status, "speak": speak}

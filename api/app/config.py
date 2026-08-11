@@ -82,7 +82,12 @@ class Settings(BaseSettings):
     rate_grants_per_day: int = 100
     rate_force_pushes_per_day: int = 10
 
-    # ---- mirror health (I-4) ----------------------------------------------
+    # ---- mirror: I-4, never a one-way door --------------------------------
+    github_token: str = ""
+    github_owner: str = "sneakyfree"
+    # Gitea's timer, as a backstop. sync_on_commit is what actually matters:
+    # an hourly window means an hour of work can be the thing you lose.
+    mirror_interval: str = "8h0m0s"
     mirror_lag_p2_seconds: int = 3600  # env: 60 min -> P2
 
     # ---- agent grants (G5.3) ----------------------------------------------
