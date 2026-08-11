@@ -24,6 +24,9 @@ services:
     # nothing needs to be reachable from the LAN, let alone the internet (G1.6).
     ports: ["127.0.0.1:${API_PORT:-8600}:8600"]
     depends_on: {db: {condition: service_healthy}}
+    # cloudflared runs on the host, not in this network. Without this the tunnel
+    # probe is permanently red and stops meaning anything.
+    extra_hosts: ["host.docker.internal:host-gateway"]
     restart: unless-stopped
 
   gitea:

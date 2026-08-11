@@ -20,7 +20,7 @@ boot guard in `api/app/main.py` that refuses to start there in production.
 | Port | Service |
 |---|---|
 | 8600 | `windy-git-api` — our plane |
-| 3000 | Gitea |
+| **3080** | Gitea — host 3000 and 3300 are taken by resident projects on Veron 1 |
 | 5432 | Postgres |
 | 2000 | cloudflared metrics (probe target) |
 
@@ -30,7 +30,7 @@ Zone `windygit.com` = `9d8637dcac3415607b2116e6099fe567` · account `193b347aede
 
 | Hostname | → |
 |---|---|
-| `app.windygit.com` | Gitea :3000 — UI **and** git over HTTPS |
+| `app.windygit.com` | Gitea :3080 — UI **and** git over HTTPS |
 | `api.windygit.com` | our plane :8600 |
 | `models.windygit.com` | HF-compatible endpoint :8600 (v2) |
 | `windygit.com` | Cloudflare Pages — marketing, Grant-gated |

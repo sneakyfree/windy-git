@@ -122,7 +122,7 @@ class TunnelProvider(Provider):
     async def probe(self) -> ProbeResult:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
             try:
-                r = await client.get("http://localhost:2000/metrics")
+                r = await client.get(self._s.tunnel_metrics_url)
             except httpx.RequestError as exc:
                 return ProbeResult(False, f"cloudflared metrics unreachable: {exc}")
         return ProbeResult(r.status_code == 200, f"cloudflared metrics -> {r.status_code}", True)

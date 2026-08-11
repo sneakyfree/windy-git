@@ -50,6 +50,12 @@ class Settings(BaseSettings):
     # ---- account-server OIDC (human identity) -----------------------------
     account_server_base_url: str = "https://account.windyword.ai"
 
+    # cloudflared binds its metrics on the HOST, so from inside a container
+    # `localhost` is the wrong box. A health check that is permanently red is as
+    # useless as one that is permanently green -- it trains people to ignore the
+    # dashboard, which is how a 37-day-dead fleet canary goes unnoticed.
+    tunnel_metrics_url: str = "http://host.docker.internal:2000/metrics"
+
     # ---- storage law (I-3, G4.4) ------------------------------------------
     # Git object databases MUST live on a POSIX filesystem. A test asserts this
     # path does not resolve to a network mount.
