@@ -15,7 +15,7 @@ RUN pip install --no-cache-dir -e .
 
 COPY api ./api
 COPY alembic ./alembic
-COPY alembic.ini scripts ./
+COPY alembic.ini ./
 COPY scripts ./scripts
 
 RUN sed -i "s|^BAKED_COMMIT_SHA: str = \"\"|BAKED_COMMIT_SHA: str = \"${COMMIT_SHA}\"|" api/app/buildinfo.py \
