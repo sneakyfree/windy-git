@@ -20,7 +20,9 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://windygit:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/windygit
       GITEA_BASE_URL: http://gitea:3000
-    ports: ["8600:8600"]
+    # Loopback ONLY. cloudflared runs on the host and reaches us over 127.0.0.1;
+    # nothing needs to be reachable from the LAN, let alone the internet (G1.6).
+    ports: ["127.0.0.1:${API_PORT:-8600}:8600"]
     depends_on: {db: {condition: service_healthy}}
     restart: unless-stopped
 
@@ -42,7 +44,10 @@ services:
     volumes:
       # I-3: git object databases on a POSIX filesystem. Never object storage.
       - ${GIT_DATA_ROOT:-./data/gitea}:/data
-    ports: ["3000:3000"]
+    # Loopback only, and the host port is configurable: Veron 1 is Grant's
+    # workstation and already has other projects on 3000 (a node dev server) and
+    # 3300 (nginx). A deploy must never fight a resident process for a port.
+    ports: ["127.0.0.1:${GITEA_PORT:-3080}:3000"]
     depends_on: {db: {condition: service_healthy}}
     restart: unless-stopped
 
