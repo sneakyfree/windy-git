@@ -350,7 +350,8 @@ and landed in R2 at `lfs/34/2d/…`, with **no local `lfs/` directory on the hos
 - **G7.2** Runner isolation: containers only, no host Docker socket mount, no host network, no credential in the runner environment beyond the job's own scoped token (I-5).
 - **G7.3** Migrate `windy-git`'s own `make check` to Gitea Actions. **Dogfood before anything else moves.**
 - **G7.4** Migrate the **private** repos that GitHub cannot run at all — the ones where Actions is dead entirely, even self-hosted. This is the single largest immediate win in the plan.
-- **G7.5** ⚠️ **Ban `ubuntu-latest`.** All four `windy-registry` workflows use it and every run fails. Runner labels are explicit and pinned.
+- **G7.5** Runner labels are explicit and pinned, and they match **the fleet's existing convention**. Surveyed 2026-08-12 across ten repos: **36 of 36 active workflows already say `runs-on: [self-hosted, linux, x64]`** — written for the self-hosted runners that died when the repos went private. Advertising `self-hosted` + `linux` + `x64` makes all 36 runnable **as-is, with no workflow edits**.
+  ⚠️ Correction to an earlier note in this plan: `ubuntu-latest` is *not* an ecosystem-wide mistake. The 11 occurrences are all tagged `# runner-lint-allow — CD/hosted-only; disabled, manual until CD mission` — deliberately hosted-only and deliberately off. Do not "fix" them; they are correct as written. A job asking for `[self-hosted, linux, x64]` matches only a runner advertising **all three** labels.
 - **G7.6** Revive the fleet canary: regenerate `kit-army-config/docs/deployed-state.json` on a schedule from Windy Git CI. **It has been 37+ days dead since 2026-07-03**, and its old workflow returns `startup_failure` on every run.
 - **G7.7** Artifacts and logs to R2 (G4.1).
 - **G7.8** *Accept:* a deliberately broken commit to a private repo produces a red check on the PR — **which is something that has not happened anywhere in this ecosystem in over a month.**

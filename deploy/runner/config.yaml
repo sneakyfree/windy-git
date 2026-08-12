@@ -18,8 +18,20 @@ runner:
   fetch_timeout: 5s
   fetch_interval: 2s
   labels:
+    # windy-git's own workflows.
     - "veron-1:docker://catthehacker/ubuntu:act-22.04"
     - "linux-x64:docker://catthehacker/ubuntu:act-22.04"
+    # THE FLEET'S EXISTING CONVENTION. Surveyed 2026-08-12 across ten repos:
+    # 36 of 36 active workflows say `runs-on: [self-hosted, linux, x64]`.
+    # They were written for the self-hosted runners that died when the repos
+    # went private, so advertising these three labels makes every one of them
+    # runnable AS-IS — no workflow edits, no rewrites.
+    #
+    # A job asking for [self-hosted, linux, x64] matches only if the runner
+    # advertises ALL THREE, so all three are declared separately.
+    - "self-hosted:docker://catthehacker/ubuntu:act-22.04"
+    - "linux:docker://catthehacker/ubuntu:act-22.04"
+    - "x64:docker://catthehacker/ubuntu:act-22.04"
 
 cache:
   enabled: true
