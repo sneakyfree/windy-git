@@ -1,18 +1,23 @@
 #!/usr/bin/env python3
 """Import a GitHub repo into Windy Git (strand G11.3 / G7.4).
 
-**Direction matters and is deliberate.** During the migration quarter, GitHub
-stays upstream and Windy Git is the downstream copy:
+**Two modes, and the choice is not cosmetic.**
 
-    GitHub  ──pull──▶  Windy Git  ──▶  CI
+    --mirror   GitHub ──pull──▶ Windy Git          read-only, NO CI
+    (default)  Windy Git ──push-mirror──▶ GitHub   writable, CI RUNS
 
-Not the other way round. G11.6 keeps GitHub as the durable copy for a full
-quarter after cutover, and until Grant flips that, anything that makes Windy Git
-authoritative creates a two-writer problem nobody asked for. A pull mirror can
-never diverge: if it breaks, the worst case is stale, not wrong.
+**A pull mirror cannot run CI.** Measured 2026-08-12: windy-calendar imported as
+a mirror sat at **0 workflow runs**. Gitea does not fire Actions on mirror sync,
+and a mirror is not a push target — so a mirrored repo gives you the code and
+none of the point.
 
-That inversion is temporary. I-4's push-mirror (`api/app/services/mirror.py`) is
-the steady state, for repos that originate here.
+So getting CI onto Veron 1 requires **real, writable repos**, which means Windy
+Git is where you push and GitHub becomes the downstream copy via I-4's
+push-mirror (`api/app/services/mirror.py`). That is the planned steady state,
+not a shortcut — but it *is* a change to where every human and agent pushes, so
+it is Grant's call, not this script's default assumption.
+
+`--mirror` remains available for repos you want copied but not moved.
 
 Usage:
     ./import_from_github.py windy-calendar [windy-mind ...]
@@ -103,7 +108,7 @@ def list_candidates() -> None:
     print("\nwindy-pro is excluded on purpose — see G11.5.")
 
 
-def import_repo(name: str) -> bool:
+def import_repo(name: str, mirror: bool = False) -> bool:
     existing_status, _ = _api("GET", f"/repos/{OWNER}/{name}")
     if existing_status == 200:
         print(f"  {name:24} already present — skipping (idempotent)")
@@ -124,8 +129,8 @@ def import_repo(name: str) -> bool:
             "private": True,
             # Pull mirror: GitHub stays upstream for the migration quarter.
             # A pull mirror cannot diverge — worst case it is stale, not wrong.
-            "mirror": True,
-            "mirror_interval": "10m",
+            "mirror": mirror,
+            **({"mirror_interval": "10m"} if mirror else {}),
             # Issues/PRs/releases deliberately NOT imported. They are GitHub's
             # copy of a conversation, and duplicating conversations across two
             # systems is how you end up with two half-answers to every question.
@@ -149,6 +154,10 @@ def main() -> int:
     ap.add_argument("repos", nargs="*")
     ap.add_argument("--list-candidates", action="store_true")
     ap.add_argument("--safe-batch", action="store_true", help="import SAFE_ORDER in order")
+    ap.add_argument(
+        "--mirror", action="store_true",
+        help="import read-only pull mirrors instead of writable repos. NOTE: mirrors CANNOT run CI.",
+    )
     args = ap.parse_args()
 
     if args.list_candidates:
@@ -167,7 +176,9 @@ def main() -> int:
             "write it down BEFORE importing (G11.5)."
         )
 
-    ok = sum(import_repo(r) for r in targets)
+    if args.mirror:
+        print("mirror mode: repos will be read-only and will NOT run CI.\n")
+    ok = sum(import_repo(r, mirror=args.mirror) for r in targets)
     print(f"\n{ok}/{len(targets)} imported.")
     return 0 if ok == len(targets) else 1
 
