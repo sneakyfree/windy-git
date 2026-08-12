@@ -355,6 +355,44 @@ and landed in R2 at `lfs/34/2d/…`, with **no local `lfs/` directory on the hos
 - **G7.7** Artifacts and logs to R2 (G4.1).
 - **G7.8** *Accept:* a deliberately broken commit to a private repo produces a red check on the PR — **which is something that has not happened anywhere in this ecosystem in over a month.**
 
+## Strand G7A — CI traps paid for on 2026-08-12
+
+Seven runs to first green. Every one of these presents as a different problem
+than it is, and all are now pinned by tests.
+
+- **G7A.1 — the isolation/DNS collision.** Job containers live inside the dind
+  daemon and cannot resolve `gitea`, which lives on the forge network. The easy
+  fix is to put jobs on the forge network — one line, and it leaves untrusted
+  workflow code one DNS name from the forge's Postgres. **Send jobs to the
+  PUBLIC forge surface instead**, exactly like any stranger. The runner then
+  needs no forge attachment at all, so no CI container has a private route to
+  anything.
+- **G7A.2 — the instance URL is baked into `/data/.runner` at registration.**
+  Changing the environment variable does nothing; the daemon keeps dialling the
+  old host. To repoint a runner you must drop its data volume and re-register
+  with a fresh token.
+- **G7A.3 — ⚠️ a Python version mismatch presents as a HANG, not an error.**
+  `catthehacker/ubuntu:act-22.04` ships Python 3.10.12; this project requires
+  ≥3.12. pip answered by backtracking through the entire release history of
+  every dependency at 100% CPU, with `-q` hiding all of it, for 14 minutes. Use
+  `actions/setup-python`, and **give every job `timeout-minutes`** so a wedge is
+  a red check in minutes rather than an occupied runner for half an hour.
+- **G7A.4 — you cannot just run the job in a `python:3.12` image.**
+  `actions/checkout` is a JavaScript action and the official Python images carry
+  no `node`, so checkout dies with *"executable file not found"*. The act image
+  has node; `setup-python` supplies the interpreter.
+- **G7A.5 — `container.network: bridge` breaks service containers.** Service
+  DNS aliases exist only on a per-job network, so Postgres came up healthy and
+  the job could not name it. `network: ""` is both correct **and stricter** — a
+  shared flat bridge lets concurrent jobs see each other.
+- **G7A.6 — do not restart the runner while a job is in flight.** Runs 3 and 6
+  died to exactly that, and the resulting log looks like a workflow defect
+  rather than an operator interrupting it.
+
+**Verified green 2026-08-12, run 7:** Python 3.12.13 · ruff clean · vocabulary
+audit clean · 42 tests · migration upgrade→downgrade→upgrade against real
+Postgres · and `I-12 holds: env override ignored`.
+
 ## Strand G8 — Agent surface (MCP + capability discovery)
 
 - **G8.1** MCP server `windy-git-mcp` exposing the full knob-set — every button a human can push. Follows `windy-word-mcp` conventions.
