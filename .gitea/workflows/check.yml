@@ -16,17 +16,8 @@ on:
 jobs:
   gate:
     runs-on: veron-1
-    # Run IN a Python 3.12 image rather than trusting the runner image's
-    # toolchain. The first real CI run wedged here: catthehacker/ubuntu:act-22.04
-    # ships Python 3.10.12, this project declares requires-python >=3.12, and pip
-    # answered that by backtracking through the entire release history of every
-    # dependency looking for something 3.10-compatible. It churned for 14 minutes
-    # at 100% CPU with `-q` hiding all of it, and would have churned until the
-    # runner timeout. A version mismatch presenting as a hang, not an error.
-    container:
-      image: python:3.12-bookworm
-    # And a hard ceiling, so a wedged step is a red check in minutes rather than
-    # an occupied runner for half an hour.
+    # A hard ceiling, so a wedged step is a red check in minutes rather than an
+    # occupied runner for half an hour.
     timeout-minutes: 12
     services:
       postgres:
@@ -41,6 +32,21 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@v4
+
+      # The runner image ships Python 3.10.12; this project requires >=3.12.
+      # The first real CI run wedged for 14 minutes on exactly that: pip
+      # answered the mismatch by backtracking through the entire release
+      # history of every dependency looking for something 3.10-compatible, at
+      # 100% CPU, with `-q` hiding every line of it. A version mismatch
+      # presenting as a hang rather than an error.
+      #
+      # The obvious fix — run the job in a python:3.12 image — trades one wedge
+      # for another: actions/checkout is a JavaScript action, and the official
+      # Python images carry no `node`, so checkout dies with "executable file
+      # not found". Hence setup-python on the act image, which has both.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
       - name: install
         run: |

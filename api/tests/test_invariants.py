@@ -478,10 +478,13 @@ def test_g73_workflow_pins_a_python_that_satisfies_requires_python():
 
     for wf in ROOT.rglob(".gitea/workflows/*.y*ml"):
         text = wf.read_text()
-        img = _re.search(r"image:\s*python:(\d+)\.(\d+)", text)
-        assert img, f"{wf.name}: job does not pin a python image"
-        assert (int(img.group(1)), int(img.group(2))) >= (major, minor), (
-            f"{wf.name}: pins python {img.group(0)} but the project requires "
+        # Either a pinned container image or an explicit setup-python version.
+        pin = _re.search(r"image:\s*python:(\d+)\.(\d+)", text) or _re.search(
+            r'python-version:\s*"?(\d+)\.(\d+)"?', text
+        )
+        assert pin, f"{wf.name}: job neither pins a python image nor sets up a version"
+        assert (int(pin.group(1)), int(pin.group(2))) >= (major, minor), (
+            f"{wf.name}: pins python {pin.group(0)} but the project requires "
             f">={major}.{minor}"
         )
 
