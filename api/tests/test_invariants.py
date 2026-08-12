@@ -409,6 +409,16 @@ def test_i05_runner_never_mounts_the_host_docker_socket():
         assert "/var/run/docker.sock" not in ln, "I-5: never mount the host docker socket"
 
 
+def test_i05_jobs_get_a_network_per_job_not_a_shared_bridge():
+    """A shared flat bridge lets concurrent jobs see each other, and breaks
+    service-container DNS (service aliases only exist on a per-job network).
+    Per-job is both stricter and correct."""
+    cfg = (ROOT / "deploy" / "runner" / "config.yaml").read_text()
+    active = [ln for ln in cfg.splitlines() if ln.strip() and not ln.strip().startswith("#")]
+    net = [ln for ln in active if ln.strip().startswith("network:")]
+    assert net and net[0].strip() == 'network: ""', "jobs must get a per-job network"
+
+
 def test_i05_jobs_cannot_bind_mount_from_the_daemon_host():
     cfg = (ROOT / "deploy" / "runner" / "config.yaml").read_text()
     assert "valid_volumes: []" in cfg

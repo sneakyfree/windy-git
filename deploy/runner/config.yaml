@@ -26,10 +26,18 @@ cache:
   dir: /data/cache
 
 container:
-  # Job containers join the dind daemon's own bridge. NOT the forge network:
-  # untrusted code must never be able to reach the forge's Postgres or its
-  # environment (I-5).
-  network: bridge
+  # Empty = act creates a NETWORK PER JOB and removes it afterwards.
+  #
+  # This started as `bridge` for isolation, which was a mistake in both
+  # directions. It broke service containers — Postgres came up healthy but the
+  # job could not resolve the name `postgres`, because service DNS aliases only
+  # exist on a per-job network — and it was *weaker* isolation, since every
+  # concurrent job shared one flat bridge and could see its neighbours.
+  #
+  # A per-job network is both correct and stricter. Still no route to the forge:
+  # these networks live inside the dind daemon, which has no forge attachment
+  # at all.
+  network: ""
   privileged: false
   options:
   workdir_parent: /workspace
