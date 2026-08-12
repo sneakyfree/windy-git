@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     # ---- Eternitas (agent identity + trust) -------------------------------
     eternitas_base_url: str = "https://api.eternitas.ai"
     eternitas_platform_api_key: str = ""
+    # Signs webhooks Eternitas delivers to us. Unset = we refuse them (I-8):
+    # accepting unverified instructions about identity is worse than missing them.
+    eternitas_webhook_secret: str = ""
+    eternitas_platform_id: str = ""
 
     # ---- account-server OIDC (human identity) -----------------------------
     account_server_base_url: str = "https://account.windyword.ai"

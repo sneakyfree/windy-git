@@ -547,3 +547,39 @@ def test_g76_alert_path_sets_a_user_agent():
     src = (ROOT / "scripts" / "canary.py").read_text()
     send = src[src.index("def send_alert") : src.index("def main(")]
     assert "User-Agent" in send
+
+
+# --------------------------------------------------------------------------
+# G3.5 — revocation is fail-closed, and the two signature traps
+# --------------------------------------------------------------------------
+def test_g35_webhook_strips_the_sha256_prefix():
+    """A sibling receiver compared the whole 'sha256=<hex>' header against a
+    bare digest and returned 401 forever — wired, never once delivered."""
+    src = (ROOT / "api" / "app" / "routes" / "webhooks.py").read_text()
+    assert 'startswith("sha256=")' in src
+
+
+def test_g35_webhook_hmacs_raw_bytes_not_reserialised_json():
+    """JSON.stringify of a parsed body reorders keys and changes whitespace, so
+    the digest never matches what the sender signed. Same silent 401."""
+    src = (ROOT / "api" / "app" / "routes" / "webhooks.py").read_text()
+    verify = src[src.index("def _verify") : src.index("@router.post")]
+    assert "raw" in verify and "json.dumps" not in verify
+
+
+def test_g35_unset_secret_refuses_rather_than_accepts():
+    src = (ROOT / "api" / "app" / "routes" / "webhooks.py").read_text()
+    assert "webhook_secret_unset" in src
+    assert "refusing unverified webhooks" in src
+
+
+def test_g35_signature_compare_is_constant_time():
+    src = (ROOT / "api" / "app" / "routes" / "webhooks.py").read_text()
+    assert "hmac.compare_digest" in src
+
+
+def test_g35_revocation_never_acknowledges_what_it_did_not_apply():
+    """A 200 on a revocation the receiver could not apply is a security hole
+    that reports success."""
+    src = (ROOT / "api" / "app" / "routes" / "webhooks.py").read_text()
+    assert "refusing to acknowledge a revocation we did not apply" in src

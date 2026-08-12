@@ -24,7 +24,7 @@ from api.app.providers.registry import (
     GiteaProvider,
     R2Provider,
 )
-from api.app.routes import health, repos
+from api.app.routes import health, repos, webhooks
 
 logging.basicConfig(
     level=logging.INFO,
@@ -116,6 +116,7 @@ app = FastAPI(
 
 app.include_router(health.router)
 app.include_router(repos.router)
+app.include_router(webhooks.router)
 
 
 @app.exception_handler(RepairPointer)
