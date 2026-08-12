@@ -415,6 +415,19 @@ def test_i05_jobs_cannot_bind_mount_from_the_daemon_host():
     assert 'docker_host: "-"' in cfg
 
 
+def test_i05_no_ci_container_can_reach_the_forge_network():
+    """The first CI run failed with "Could not resolve host: gitea" because job
+    containers sit on dind's private network. The easy fix — putting jobs on the
+    forge network — would have left untrusted workflow code one DNS name from
+    the forge's Postgres. Instead jobs reach the PUBLIC forge surface, so no CI
+    container has a private route to anything."""
+    compose = (ROOT / "deploy" / "runner" / "docker-compose.yml").read_text()
+    active = [ln for ln in compose.splitlines() if ln.strip() and not ln.strip().startswith("#")]
+    joined = "\n".join(active)
+    assert "windy-git_default" not in joined, "I-5: no CI container joins the forge network"
+    assert "https://app.windygit.com" in joined
+
+
 def test_i05_runner_is_a_separate_compose_project_from_the_forge():
     """Runners restart, crash, get starved and get killed. None of that should
     ever touch the thing serving repositories."""

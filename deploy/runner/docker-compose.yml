@@ -55,14 +55,37 @@ services:
     environment:
       # The runner reaches its OWN daemon. Never the host's.
       DOCKER_HOST: tcp://dind:2375
-      GITEA_INSTANCE_URL: http://gitea:3000
+      # ⚠️ THE PUBLIC URL, deliberately — not http://gitea:3000.
+      #
+      # Job containers run inside the dind daemon's own private network, so they
+      # cannot resolve `gitea`, which lives on the forge network. The first CI
+      # run failed exactly here: "Could not resolve host: gitea".
+      #
+      # There were two ways out, and they are not equivalent:
+      #   (a) put job containers on the forge network — untrusted workflow code
+      #       would then sit one DNS name away from the forge's Postgres. This
+      #       is the easy fix and it quietly repeals I-5.
+      #   (b) send jobs to the PUBLIC forge surface, over the tunnel, exactly
+      #       like any stranger on the internet. Untrusted code gets no private
+      #       network route at all.
+      #
+      # (b) is strictly better and it is what this is. The cost is a hairpin —
+      # container -> tunnel -> Cloudflare -> back to this box — plus Cloudflare's
+      # ~100s proxy ceiling on any single fetch (G4A.5). For repos measured at
+      # 0.63 GB of objects across 61 repos, with depth=1 checkouts, that ceiling
+      # is nowhere near being a problem. Revisit if a model repo ever needs CI.
+      GITEA_INSTANCE_URL: https://app.windygit.com
       GITEA_RUNNER_REGISTRATION_TOKEN: ${RUNNER_TOKEN:?set RUNNER_TOKEN}
       GITEA_RUNNER_NAME: veron-1
       CONFIG_FILE: /config.yaml
     volumes:
       - ./config.yaml:/config.yaml:ro
       - runner-data:/data
-    networks: [jobs, forge]
+    # Only `jobs`. The runner no longer needs the forge network at all, because
+    # it collects work over the public surface too — so there is now NO path
+    # from any CI container to the forge's database. That is a better posture
+    # than the one this file started with.
+    networks: [jobs]
     cpus: 2.0
     mem_limit: 4g
     restart: unless-stopped
@@ -71,11 +94,8 @@ networks:
   jobs:
     # Untrusted job containers live here. No route to the forge.
     internal: false   # jobs legitimately need to fetch dependencies
-  forge:
-    # Pre-existing network owned by the forge compose project.
-    external: true
-    name: windy-git_default
 
 volumes:
   dind-storage:
   runner-data:
+
