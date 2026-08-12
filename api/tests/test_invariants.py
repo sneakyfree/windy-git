@@ -591,7 +591,7 @@ def test_g35_probe_acknowledgement_changes_nothing():
     answers 200 but must never act, and anything claiming to be an event must
     still be verified."""
     src = (ROOT / "api" / "app" / "routes" / "webhooks.py").read_text()
-    probe = src[src.index("if not x_eternitas_event") : src.index("secret = settings")]
+    probe = src[src.index('if x_eternitas_event == "platform.test_ping"') : src.index("secret = settings")]
     assert '"acted": False' in probe
     assert "update(" not in probe and "commit" not in probe
 

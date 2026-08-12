@@ -54,22 +54,30 @@ async def eternitas_webhook(
     settings = request.app.state.settings
     raw = await request.body()
 
-    # Reachability probe. Eternitas verifies a webhook URL answers BEFORE it
-    # issues the secret that signs deliveries — so the first request can never
-    # carry a signature, and refusing it makes registration impossible. That is
-    # a real chicken-and-egg, not a reason to disable validation.
+    # `platform.test_ping` is the ONE event accepted without verification, and
+    # the reason is structural rather than convenient.
     #
-    # A probe is a request claiming to be no event and carrying no signature.
-    # Answering it 200 is honest: the endpoint exists and is ready. It changes
-    # NOTHING — `acted: false` — and anything that claims to be an event still
-    # goes through full verification below. The alternative, registering with
-    # `skip_validation: true`, would permanently disable a safety check to
+    # Eternitas generates the webhook secret at registration time and pings the
+    # URL to prove it is reachable BEFORE returning that secret. The ping is
+    # signed — with a secret the receiver cannot possibly hold yet. So the
+    # signature is unverifiable by construction, not by oversight.
+    #
+    # Accepting it is safe because the event is definitionally a no-op: nothing
+    # is read, nothing is written, `acted` is false. Every event that changes
+    # anything — `passport.revoked` above all — still requires a valid HMAC
+    # below. The alternative was `skip_validation: true` at registration, which
+    # would permanently disable reachability checking for this platform to
     # solve a one-time ordering problem.
-    if not x_eternitas_event and not x_eternitas_signature:
+    if x_eternitas_event == "platform.test_ping" or (
+        not x_eternitas_event and not x_eternitas_signature
+    ):
         return {
             "ready": True,
             "acted": False,
-            "detail": "reachability probe acknowledged; signed events are verified",
+            "detail": (
+                "reachability ping acknowledged; it is unverifiable by "
+                "construction and changes nothing. Signed events are verified."
+            ),
         }
 
     secret = settings.eternitas_webhook_secret
