@@ -57,6 +57,17 @@ services:
       # G2.2 — OIDC only. No local password login, no self-registration.
       GITEA__service__DISABLE_REGISTRATION: "true"
       GITEA__service__ALLOW_ONLY_EXTERNAL_REGISTRATION: "true"
+      # G3.1 — a Windy account IS the account. Signing in with Windy provisions
+      # the Gitea user on first arrival; nobody is asked to invent a second
+      # identity for the same person, and no local password ever exists.
+      GITEA__oauth2_client__ENABLE_AUTO_REGISTRATION: "true"
+      GITEA__oauth2_client__USERNAME: email
+      GITEA__oauth2_client__ACCOUNT_LINKING: auto
+      # The email is asserted by account-server, which is the authority on it.
+      # Asking the user to re-verify an address their identity provider already
+      # verified is friction that buys nothing.
+      GITEA__oauth2_client__UPDATE_AVATAR: "false"
+      GITEA__service__REGISTER_EMAIL_CONFIRM: "false"
       # G4.3 — heavy bytes to R2 at ZERO egress. Git object databases stay on
       # local NVMe (I-3); this covers LFS, attachments, packages, avatars and
       # Actions artifacts, which is where GitHub's painful bills actually come
