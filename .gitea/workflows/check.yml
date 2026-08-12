@@ -16,6 +16,18 @@ on:
 jobs:
   gate:
     runs-on: veron-1
+    # Run IN a Python 3.12 image rather than trusting the runner image's
+    # toolchain. The first real CI run wedged here: catthehacker/ubuntu:act-22.04
+    # ships Python 3.10.12, this project declares requires-python >=3.12, and pip
+    # answered that by backtracking through the entire release history of every
+    # dependency looking for something 3.10-compatible. It churned for 14 minutes
+    # at 100% CPU with `-q` hiding all of it, and would have churned until the
+    # runner timeout. A version mismatch presenting as a hang, not an error.
+    container:
+      image: python:3.12-bookworm
+    # And a hard ceiling, so a wedged step is a red check in minutes rather than
+    # an occupied runner for half an hour.
+    timeout-minutes: 12
     services:
       postgres:
         image: postgres:16-alpine
@@ -32,8 +44,10 @@ jobs:
 
       - name: install
         run: |
+          python3 --version
           python3 -m venv .venv
-          .venv/bin/pip install -q -e ".[dev]"
+          .venv/bin/pip install -q --upgrade pip
+          .venv/bin/pip install -e ".[dev]"
 
       - name: lint
         run: .venv/bin/ruff check api scripts

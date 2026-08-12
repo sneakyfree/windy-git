@@ -461,3 +461,33 @@ def test_g75_workflows_use_a_label_this_runner_actually_provides():
                 continue
             label = ln.split("runs-on:")[1].strip()
             assert label in provided, f"{wf.name}: '{label}' is not a provided label"
+
+
+def test_g73_workflow_pins_a_python_that_satisfies_requires_python():
+    """The first real CI run wedged for 14 minutes because the runner image
+    ships Python 3.10 and this project requires 3.12: pip answered by
+    backtracking through every historical version of every dependency, at full
+    CPU, silently. A version mismatch presenting as a hang rather than an
+    error."""
+    import re as _re
+
+    pyproject = (ROOT / "pyproject.toml").read_text()
+    m = _re.search(r'requires-python\s*=\s*">=(\d+)\.(\d+)"', pyproject)
+    assert m, "pyproject declares no requires-python"
+    major, minor = int(m.group(1)), int(m.group(2))
+
+    for wf in ROOT.rglob(".gitea/workflows/*.y*ml"):
+        text = wf.read_text()
+        img = _re.search(r"image:\s*python:(\d+)\.(\d+)", text)
+        assert img, f"{wf.name}: job does not pin a python image"
+        assert (int(img.group(1)), int(img.group(2))) >= (major, minor), (
+            f"{wf.name}: pins python {img.group(0)} but the project requires "
+            f">={major}.{minor}"
+        )
+
+
+def test_g73_every_job_has_a_timeout():
+    """A wedged step should be a red check in minutes, not an occupied runner
+    for half an hour."""
+    for wf in ROOT.rglob(".gitea/workflows/*.y*ml"):
+        assert "timeout-minutes:" in wf.read_text(), f"{wf.name}: no job timeout"
