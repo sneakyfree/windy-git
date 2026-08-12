@@ -37,16 +37,37 @@ Background condition: **54 containers on a 4-vCPU box**, 12 of them dev/demo
 Baseline load 17–19. That is the amplifier — a process fork is cheap on an idle
 box and ruinous on a saturated one.
 
-## Resolution
+## Resolution — two steps
 
-`docker stop windy-agent-roster` at 16:50:57Z. Reversible with `docker start`.
+**1. Stop the bleeding.** `docker stop windy-agent-roster` at 16:50:57Z. Login
+recovered from timeout to HTTP 200 immediately.
+
+**2. Ship the real fix and bring agent chat back.** The retry fix already
+existed: a parallel session diagnosed the same incident from the windy-pro side
+and landed `c79f196` — *"fix(roster): back off failed mail lookups instead of
+retrying every 30s forever" (#172)* — with a test
+(`services/agent-roster/tests/mail-lookup-backoff.test.js`). **Kit 0 was one
+commit behind and did not have it.** That is the whole reason the loop ran.
+
+Deployed by fast-forwarding `/root/windy-chat` `ac61db6 → c79f196` and
+rebuilding **only** `agent-roster` (`--no-deps`; nothing else on the box
+touched). Deliberately `git merge --ff-only`, never `reset --hard` — this
+checkout has a documented history of local edits a hard reset would silently
+eat.
+
+The fix caches failures per owner with exponential backoff (60 s → 30 min cap)
+and suppresses logging after three attempts. Observed working in production:
+`attempt 2, backing off 120s`.
 
 | | before | after |
 |---|---|---|
 | login | timeout at 45 s+ | **HTTP 200 in ~18 s** |
 | `/health` | timeout | 200 in 0.28 s |
 | jwks | timeout | 200 in 0.16 s |
-| account-server CPU | 168–210 % | out of the top 4 |
+| **account-server CPU** | **168–210 %** | **0.00 %** |
+| roster mail-lookup failures | 74/min | **0/min** |
+| account-server calls to that route | ~50/min | **0/min** |
+| agent chat | down (stopped) | **back up, healthy** |
 
 **18 s is restored, not healthy.** A login should be well under a second. That
 number is the fork-per-query adapter under a loaded box, and it is what remains
@@ -54,9 +75,9 @@ after the loop was removed.
 
 ## What is still true
 
-- **`windy-agent-roster` is stopped.** Agent chat is down until someone starts
-  it. Bringing it back **without fixing the retry** re-creates this outage.
-- The mail-lookup 404 itself is unexplained. The route exists
+- **The mail lookups still fail** — the backoff stops them amplifying, it does
+  not make them succeed. Each owner now retries once per backoff window instead
+  of every 30 s. The underlying 404/timeout is unexplained. The route exists
   (`identity.ts:1014-1022`, reads `x-service-token`). Either the identities are
   genuinely absent or the caller sends the wrong shape — worth knowing before
   the roster returns.
@@ -71,12 +92,27 @@ canary has been dead since 2026-07-03. The service was `(unhealthy)` with a
 
 ## Recommendations, ordered
 
-1. **Fix the retry before restarting the roster** — exponential backoff and a
-   circuit breaker. A client that retries a failing dependency at 74/min is a
-   denial-of-service against your own identity service.
+1. ~~Fix the retry~~ — **done**, `c79f196`, deployed 2026-08-12.
 2. **Alert on the healthcheck.** A 74-deep failing streak on the identity
    service should page, not sit.
 3. **Move dev/demo off the production box.** 12 containers of non-production
    load on the box that runs identity, the CA, mail, Matrix and the broker.
 4. **Then** the postgres-adapter migration. Hottest paths first — login is the
    obvious first path.
+
+
+## The lesson worth keeping
+
+**The fix was written, tested, reviewed and merged — and the outage happened
+anyway, because Kit 0 was one commit behind.** A merged fix that has not reached
+production is not a fix; it is a belief.
+
+That is the same root cause both August audits named — *nothing anywhere checks
+whether a decision reached production* — arriving as a live outage rather than a
+finding in a report. Deploy verification is not paperwork.
+
+## Diagnostic note for whoever is next
+
+`docker logs` / `docker stats` loops across 54 containers cost real CPU on a
+saturated box. Load rose from 17 to 24.9 while this was being investigated, and
+some of that was the investigation. Take one clean measurement, then back off.
