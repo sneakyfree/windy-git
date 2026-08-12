@@ -504,3 +504,36 @@ def test_g73_every_job_has_a_timeout():
     for half an hour."""
     for wf in ROOT.rglob(".gitea/workflows/*.y*ml"):
         assert "timeout-minutes:" in wf.read_text(), f"{wf.name}: no job timeout"
+
+
+# --------------------------------------------------------------------------
+# G7.6 — the canary must watch what users do, and must not live on Kit 0
+# --------------------------------------------------------------------------
+def test_g76_canary_probes_login_not_just_health():
+    """/health returned 200 for the entire 2026-08-12 outage while login was
+    dead. A canary that only watches health is decorative."""
+    src = (ROOT / "scripts" / "canary.py").read_text()
+    assert "identity.login" in src
+    assert "/api/v1/auth/login" in src
+
+
+def test_g76_canary_does_not_run_on_kit_zero():
+    """A canary hosted on the box it watches dies with that box, and reports
+    nothing at the exact moment it matters."""
+    wf = (ROOT / ".gitea" / "workflows" / "canary.yml").read_text()
+    assert "runs-on: veron-1" in wf
+    assert "72.60.118.54" not in wf
+
+
+def test_g76_canary_alerts_on_transition_not_every_run():
+    """A canary that emails every 10 minutes gets filtered, and a filtered
+    canary is a dead canary."""
+    src = (ROOT / "scripts" / "canary.py").read_text()
+    assert "newly_bad" in src and "recovered" in src
+
+
+def test_g76_canary_has_two_independent_signals():
+    """Email AND a red CI run. The last fleet canary died silently because it
+    had one signal and nothing watched the watcher."""
+    src = (ROOT / "scripts" / "canary.py").read_text()
+    assert "return 1 if any" in src, "canary must exit non-zero so CI goes red"

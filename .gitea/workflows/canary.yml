@@ -1,0 +1,48 @@
+# The fleet canary (G7.6).
+#
+# Runs on Veron 1, DELIBERATELY not on Kit 0. A canary hosted on the box it
+# watches dies with that box and reports nothing at the exact moment it matters.
+#
+# The previous fleet canary (kit-army-config/docs/deployed-state.json) sat dead
+# for 37+ days because its workflow returned startup_failure on every run and
+# nothing watched the watcher. This one has two independent signals: an email on
+# state change, and a red CI run in the forge. Losing one still leaves the other.
+
+name: canary
+
+on:
+  schedule:
+    # Every 10 minutes. Frequent enough that an outage is measured in minutes,
+    # infrequent enough that the login probe (~18s of real work on a loaded box)
+    # is not itself a load source.
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: veron-1
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # State persists between runs so "still broken" can be told apart from
+      # "just broke" — that is what keeps this from emailing every 10 minutes
+      # during an outage, and a canary people filter is a dead canary.
+      - name: restore canary state
+        uses: actions/cache@v4
+        with:
+          path: canary-state.json
+          key: canary-state-${{ github.run_id }}
+          restore-keys: canary-state-
+
+      - name: probe
+        env:
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          CANARY_LOGIN_EMAIL: ${{ secrets.CANARY_LOGIN_EMAIL }}
+          CANARY_LOGIN_PASSWORD: ${{ secrets.CANARY_LOGIN_PASSWORD }}
+          CANARY_ALERT_TO: ${{ secrets.CANARY_ALERT_TO }}
+        run: python3 scripts/canary.py
