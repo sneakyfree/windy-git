@@ -177,12 +177,24 @@ def send_alert(subject: str, lines: list[str]) -> bool:
         headers={
             "Authorization": f"Bearer {RESEND_KEY}",
             "Content-Type": "application/json",
+            # ⚠️ REQUIRED. Without an explicit User-Agent, urllib sends
+            # "Python-urllib/3.x" and the request is rejected 403 by bot
+            # filtering — while the identical request via curl succeeds. This
+            # exact failure was caught by testing the alert path rather than
+            # assuming it: the canary would have detected every outage
+            # correctly and told nobody.
+            "User-Agent": "windy-git-canary/1.0",
         },
     )
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             print(f"   alert sent ({r.status})")
             return True
+    except urllib.error.HTTPError as e:
+        # Print the body. "403 Forbidden" alone sends you hunting for a bad key;
+        # the body usually names the real cause.
+        print(f"!! alert FAILED: HTTP {e.code}: {e.read().decode()[:200]}")
+        return False
     except Exception as e:  # noqa: BLE001
         print(f"!! alert FAILED: {e}")
         return False

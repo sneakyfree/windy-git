@@ -537,3 +537,13 @@ def test_g76_canary_has_two_independent_signals():
     had one signal and nothing watched the watcher."""
     src = (ROOT / "scripts" / "canary.py").read_text()
     assert "return 1 if any" in src, "canary must exit non-zero so CI goes red"
+
+
+def test_g76_alert_path_sets_a_user_agent():
+    """Without an explicit User-Agent, urllib sends 'Python-urllib/3.x' and
+    Resend rejects it 403 while the identical curl succeeds. Caught by testing
+    the alert path: the canary would have detected every outage correctly and
+    told nobody."""
+    src = (ROOT / "scripts" / "canary.py").read_text()
+    send = src[src.index("def send_alert") : src.index("def main(")]
+    assert "User-Agent" in send
