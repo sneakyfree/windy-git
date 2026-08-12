@@ -1,0 +1,81 @@
+# CI runners (strand G7) — a SEPARATE compose project from the forge.
+#
+# Separate on purpose: runners restart, crash, get starved and get killed. None
+# of that should ever touch the thing serving repositories. This is the cell
+# doctrine applied one level down.
+#
+# ── I-5, and why there is a dind sidecar ───────────────────────────────────
+#
+# "CI never shares a kernel with identity. Runners execute untrusted code and
+#  are isolated by machine boundary, not container boundary. No runner may hold
+#  a credential scoped beyond its own job."
+#
+# act_runner needs a Docker daemon to start job containers. The tempting move is
+# to mount the host's `/var/run/docker.sock`. That would hand every workflow —
+# including whatever a transitive dependency's postinstall script feels like
+# doing — the ability to start a privileged container mounting `/`, which is
+# root on Veron 1. Every published act_runner example does exactly this.
+#
+# Instead the runner talks to its OWN daemon (`dind`). Untrusted job code runs
+# as a child of that daemon, on an isolated network, with no route to the host
+# socket and no route to the forge's database.
+#
+# The split that makes this work:
+#   * `runner` is TRUSTED code (the act_runner daemon). It sits on the forge
+#     network only so it can reach gitea:3000 to collect jobs.
+#   * `dind` and every job container it spawns are UNTRUSTED. They are on a
+#     private network with no access to the forge, its database, or its .env.
+#
+# dind itself is privileged — that is the cost, and it is the reason a job
+# escape lands in a disposable daemon rather than on Grant's workstation.
+#
+# ⚠️ Do NOT "simplify" this by mounting the host docker socket.
+
+name: windy-git-runner
+
+services:
+  dind:
+    image: docker.io/library/docker:27-dind
+    privileged: true
+    environment:
+      DOCKER_TLS_CERTDIR: ""   # plain TCP on an isolated network, no host route
+    command: ["dockerd", "--host=tcp://0.0.0.0:2375", "--tls=false"]
+    networks: [jobs]
+    volumes:
+      - dind-storage:/var/lib/docker
+    # G1.5 — bounded so a fork-bomb workflow cannot starve Grant's interactive
+    # session. Veron 1 is his workstation, not a dedicated build box.
+    cpus: 12.0            # 12 of 24 cores
+    mem_limit: 64g
+    restart: unless-stopped
+
+  runner:
+    image: docker.io/gitea/act_runner:0.2.11
+    depends_on: [dind]
+    environment:
+      # The runner reaches its OWN daemon. Never the host's.
+      DOCKER_HOST: tcp://dind:2375
+      GITEA_INSTANCE_URL: http://gitea:3000
+      GITEA_RUNNER_REGISTRATION_TOKEN: ${RUNNER_TOKEN:?set RUNNER_TOKEN}
+      GITEA_RUNNER_NAME: veron-1
+      CONFIG_FILE: /config.yaml
+    volumes:
+      - ./config.yaml:/config.yaml:ro
+      - runner-data:/data
+    networks: [jobs, forge]
+    cpus: 2.0
+    mem_limit: 4g
+    restart: unless-stopped
+
+networks:
+  jobs:
+    # Untrusted job containers live here. No route to the forge.
+    internal: false   # jobs legitimately need to fetch dependencies
+  forge:
+    # Pre-existing network owned by the forge compose project.
+    external: true
+    name: windy-git_default
+
+volumes:
+  dind-storage:
+  runner-data:

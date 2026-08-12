@@ -393,3 +393,58 @@ def test_i04_never_synced_is_not_reported_as_merely_behind():
     src = (ROOT / "api" / "app" / "services" / "mirror.py").read_text()
     assert "never_synced" in src
     assert '"pending"' in src
+
+
+# --------------------------------------------------------------------------
+# G7 / I-5 — CI never shares a kernel with identity
+# --------------------------------------------------------------------------
+def test_i05_runner_never_mounts_the_host_docker_socket():
+    """The tempting move — and what every published act_runner example does —
+    is to mount /var/run/docker.sock. That hands every workflow, including a
+    transitive dependency's postinstall script, the ability to start a
+    privileged container mounting / — i.e. root on the host."""
+    compose = (ROOT / "deploy" / "runner" / "docker-compose.yml").read_text()
+    active = [ln for ln in compose.splitlines() if ln.strip() and not ln.strip().startswith("#")]
+    for ln in active:
+        assert "/var/run/docker.sock" not in ln, "I-5: never mount the host docker socket"
+
+
+def test_i05_jobs_cannot_bind_mount_from_the_daemon_host():
+    cfg = (ROOT / "deploy" / "runner" / "config.yaml").read_text()
+    assert "valid_volumes: []" in cfg
+    assert 'docker_host: "-"' in cfg
+
+
+def test_i05_runner_is_a_separate_compose_project_from_the_forge():
+    """Runners restart, crash, get starved and get killed. None of that should
+    ever touch the thing serving repositories."""
+    runner = (ROOT / "deploy" / "runner" / "docker-compose.yml").read_text()
+    forge = (ROOT / "docker-compose.yml").read_text()
+    assert "name: windy-git-runner" in runner
+    assert "name: windy-git" in forge
+
+
+def test_g15_runner_is_cpu_and_memory_bounded():
+    """Veron 1 is Grant's workstation, not a dedicated build box."""
+    compose = (ROOT / "deploy" / "runner" / "docker-compose.yml").read_text()
+    assert "cpus:" in compose
+    assert "mem_limit:" in compose
+
+
+def test_g75_workflows_use_a_label_this_runner_actually_provides():
+    """A workflow naming a label nobody provides queues forever and presents as
+    a hung CI system rather than a typo."""
+    cfg = (ROOT / "deploy" / "runner" / "config.yaml").read_text()
+    provided = {
+        ln.split(":")[0].strip().strip('"- ')
+        for ln in cfg.splitlines()
+        if "docker://" in ln
+    }
+    assert provided, "runner declares no labels"
+    for wf in ROOT.rglob(".gitea/workflows/*.y*ml"):
+        for ln in wf.read_text().splitlines():
+            # Skip comments — a doc line explaining runs-on is not a runs-on.
+            if ln.strip().startswith("#") or "runs-on:" not in ln:
+                continue
+            label = ln.split("runs-on:")[1].strip()
+            assert label in provided, f"{wf.name}: '{label}' is not a provided label"

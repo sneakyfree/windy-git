@@ -1,0 +1,38 @@
+# act_runner configuration (G7.1).
+#
+# Labels are EXPLICIT and PINNED. `ubuntu-latest` is banned (G7.5): all four
+# windy-registry workflows use it and every single run fails, because a
+# self-hosted runner has no such label unless you invent one. A workflow that
+# names a label nobody provides queues forever and looks like a hung CI system
+# rather than a typo.
+
+log:
+  level: info
+
+runner:
+  file: /data/.runner
+  capacity: 4          # concurrent jobs; Veron has 24 cores, dind is capped at 12
+  timeout: 30m
+  shutdown_timeout: 3m
+  insecure: false
+  fetch_timeout: 5s
+  fetch_interval: 2s
+  labels:
+    - "veron-1:docker://catthehacker/ubuntu:act-22.04"
+    - "linux-x64:docker://catthehacker/ubuntu:act-22.04"
+
+cache:
+  enabled: true
+  dir: /data/cache
+
+container:
+  # Job containers join the dind daemon's own bridge. NOT the forge network:
+  # untrusted code must never be able to reach the forge's Postgres or its
+  # environment (I-5).
+  network: bridge
+  privileged: false
+  options:
+  workdir_parent: /workspace
+  valid_volumes: []      # a job cannot bind-mount anything from the daemon host
+  docker_host: "-"       # do NOT expose the runner's own docker socket to jobs
+  force_pull: false

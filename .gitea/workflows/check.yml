@@ -1,0 +1,73 @@
+# The gate, running on our own hardware (G7.3).
+#
+# This is the dogfood: windy-git verifies itself before anything else migrates.
+#
+# `runs-on: veron-1` is a label this runner actually provides. NEVER
+# `ubuntu-latest` (G7.5) — a self-hosted runner has no such label, so a workflow
+# naming it queues forever and presents as a hung CI system rather than a typo.
+
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  gate:
+    runs-on: veron-1
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: windygit
+          POSTGRES_PASSWORD: windygit
+          POSTGRES_DB: windygit
+        options: >-
+          --health-cmd "pg_isready -U windygit"
+          --health-interval 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: install
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install -q -e ".[dev]"
+
+      - name: lint
+        run: .venv/bin/ruff check api scripts
+
+      - name: vocabulary audit (D-9)
+        run: python3 scripts/vocab_audit.py
+
+      - name: tests
+        run: .venv/bin/pytest -q
+
+      # G0.4 — a migration nobody has run is a migration nobody can trust. This
+      # is the step that caught two bugs review did not: SQLAlchemy Enum
+      # persisting .name instead of .value, and create_table re-emitting
+      # CREATE TYPE without checkfirst.
+      - name: migration round-trip (upgrade -> downgrade -> upgrade)
+        env:
+          DATABASE_URL: postgresql://windygit:windygit@postgres:5432/windygit
+        run: |
+          .venv/bin/alembic upgrade head
+          .venv/bin/alembic downgrade base
+          .venv/bin/alembic upgrade head
+
+      # I-12 — the honesty check. Nine sibling services cannot name the commit
+      # they are running; one reports another repo's commit entirely.
+      - name: /version must equal HEAD
+        run: |
+          HEAD_SHA=$(git rev-parse HEAD)
+          COMMIT_SHA=deadbeefdeadbeefdeadbeefdeadbeefdeadbeef \
+            .venv/bin/python -c "
+          import os, sys
+          sys.path.insert(0, '.')
+          from api.app.buildinfo import get_build_info
+          info = get_build_info()
+          expected = '$HEAD_SHA'
+          assert info.commit_sha == expected, f'{info.commit_sha} != {expected}'
+          print('I-12 holds: env override ignored, reported', info.commit_sha[:12])
+          "
