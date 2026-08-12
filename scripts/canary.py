@@ -156,8 +156,20 @@ def load_state() -> dict:
 
 
 def save_state(results: list[Result]) -> None:
-    with open(STATE_PATH, "w") as f:
-        json.dump({r.name: r.status for r in results}, f, indent=2)
+    """Never let bookkeeping kill the monitor.
+
+    State is an optimisation — it lets the next run tell "still broken" from
+    "just broke". The probing is the valuable part. An unwritable path used to
+    raise here and take the whole canary down, which is the worst possible
+    trade: a monitoring tool that dies of a config problem reports nothing at
+    all, and reports it silently.
+    """
+    try:
+        with open(STATE_PATH, "w") as f:
+            json.dump({r.name: r.status for r in results}, f, indent=2)
+    except OSError as exc:
+        print(f"!! could not save state to {STATE_PATH}: {exc}")
+        print("   (probes still ran; transition detection is degraded this run)")
 
 
 def send_alert(subject: str, lines: list[str]) -> bool:

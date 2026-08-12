@@ -601,3 +601,11 @@ def test_g35_did_not_disable_validation_to_register():
     one-time ordering problem."""
     for f in (ROOT / "scripts").glob("*.py"):
         assert "skip_validation" not in f.read_text()
+
+
+def test_g76_canary_survives_an_unwritable_state_path():
+    """A monitoring tool that dies of a config problem reports nothing at all,
+    and reports it silently. State is an optimisation; probing is the point."""
+    src = (ROOT / "scripts" / "canary.py").read_text()
+    save = src[src.index("def save_state") : src.index("def send_alert")]
+    assert "except OSError" in save
