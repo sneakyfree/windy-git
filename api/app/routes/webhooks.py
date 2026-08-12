@@ -54,6 +54,24 @@ async def eternitas_webhook(
     settings = request.app.state.settings
     raw = await request.body()
 
+    # Reachability probe. Eternitas verifies a webhook URL answers BEFORE it
+    # issues the secret that signs deliveries — so the first request can never
+    # carry a signature, and refusing it makes registration impossible. That is
+    # a real chicken-and-egg, not a reason to disable validation.
+    #
+    # A probe is a request claiming to be no event and carrying no signature.
+    # Answering it 200 is honest: the endpoint exists and is ready. It changes
+    # NOTHING — `acted: false` — and anything that claims to be an event still
+    # goes through full verification below. The alternative, registering with
+    # `skip_validation: true`, would permanently disable a safety check to
+    # solve a one-time ordering problem.
+    if not x_eternitas_event and not x_eternitas_signature:
+        return {
+            "ready": True,
+            "acted": False,
+            "detail": "reachability probe acknowledged; signed events are verified",
+        }
+
     secret = settings.eternitas_webhook_secret
     if not secret:
         # I-8: refuse rather than accept unverified instructions about identity.

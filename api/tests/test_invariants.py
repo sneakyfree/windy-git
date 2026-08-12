@@ -583,3 +583,21 @@ def test_g35_revocation_never_acknowledges_what_it_did_not_apply():
     that reports success."""
     src = (ROOT / "api" / "app" / "routes" / "webhooks.py").read_text()
     assert "refusing to acknowledge a revocation we did not apply" in src
+
+
+def test_g35_probe_acknowledgement_changes_nothing():
+    """Eternitas verifies a webhook URL answers BEFORE issuing the secret that
+    signs deliveries, so the first request can never be signed. The probe path
+    answers 200 but must never act, and anything claiming to be an event must
+    still be verified."""
+    src = (ROOT / "api" / "app" / "routes" / "webhooks.py").read_text()
+    probe = src[src.index("if not x_eternitas_event") : src.index("secret = settings")]
+    assert '"acted": False' in probe
+    assert "update(" not in probe and "commit" not in probe
+
+
+def test_g35_did_not_disable_validation_to_register():
+    """skip_validation would permanently disable a safety check to solve a
+    one-time ordering problem."""
+    for f in (ROOT / "scripts").glob("*.py"):
+        assert "skip_validation" not in f.read_text()
