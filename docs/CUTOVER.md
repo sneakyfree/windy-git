@@ -58,6 +58,26 @@ three ways, two sessions recording different HEADs hours apart. Resolve which is
 current and write it down before importing (G11.5). The import script refuses it
 by name.
 
+## ⚠️ Deploy workflows are DISABLED on Windy Git, deliberately
+
+Six workflows fire on `push:` and deploy to production:
+`windy-registry`, `Windy-Clone`, `WindyCloud`, `windy-mind`, `eternitas`
+(`deploy.yml`) and `windy-agent` (`release.yml`).
+
+Windy Git now has a working runner, so the next synced commit to `main` would
+have attempted a **production deploy from Veron 1**. Their secrets
+(`DEPLOY_HOST` / `DEPLOY_KEY` / `VPS_SSH_KEY`) are unset here, so they would
+have failed — but they would have failed *loudly on every push*, and any step
+before the SSH step would still have run.
+
+All six are now `disabled_manually`. Tests, lints and migration checks stay
+**active** — those need no secrets at all, which is why Phase 1 delivers real CI
+value immediately.
+
+**Before re-enabling any deploy workflow here, decide deliberately whether
+production should be deployable from Windy Git at all.** Kit 0 deploys are
+currently manual runbooks; that is a feature, not a gap.
+
 ## Backups
 
 `windygit-backup.timer`, nightly 04:17, `git bundle --all` + verify + `windgit`
