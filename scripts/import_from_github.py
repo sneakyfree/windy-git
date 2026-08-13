@@ -207,6 +207,10 @@ def main() -> int:
         "--mirror", action="store_true",
         help="import read-only pull mirrors instead of writable repos. NOTE: mirrors CANNOT run CI.",
     )
+    ap.add_argument(
+        "--all-as-mirrors", action="store_true",
+        help="bulk DR copy: every active repo on the account, read-only, no CI, zero deploy risk",
+    )
     args = ap.parse_args()
 
     if args.list_candidates:
