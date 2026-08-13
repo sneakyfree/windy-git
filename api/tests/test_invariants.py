@@ -609,3 +609,27 @@ def test_g76_canary_survives_an_unwritable_state_path():
     src = (ROOT / "scripts" / "canary.py").read_text()
     save = src[src.index("def save_state") : src.index("def send_alert")]
     assert "except OSError" in save
+
+
+# --------------------------------------------------------------------------
+# G0.9 — backups, the prerequisite for being the daily driver
+# --------------------------------------------------------------------------
+def test_g09_backup_bundles_all_refs_not_just_the_default_branch():
+    """A single-branch bundle loses every other branch and every tag silently,
+    and you find out during the restore."""
+    src = (ROOT / "scripts" / "backup.sh").read_text()
+    assert "bundle create" in src and "--all" in src
+
+
+def test_g09_backup_verifies_before_trusting():
+    """An unverified bundle is a belief, not a backup."""
+    src = (ROOT / "scripts" / "backup.sh").read_text()
+    assert "git bundle verify" in src
+
+
+def test_g09_backup_fails_loudly():
+    """A backup script that swallows errors is worse than none — it
+    manufactures confidence."""
+    src = (ROOT / "scripts" / "backup.sh").read_text()
+    assert "COMPLETED WITH FAILURES" in src
+    assert "refusing to report a backup that did not happen" in src
