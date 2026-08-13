@@ -93,6 +93,55 @@ def _api(method: str, path: str, body: dict | None = None) -> tuple[int, dict]:
             return e.code, {"message": raw[:300]}
 
 
+def all_repo_names() -> list[str]:
+    out = subprocess.run(
+        ["gh", "repo", "list", GITHUB_OWNER, "--limit", "300",
+         "--json", "name,isArchived"],
+        capture_output=True, text=True, check=True,
+    )
+    return sorted(r["name"] for r in json.loads(out.stdout) if not r["isArchived"])
+
+
+def import_everything_as_mirrors() -> int:
+    """Bulk DR copy: every repo, as a READ-ONLY pull mirror.
+
+    Mirrors are the right shape for the bulk, and the reason is safety rather
+    than tidiness. Sampling 40 repos found **18 carrying deploy / release /
+    publish workflows that trigger on `push:`** — roughly 63 across the account.
+    Importing those as writable repos with Actions enabled would arm sixty-odd
+    production deploy triggers on Veron 1, each of which would then have to be
+    disarmed by hand.
+
+    A pull mirror cannot run Actions at all, so the bulk import carries **zero**
+    deploy risk, and Gitea does the syncing itself with no script and no timer.
+    What you get is a complete, current, second copy of the whole account.
+
+    Converting one to a writable CI repo is then a deliberate per-repo act:
+    delete, re-import with `mirror=false`, review its workflows, disable the
+    deploying ones. That is the moment to make that judgement — not in bulk,
+    sixty times, by accident.
+    """
+    names = all_repo_names()
+    existing = 0
+    done = 0
+    failed = []
+    print(f"{len(names)} active repos on GitHub. Importing missing ones as read-only mirrors.\n")
+    for n in names:
+        status, _ = _api("GET", f"/repos/{OWNER}/{n}")
+        if status == 200:
+            existing += 1
+            continue
+        if import_repo(n, mirror=True):
+            done += 1
+        else:
+            failed.append(n)
+    print(f"\n  already present: {existing}")
+    print(f"  newly mirrored:  {done}")
+    if failed:
+        print(f"  FAILED ({len(failed)}): {', '.join(failed[:10])}")
+    return 1 if failed else 0
+
+
 def list_candidates() -> None:
     """Private repos whose CI cannot run on GitHub at all."""
     out = subprocess.run(
@@ -163,6 +212,9 @@ def main() -> int:
     if args.list_candidates:
         list_candidates()
         return 0
+
+    if args.all_as_mirrors:
+        return import_everything_as_mirrors()
 
     targets = SAFE_ORDER if args.safe_batch else args.repos
     if not targets:
