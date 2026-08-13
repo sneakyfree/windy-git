@@ -47,16 +47,45 @@ For a single repo, when nobody is mid-work on it:
 in it.** A dozen parallel sessions is exactly the situation where a big-bang
 cutover produces the dirty-branch mess this plan exists to avoid.
 
-## What is NOT on Windy Git
+## The whole account is on Windy Git — in two tiers
 
-**9 of 141 repos.** The whole GitHub account is 1.58 GB, so the rest is a
-capacity non-issue — it simply has not been imported yet. Add repos to the
-import list as they become useful to build.
+    143 repos · 1.58 GB · 967 GB free      (matches the GitHub archive exactly)
 
-**`windy-pro` is excluded on purpose.** Six checkouts, a build counter forked
-three ways, two sessions recording different HEADs hours apart. Resolve which is
-current and write it down before importing (G11.5). The import script refuses it
-by name.
+| tier | count | writable | runs CI | deploy risk |
+|---|---|---|---|---|
+| **read-only mirrors** | 131 | no | **no** | **none** |
+| **writable + CI** | 12 | yes | yes | deploys disabled |
+
+**Why the bulk is mirrors, and why that is the safety decision:** sampling 40
+repos found **18 carrying deploy / release / publish workflows that trigger on
+`push:`** — roughly 63 across the account. Importing those writable with Actions
+enabled would have armed sixty-odd production deploy triggers on Veron 1, each
+needing disarming by hand. **A pull mirror cannot run Actions at all**, so the
+bulk import carries zero execution risk and Gitea syncs it with no script and no
+timer.
+
+That splits the two things cleanly: **having a copy** (safe, do it for
+everything, now) and **running code** (needs judgement, do it per repo,
+deliberately).
+
+Seven repos are empty here because they are empty on GitHub — 0 KB upstream,
+verified. Not failed imports.
+
+`windy-pro` **is** present, as a mirror. That is safe: the G11.5 caution is
+about making it *writable* while six checkouts and a three-way-forked build
+counter disagree on HEAD. A read-only copy of whatever GitHub currently has
+carries none of that risk — and it means the DR copy is complete.
+
+## Promoting a mirror to writable + CI
+
+Per repo, deliberately, when that repo is quiet:
+
+1. delete the mirror, re-import with `mirror=false`
+2. **review its workflows and disable every deploying one** (see the section
+   above — this is the step that matters)
+3. add it to `REPOS` in `sync_from_github.sh` so it tracks GitHub
+4. later, when it flips to Windy-Git-first: remove it from `REPOS` *first*,
+   repoint its sessions, add a push-mirror back to GitHub
 
 ## ⚠️ Deploy workflows are DISABLED on Windy Git, deliberately
 
