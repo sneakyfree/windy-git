@@ -10,12 +10,16 @@ happened somewhere in this ecosystem and cost real time.
 
 from __future__ import annotations
 
+import base64 as _b64
+import json as _json
 import re
 import subprocess
 import sys
+import types as _types
 from pathlib import Path
 
 import pytest
+import pytest as _pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -633,3 +637,53 @@ def test_g09_backup_fails_loudly():
     src = (ROOT / "scripts" / "backup.sh").read_text()
     assert "COMPLETED WITH FAILURES" in src
     assert "refusing to report a backup that did not happen" in src
+
+
+# --------------------------------------------------------------------------
+# SECURITY (behavioral, not string-grep): the agent path must not authenticate
+# an unverified token. Regression guard for the 2026-08-13 forged-token bypass.
+# --------------------------------------------------------------------------
+
+
+def _forged_bearer(passport: str) -> str:
+    def seg(d):
+        return _b64.urlsafe_b64encode(_json.dumps(d).encode()).rstrip(b"=").decode()
+    return f"{seg({'alg':'none','typ':'JWT'})}.{seg({'passport':passport})}.not-a-signature"
+
+
+def _fake_request(settings):
+    app = _types.SimpleNamespace(state=_types.SimpleNamespace(settings=settings))
+    return _types.SimpleNamespace(app=app)
+
+
+@_pytest.mark.asyncio
+async def test_security_forged_agent_token_is_refused_in_production():
+    """A token with alg:none naming a real passport must NOT authenticate.
+    This is the exploit that returned HTTP 200 on 2026-08-13, exercised through
+    the real get_caller decision rather than by grepping for a string."""
+    from api.app.auth import get_caller
+    from api.app.config import Settings
+    from api.app.errors import RepairPointer
+
+    settings = Settings(environment="production", require_verified_jwt=True,
+                        eternitas_platform_api_key="x", eternitas_base_url="https://api.eternitas.ai")
+    req = _fake_request(settings)
+
+    with _pytest.raises(RepairPointer) as exc:
+        await get_caller(req, authorization=f"Bearer {_forged_bearer('ET26-1EF9-VJAN')}",
+                         x_service_token=None)
+    # Must be refused, and must be refused BEFORE any trust lookup could seat it.
+    assert exc.value.status_code in (401, 503)
+    assert exc.value.code == "agent_signin_not_ready"
+
+
+@_pytest.mark.asyncio
+async def test_security_no_bearer_is_still_401():
+    from api.app.auth import get_caller
+    from api.app.config import Settings
+    from api.app.errors import RepairPointer
+
+    req = _fake_request(Settings(environment="production"))
+    with _pytest.raises(RepairPointer) as exc:
+        await get_caller(req, authorization=None, x_service_token=None)
+    assert exc.value.status_code == 401

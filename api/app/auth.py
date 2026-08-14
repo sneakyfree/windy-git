@@ -159,10 +159,37 @@ async def get_caller(
     token = authorization.split(" ", 1)[1].strip()
 
     # --- agent (Eternitas EPT) --------------------------------------------
-    # An EPT names its passport; the trust API is the authority on whether that
-    # passport may act. We never read a band out of the token itself.
     passport = _unverified_claim(token, "passport") or _unverified_claim(token, "sub_passport")
     if passport:
+        # ⚠️ SECURITY — trust is not authentication.
+        #
+        # A trust lookup answers "is this passport reputable?". It does NOT
+        # answer "does this caller actually hold this passport?". Skipping the
+        # second question is an authentication bypass: anyone who knows a
+        # passport number (they appear in logs, the lockbox and revocation
+        # messages) could present an UNSIGNED token naming it and be treated as
+        # that agent. Verified live 2026-08-13 — a forged `alg:none` token
+        # returned HTTP 200.
+        #
+        # ES256/JWKS verification of the EPT against Eternitas is not built yet
+        # (the G3.2/G9.1 verifier). Until it is, the agent path FAILS CLOSED in
+        # production — exactly as the human path below already does. This is not
+        # a downgrade of the "agents are citizens" design; it is refusing to
+        # seat a citizen whose ID we cannot yet check. It reopens automatically
+        # the moment `verify_ept_signature` exists and this gate consults it.
+        if settings.is_production and settings.require_verified_jwt:
+            raise RepairPointer(
+                status_code=503,
+                code="agent_signin_not_ready",
+                speak="Helper sign-in isn't switched on yet. Nothing you have is affected.",
+                machine_cause=(
+                    "EPT signature verification (G3.2/G9.1) is not implemented; "
+                    "refusing an unverified agent token in production. A trust "
+                    "lookup proves reputation, not possession."
+                ),
+                remediation_tool=None,
+            )
+
         band, actions = await resolve_passport(settings, passport)
         if band.lower() == "untrusted":
             raise RepairPointer(
