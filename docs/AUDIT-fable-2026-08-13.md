@@ -53,11 +53,24 @@ decision. Lowest-effort mitigations: rootless/sysbox runner, or move the two
 tokens out of the API container's env into a path the API reads but the runner
 host does not share.
 
-### 🟡 The revocation moat is not wired (LOW, already flagged by Opus)
-The Eternitas `webhook_secret` was swallowed by a 500 at registration, so the
-receiver fail-closes on every signed delivery. "Revoke a passport, it dies
-everywhere" is not functional on Windy Git yet. Recover the secret from the
-Eternitas DB and clear `webhooks_suspended_at`.
+### ✅ Revocation — was WORSE than flagged, now fixed (was CRITICAL once agent auth reopened)
+Re-examined after real agent auth went live, and the finding grew teeth. A
+revoked passport returns **HTTP 200, `status: revoked`, `band: unproven`,
+`allowed_actions: []`** (verified live). `resolve_passport` keyed refusal only on
+HTTP 4xx and `band=="untrusted"`, so it returned band `unproven` and **seated the
+revoked agent** — revocation was not enforced on the live path at all. The
+webhook everyone worried about was only ever cache-invalidation; the live trust
+lookup was the real gate, and it wasn't checking.
+
+**Fixed:** `decide_trust` now allows only `status=="active"`; revoked / suspended
+/ frozen / unknown all refuse, fail-closed. Revocation now takes effect on the
+next request, no webhook required. Eternitas additionally refuses to mint EPTs
+for revoked bots, so the residual window was a pre-existing ~365-day token —
+exactly what the live check now stops. 79 tests green including the full wiring.
+
+The webhook (`webhook_secret` lost to the 500) is now genuinely LOW: it only
+matters for locally-issued credentials/grants (G6.3, not built), and it is no
+longer the thing standing between a revoked agent and access.
 
 ## What is genuinely strong (and worth protecting)
 
