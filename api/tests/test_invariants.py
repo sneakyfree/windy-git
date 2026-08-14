@@ -492,6 +492,11 @@ def test_g73_workflow_pins_a_python_that_satisfies_requires_python():
 
     for wf in ROOT.rglob(".gitea/workflows/*.y*ml"):
         text = wf.read_text()
+        # Only workflows that actually RUN Python need to pin it. A workflow
+        # that shells out to psql or curl does not, and demanding a pin from
+        # it is the test being wrong rather than the workflow.
+        if not _re.search(r"\bpython3?\b|pytest|pip ", text):
+            continue
         # Either a pinned container image or an explicit setup-python version.
         pin = _re.search(r"image:\s*python:(\d+)\.(\d+)", text) or _re.search(
             r'python-version:\s*"?(\d+)\.(\d+)"?', text
