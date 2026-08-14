@@ -73,6 +73,36 @@ BAND_MULTIPLIER: dict[str, float] = {
 }
 
 
+class PassportNotInGoodStanding(Exception):
+    """The passport resolved, but Eternitas does not list it as active
+    (revoked / suspended / frozen / unknown status)."""
+
+    def __init__(self, passport: str, status: str) -> None:
+        self.passport = passport
+        self.status = status
+        super().__init__(f"{passport} status={status!r}")
+
+
+def decide_trust(body: dict, passport: str) -> tuple[str, tuple[str, ...]]:
+    """The trust body -> (band, allowed_actions), or refuse.
+
+    THE GATE THAT WAS MISSING. A revoked passport returns HTTP 200 with
+    `status: revoked`, `band: unproven`, `allowed_actions: []` — verified live
+    2026-08-13. The previous code keyed refusal only on HTTP 4xx and on
+    band=="untrusted", so a revoked agent (200, band unproven) authenticated and
+    acted normally. Revocation was not enforced on the live path at all; the
+    webhook that was supposed to be the backup was never the primary gate.
+
+    Only `status == "active"` is allowed. Anything else — including a status
+    Eternitas invents tomorrow — refuses. Fail-closed on the field that carries
+    the most consequential fact about an identity.
+    """
+    status = str(body.get("status", "")).lower()
+    if status != "active":
+        raise PassportNotInGoodStanding(passport, status or "missing")
+    return body.get("band", "unproven"), tuple(body.get("allowed_actions", ()))
+
+
 async def resolve_passport(settings: Settings, passport: str) -> tuple[str, tuple[str, ...]]:
     """G3.6 — THE STATUS-CODE LAW.
 
@@ -106,8 +136,9 @@ async def resolve_passport(settings: Settings, passport: str) -> tuple[str, tupl
                 continue
         last_status = r.status_code
         if r.status_code == 200:
-            body = r.json()
-            return body.get("band", "unproven"), tuple(body.get("allowed_actions", []))
+            # decide_trust raises PassportNotInGoodStanding on a non-active
+            # status; that propagates past the retry loop as a hard refusal.
+            return decide_trust(r.json(), passport)
         if r.status_code in (400, 404):
             # Malformed or not-issued. Refuse immediately — retrying cannot help
             # and pretending it might is how a soft-allow gets written.
@@ -179,7 +210,20 @@ async def get_caller(
         # EPTs live ~365 days and carry `rev`/`tru` baked in at issuance, so a
         # year-old `rev: false` proves nothing. Revocation and band come from a
         # live lookup, every time.
-        band, actions = await resolve_passport(settings, verified.passport)
+        try:
+            band, actions = await resolve_passport(settings, verified.passport)
+        except PassportNotInGoodStanding as exc:
+            # The signature is authentic, but the identity is no longer good.
+            # Revocation takes effect here, live, on the next request — no
+            # webhook required. That is the honest place for it: the token can't
+            # be un-issued, but its standing is checked every time.
+            raise RepairPointer(
+                status_code=403,
+                code="passport_revoked",
+                speak="That helper's access has been turned off.",
+                machine_cause=f"eternitas status for {verified.passport} is {exc.status!r}, not active",
+                remediation_tool=None,
+            ) from exc
         if band.lower() == "untrusted":
             raise RepairPointer(
                 status_code=403,

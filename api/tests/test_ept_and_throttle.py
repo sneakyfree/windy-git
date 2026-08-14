@@ -168,3 +168,32 @@ def test_every_throttled_action_has_a_configured_base():
     s = Settings()
     for action, field in ACTION_BASE.items():
         assert getattr(s, field) > 0, f"{action} has no positive base rate"
+
+
+# ---- revocation enforced on the live trust path (not just the webhook) ----
+def test_revoked_passport_is_refused_by_trust_decision():
+    """A revoked passport returns HTTP 200, status=revoked, band=unproven,
+    allowed=[] (verified live 2026-08-13). The decision must refuse it — the
+    old code returned band 'unproven' and seated the agent."""
+    from api.app.auth import PassportNotInGoodStanding, decide_trust
+
+    revoked = {"status": "revoked", "band": "unproven", "allowed_actions": []}
+    with pytest.raises(PassportNotInGoodStanding):
+        decide_trust(revoked, "ET26-NJQT-QMR0")
+
+
+def test_active_passport_is_accepted_by_trust_decision():
+    from api.app.auth import decide_trust
+
+    active = {"status": "active", "band": "gold", "allowed_actions": ["read", "send"]}
+    band, actions = decide_trust(active, "ET26-1EF9-VJAN")
+    assert band == "gold" and actions == ("read", "send")
+
+
+def test_unknown_or_missing_status_fails_closed():
+    from api.app.auth import PassportNotInGoodStanding, decide_trust
+
+    for body in ({"band": "gold"}, {"status": "suspended"}, {"status": "frozen"},
+                 {"status": ""}, {}):
+        with pytest.raises(PassportNotInGoodStanding):
+            decide_trust(body, "ET26-X")
