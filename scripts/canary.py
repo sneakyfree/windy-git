@@ -65,6 +65,9 @@ class Check:
     body: dict | None = None
     headers: dict = field(default_factory=dict)
     warn_seconds: float | None = None
+    # When True this check INVERTS: a 2xx is a critical failure (a security
+    # control opened) and a 401/403/503 is the healthy, expected outcome.
+    must_refuse: bool = False
 
 
 def _probe(c: Check) -> Result:
@@ -77,6 +80,12 @@ def _probe(c: Check) -> Result:
     try:
         with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
             elapsed = time.monotonic() - start
+            if c.must_refuse:
+                # A 2xx here means a control that should reject accepted. That is
+                # the alarm, not the absence of one.
+                return Result(c.name, "down",
+                              f"ACCEPTED (HTTP {r.status}) — this MUST be refused",
+                              elapsed, c.what_it_proves)
             if r.status >= 400:
                 return Result(c.name, "down", f"HTTP {r.status}", elapsed, c.what_it_proves)
             warn = c.warn_seconds
@@ -87,6 +96,9 @@ def _probe(c: Check) -> Result:
                 )
             return Result(c.name, "ok", f"HTTP {r.status} in {elapsed:.1f}s", elapsed, c.what_it_proves)
     except urllib.error.HTTPError as e:
+        if c.must_refuse and e.code in (401, 403, 503):
+            return Result(c.name, "ok", f"correctly refused (HTTP {e.code})",
+                          time.monotonic() - start, c.what_it_proves)
         return Result(c.name, "down", f"HTTP {e.code}", time.monotonic() - start, c.what_it_proves)
     except Exception as e:  # noqa: BLE001 — a probe must never raise upward
         return Result(
@@ -128,6 +140,23 @@ def build_checks() -> list[Check]:
             "the dashboard loads",
         ),
     ]
+
+    # SECURITY REGRESSION GUARD. A forged, unsigned token naming a real passport
+    # must be refused. On 2026-08-13 this returned HTTP 200 (full agent
+    # impersonation). If it ever returns 2xx again, the bypass is back.
+    _forged = (
+        "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0"
+        ".eyJwYXNzcG9ydCI6IkVUMjYtMUVGOS1WSkFOIn0.x"
+    )
+    checks.append(
+        Check(
+            "security.forged_agent_token",
+            "https://api.windygit.com/api/v1/repos",
+            "an unsigned token cannot impersonate an agent",
+            headers={"Authorization": f"Bearer {_forged}"},
+            must_refuse=True,
+        )
+    )
 
     # THE important one. /health was 200 for the entire 2026-08-12 outage while
     # this was timing out. A canary that skips it is decorative.
