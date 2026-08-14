@@ -144,19 +144,32 @@ def build_checks() -> list[Check]:
     # SECURITY REGRESSION GUARD. A forged, unsigned token naming a real passport
     # must be refused. On 2026-08-13 this returned HTTP 200 (full agent
     # impersonation). If it ever returns 2xx again, the bypass is back.
-    _forged = (
-        "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0"
-        ".eyJwYXNzcG9ydCI6IkVUMjYtMUVGOS1WSkFOIn0.x"
-    )
-    checks.append(
-        Check(
-            "security.forged_agent_token",
-            "https://api.windygit.com/api/v1/repos",
-            "an unsigned token cannot impersonate an agent",
-            headers={"Authorization": f"Bearer {_forged}"},
-            must_refuse=True,
+    import base64 as _b64
+    import json as _j
+
+    def _seg(d: dict) -> str:
+        return _b64.urlsafe_b64encode(_j.dumps(d).encode()).rstrip(b"=").decode()
+
+    # Two shapes, because they exercise two different gates. The EPT-shaped one
+    # is the important one now: it is what real signature verification guards.
+    for _label, _hdr in (
+        ("security.forged_agent_token", {"alg": "none", "typ": "JWT"}),
+        ("security.forged_ept", {"alg": "none", "typ": "EPT"}),
+    ):
+        _tok = (
+            f"{_seg(_hdr)}."
+            f"{_seg({'sub': 'ET26-1EF9-VJAN', 'passport': 'ET26-1EF9-VJAN', 'iss': 'eternitas.ai', 'exp': 9999999999})}"
+            ".not-a-real-signature"
         )
-    )
+        checks.append(
+            Check(
+                _label,
+                "https://api.windygit.com/api/v1/repos",
+                "an unsigned token cannot impersonate an agent",
+                headers={"Authorization": f"Bearer {_tok}"},
+                must_refuse=True,
+            )
+        )
 
     # THE important one. /health was 200 for the entire 2026-08-12 outage while
     # this was timing out. A canary that skips it is decorative.
