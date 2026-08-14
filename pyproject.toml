@@ -25,6 +25,9 @@ dependencies = [
     "alembic>=1.14",
     "httpx>=0.27",
     "boto3>=1.35",
+    # ES256 verification of Eternitas EPTs (G3.2/G9.1). Without crypto extras
+    # PyJWT cannot verify EC signatures and silently offers no protection.
+    "pyjwt[crypto]>=2.9",
 ]
 
 [project.optional-dependencies]

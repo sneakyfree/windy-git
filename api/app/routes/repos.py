@@ -26,6 +26,7 @@ from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from api.app import throttle
 from api.app.auth import ActorType, Caller, get_caller
 from api.app.errors import RepairPointer
 from api.app.models.core import (
@@ -208,6 +209,11 @@ async def create_repo(
             remediation_tool=None,
         )
 
+    # Throttle before any side effect. Checking after would let a rate-limited
+    # agent still create the Gitea repo and only then be told no.
+    async with _sessionmaker(request)() as session:
+        await throttle.enforce(session, settings, caller, "repo.create")
+
     gitea = GiteaClient(settings)
     owner = _owner_login(caller)
     await gitea.ensure_user(owner, f"{owner}@windygit.com")
@@ -234,6 +240,8 @@ async def create_repo(
             ),
         )
         session.add(repo)
+        await session.flush()
+        await throttle.record(session, caller, "repo.create", repo_id=repo.id)
         await session.commit()
         await session.refresh(repo)
 
@@ -337,6 +345,7 @@ async def create_grant(
     """
     settings = request.app.state.settings
     async with _sessionmaker(request)() as session:
+        await throttle.enforce(session, settings, caller, "grant.create")
         repo = await _load_repo(session, repo_id, caller)
         is_owner = (caller.identity_id and repo.identity_id == caller.identity_id) or (
             caller.passport and repo.passport == caller.passport
@@ -364,6 +373,8 @@ async def create_grant(
             expires_at=expires,
         )
         session.add(grant)
+        await session.flush()
+        await throttle.record(session, caller, "grant.create", repo_id=repo.id)
         await session.commit()
         await session.refresh(grant)
         grant_id, role = grant.id, grant.role

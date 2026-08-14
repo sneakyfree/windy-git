@@ -658,23 +658,27 @@ def _fake_request(settings):
 
 @_pytest.mark.asyncio
 async def test_security_forged_agent_token_is_refused_in_production():
-    """A token with alg:none naming a real passport must NOT authenticate.
-    This is the exploit that returned HTTP 200 on 2026-08-13, exercised through
-    the real get_caller decision rather than by grepping for a string."""
+    """The 2026-08-13 exploit: an alg:none token naming a real passport returned
+    HTTP 200 as that agent. It must now be refused whichever gate catches it —
+    an EPT-shaped forgery by signature verification, a JWT-shaped one by the
+    human gate. What is asserted is REFUSAL, not a particular error code."""
     from api.app.auth import get_caller
     from api.app.config import Settings
     from api.app.errors import RepairPointer
 
     settings = Settings(environment="production", require_verified_jwt=True,
-                        eternitas_platform_api_key="x", eternitas_base_url="https://api.eternitas.ai")
+                        eternitas_platform_api_key="x")
     req = _fake_request(settings)
 
-    with _pytest.raises(RepairPointer) as exc:
-        await get_caller(req, authorization=f"Bearer {_forged_bearer('ET26-1EF9-VJAN')}",
-                         x_service_token=None)
-    # Must be refused, and must be refused BEFORE any trust lookup could seat it.
-    assert exc.value.status_code in (401, 503)
-    assert exc.value.code == "agent_signin_not_ready"
+    for typ, expected in (("JWT", "human_signin_not_ready"), ("EPT", "ept_invalid")):
+        def seg(d):
+            return _b64.urlsafe_b64encode(_json.dumps(d).encode()).rstrip(b"=").decode()
+        forged = (f"{seg({'alg':'none','typ':typ})}"
+                  f".{seg({'passport':'ET26-1EF9-VJAN','sub':'ET26-1EF9-VJAN'})}.sig")
+        with _pytest.raises(RepairPointer) as exc:
+            await get_caller(req, authorization=f"Bearer {forged}", x_service_token=None)
+        assert exc.value.status_code in (401, 403, 503), f"{typ} was not refused"
+        assert exc.value.code == expected, f"{typ} -> {exc.value.code}"
 
 
 @_pytest.mark.asyncio

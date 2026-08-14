@@ -25,6 +25,7 @@ import httpx
 from fastapi import Header, Request
 
 from api.app.config import Settings
+from api.app.ept import EptInvalid, looks_like_ept, verify_ept
 from api.app.errors import RepairPointer, passport_unresolvable
 
 log = logging.getLogger(__name__)
@@ -159,49 +160,37 @@ async def get_caller(
     token = authorization.split(" ", 1)[1].strip()
 
     # --- agent (Eternitas EPT) --------------------------------------------
-    passport = _unverified_claim(token, "passport") or _unverified_claim(token, "sub_passport")
-    if passport:
-        # ⚠️ SECURITY — trust is not authentication.
-        #
-        # A trust lookup answers "is this passport reputable?". It does NOT
-        # answer "does this caller actually hold this passport?". Skipping the
-        # second question is an authentication bypass: anyone who knows a
-        # passport number (they appear in logs, the lockbox and revocation
-        # messages) could present an UNSIGNED token naming it and be treated as
-        # that agent. Verified live 2026-08-13 — a forged `alg:none` token
-        # returned HTTP 200.
-        #
-        # ES256/JWKS verification of the EPT against Eternitas is not built yet
-        # (the G3.2/G9.1 verifier). Until it is, the agent path FAILS CLOSED in
-        # production — exactly as the human path below already does. This is not
-        # a downgrade of the "agents are citizens" design; it is refusing to
-        # seat a citizen whose ID we cannot yet check. It reopens automatically
-        # the moment `verify_ept_signature` exists and this gate consults it.
-        if settings.is_production and settings.require_verified_jwt:
+    # Possession FIRST, reputation second. The signature proves the caller holds
+    # this passport; the trust lookup then says what it may do. Doing only the
+    # second was the 2026-08-13 impersonation bypass.
+    if looks_like_ept(token):
+        try:
+            verified = verify_ept(token, settings.eternitas_base_url)
+        except EptInvalid as exc:
             raise RepairPointer(
-                status_code=503,
-                code="agent_signin_not_ready",
-                speak="Helper sign-in isn't switched on yet. Nothing you have is affected.",
-                machine_cause=(
-                    "EPT signature verification (G3.2/G9.1) is not implemented; "
-                    "refusing an unverified agent token in production. A trust "
-                    "lookup proves reputation, not possession."
-                ),
-                remediation_tool=None,
-            )
+                status_code=401,
+                code="ept_invalid",
+                speak="We couldn't confirm that helper's ID, so we didn't let it in.",
+                machine_cause=f"EPT verification failed: {exc}",
+                remediation_tool="windy_git.reissue_agent_token",
+            ) from exc
 
-        band, actions = await resolve_passport(settings, passport)
+        # The token is authentic. It is NOT evidence of current standing: these
+        # EPTs live ~365 days and carry `rev`/`tru` baked in at issuance, so a
+        # year-old `rev: false` proves nothing. Revocation and band come from a
+        # live lookup, every time.
+        band, actions = await resolve_passport(settings, verified.passport)
         if band.lower() == "untrusted":
             raise RepairPointer(
                 status_code=403,
                 code="agent_read_only",
                 speak="That helper can look, but it isn't allowed to make changes yet.",
-                machine_cause=f"passport {passport} band=untrusted is read-only",
+                machine_cause=f"passport {verified.passport} band=untrusted is read-only",
                 remediation_tool=None,
             )
         return Caller(
             actor_type=ActorType.agent,
-            passport=passport,
+            passport=verified.passport,
             band=band,
             allowed_actions=actions,
         )
