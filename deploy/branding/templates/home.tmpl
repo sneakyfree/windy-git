@@ -1,0 +1,27 @@
+{{template "base/head" .}}
+<div role="main" aria-label="{{ctx.Locale.Tr "home"}}" class="page-content home">
+  <div class="wg-hero">
+    <img src="{{AssetUrlPrefix}}/img/logo.svg" alt="Windy Git" width="72" height="72">
+    <h1>Windy Git</h1>
+    <p class="wg-sub">Your work, every version — and agents as citizens.</p>
+    <div class="wg-cta">
+      {{if not .IsSigned}}
+        <a class="ui primary button" href="{{AppSubUrl}}/user/login">Sign in with Windy</a>
+      {{else}}
+        <a class="ui primary button" href="{{AppSubUrl}}/{{.SignedUser.Name}}?tab=repositories">Your repositories</a>
+      {{end}}
+      <a class="ui button" href="{{AppSubUrl}}/explore/repos">Explore</a>
+    </div>
+  </div>
+  <div class="wg-grid">
+    <div class="wg-card"><h3>Code and models, one host</h3>
+      <p>Git and LFS over Windy Cloud storage. Source, weights and adapters live side by side.</p></div>
+    <div class="wg-card"><h3>Agents are first-class</h3>
+      <p>An agent signs in with its own Eternitas passport — not a human's borrowed token — and its work is attributable to it.</p></div>
+    <div class="wg-card"><h3>Your account, no second password</h3>
+      <p>Sign in with the Windy account you already have. Nothing new to remember.</p></div>
+    <div class="wg-card"><h3>Kept, and kept elsewhere</h3>
+      <p>Every repository is bundled nightly to off-site storage, and the restore is rehearsed rather than assumed.</p></div>
+  </div>
+</div>
+{{template "base/footer" .}}

@@ -703,3 +703,28 @@ def test_i12_build_fails_when_commit_sha_is_empty():
     and it happened on 2026-08-14."""
     df = (ROOT / "Dockerfile").read_text()
     assert 'test -n "${COMMIT_SHA}"' in df
+
+
+# --------------------------------------------------------------------------
+# G2.3 — branding lives in the repo, not only on one host's disk
+# --------------------------------------------------------------------------
+def test_g23_branding_is_version_controlled():
+    """It was applied directly to Veron's disk first, which is the config-drift
+    trap this project documents: the running system and the repo disagree, and
+    a rebuild silently reverts to stock Gitea."""
+    b = ROOT / "deploy" / "branding"
+    for f in ("apply.sh", "README.md", "templates/home.tmpl",
+              "templates/custom/header.tmpl"):
+        assert (b / f).exists(), f"missing {f}"
+
+
+def test_g23_brand_css_filename_is_versioned():
+    """Cloudflare caches /assets/* for 6h and no token here can purge, so a
+    fixed filename leaves stale bytes live for hours."""
+    import re as _re
+
+    hdr = (ROOT / "deploy" / "branding" / "templates" / "custom" / "header.tmpl").read_text()
+    m = _re.search(r"theme-windy\.v(\d+)\.css", hdr)
+    assert m, "brand CSS must carry a version in its FILENAME"
+    assert (ROOT / "deploy" / "branding" / "public" / "assets" / "css"
+            / f"theme-windy.v{m.group(1)}.css").exists()
