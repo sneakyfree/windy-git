@@ -694,3 +694,12 @@ async def test_security_no_bearer_is_still_401():
     with _pytest.raises(RepairPointer) as exc:
         await get_caller(req, authorization=None, x_service_token=None)
     assert exc.value.status_code == 401
+
+
+def test_i12_build_fails_when_commit_sha_is_empty():
+    """The sed+grep pair silently accepted an empty COMMIT_SHA: it replaced ""
+    with "" and then matched that same empty string, shipping a container that
+    reported commit_sha: null. That is the exact defect I-12 exists to prevent,
+    and it happened on 2026-08-14."""
+    df = (ROOT / "Dockerfile").read_text()
+    assert 'test -n "${COMMIT_SHA}"' in df

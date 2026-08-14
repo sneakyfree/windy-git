@@ -18,7 +18,14 @@ COPY alembic ./alembic
 COPY alembic.ini ./
 COPY scripts ./scripts
 
-RUN sed -i "s|^BAKED_COMMIT_SHA: str = \"\"|BAKED_COMMIT_SHA: str = \"${COMMIT_SHA}\"|" api/app/buildinfo.py \
+# I-12: an EMPTY COMMIT_SHA must fail the build, not sail through it.
+# Previously the sed replaced "" with "" (a no-op) and the grep then matched
+# that same empty string, so a build with no COMMIT_SHA passed and shipped a
+# container reporting commit_sha: null — exactly the "service cannot name its
+# own commit" defect this project exists to prevent. Caught 2026-08-14 when
+# /version went null after a deploy.
+RUN test -n "${COMMIT_SHA}" || (echo "FATAL: COMMIT_SHA build arg is empty (I-12)" && false) \
+ && sed -i "s|^BAKED_COMMIT_SHA: str = \"\"|BAKED_COMMIT_SHA: str = \"${COMMIT_SHA}\"|" api/app/buildinfo.py \
  && sed -i "s|^BAKED_BUILT_AT: str = \"\"|BAKED_BUILT_AT: str = \"${BUILT_AT}\"|" api/app/buildinfo.py \
  && grep -q "BAKED_COMMIT_SHA: str = \"${COMMIT_SHA}\"" api/app/buildinfo.py
 
