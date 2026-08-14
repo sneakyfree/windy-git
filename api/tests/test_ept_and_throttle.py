@@ -283,3 +283,30 @@ def test_routing_does_not_depend_on_signature_wellformedness():
 
     assert not looks_like_ept("not-a-token")
     assert not looks_like_ept("")
+
+
+def test_only_actions_that_route_through_this_api_are_claimed_enforced():
+    """git push never touches this API, so a push limit here would count zero
+    forever and allow everything — a silent no-op wearing the costume of a
+    control. Push limits must stay in NOT_ENFORCED_HERE until a Gitea-side hook
+    reports pushes into agent_actions."""
+    from api.app.throttle import ACTION_BASE, NOT_ENFORCED_HERE
+
+    assert "push" not in ACTION_BASE
+    assert "push.force" not in ACTION_BASE
+    assert "push" in NOT_ENFORCED_HERE
+    assert not set(ACTION_BASE) & set(NOT_ENFORCED_HERE)
+
+
+@pytest.mark.asyncio
+async def test_enforce_refuses_an_action_it_cannot_actually_limit():
+    """Asking to throttle 'push' must raise, not silently allow."""
+    from api.app.auth import ActorType, Caller
+    from api.app.config import Settings
+    from api.app.errors import RepairPointer
+    from api.app.throttle import enforce
+
+    caller = Caller(actor_type=ActorType.agent, passport="ET26-X", band="gold")
+    with pytest.raises(RepairPointer) as exc:
+        await enforce(None, Settings(), caller, "push")
+    assert exc.value.code == "throttle_unknown_action"

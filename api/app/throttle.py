@@ -36,10 +36,28 @@ log = logging.getLogger(__name__)
 
 WINDOW = timedelta(days=1)
 
-# action name -> the settings field holding its per-day base for a standard band
+# Actions this module ACTUALLY enforces: they pass through our API, so we can
+# both count and refuse them.
 ACTION_BASE: dict[str, str] = {
     "repo.create": "rate_repo_creates_per_day",
     "grant.create": "rate_grants_per_day",
+}
+
+# ⚠️ DECLARED BUT NOT ENFORCEABLE HERE — and named, rather than quietly listed
+# alongside the real ones.
+#
+# `git push` goes straight to Gitea over HTTPS and never touches this API, so
+# nothing records a `push` action and a count of them would be zero forever.
+# Listing these in ACTION_BASE (as this module first did) would make `enforce`
+# look up a limit, count nothing, and allow everything — a silent no-op wearing
+# the costume of a control. That is the same dead-code pattern this module was
+# written to remove, and it is worse here because the config name implies the
+# protection exists.
+#
+# Enforcing push velocity requires a Gitea-side hook (pre-receive or the push
+# webhook) that reports into `agent_actions`. Until that exists these settings
+# are inert, and saying so is the honest option.
+NOT_ENFORCED_HERE: dict[str, str] = {
     "push": "rate_pushes_per_day",
     "push.force": "rate_force_pushes_per_day",
 }
