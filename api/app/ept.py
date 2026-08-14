@@ -24,6 +24,8 @@ this module returns only identity and the caller re-checks standing.
 
 from __future__ import annotations
 
+import base64
+import json
 import logging
 import time
 from dataclasses import dataclass
@@ -110,16 +112,31 @@ def verify_ept(token: str, eternitas_base_url: str) -> VerifiedEpt:
 
 
 def looks_like_ept(token: str) -> bool:
-    """Cheap, unauthenticated triage: is this token even claiming to be an EPT?
+    """Cheap, unauthenticated triage: is this token even *claiming* to be an EPT?
 
     Used ONLY to route a token to the right verifier. It decides nothing about
     trust — an attacker controls every byte it reads.
+
+    Decodes the header segment directly rather than via
+    `jwt.get_unverified_header`, which validates the whole token structure and
+    therefore rejects anything with a malformed SIGNATURE. That made routing
+    depend on signature well-formedness: an EPT-shaped token with a bad
+    signature fell through to the human path, where it was refused for the wrong
+    reason ("signing in isn't switched on") and — with `require_verified_jwt`
+    off — could have been read as a human identity via its `sub` claim.
+
+    Routing must depend only on what the token claims to be. Whether it is
+    authentic is `verify_ept`'s job, and it says no.
     """
     try:
-        header = jwt.get_unverified_header(token)
+        head_b64 = token.split(".", 1)[0]
+        head_b64 += "=" * (-len(head_b64) % 4)
+        header = json.loads(base64.urlsafe_b64decode(head_b64))
     except Exception:  # noqa: BLE001
         return False
-    return header.get("typ") == "EPT" or header.get("alg") == "ES256"
+    if not isinstance(header, dict):
+        return False
+    return header.get("typ") == "EPT" or header.get("alg") in ("ES256", "none")
 
 
 async def eternitas_reachable(base_url: str) -> bool:

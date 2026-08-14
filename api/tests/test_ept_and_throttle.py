@@ -260,3 +260,26 @@ async def test_resolve_passport_returns_band_on_active_wiring(monkeypatch):
     settings = Settings(eternitas_platform_api_key="x")
     band, actions = await resolve_passport(settings, "ET26-1EF9-VJAN")
     assert band == "gold" and actions == ("read",)
+
+
+def test_routing_does_not_depend_on_signature_wellformedness():
+    """An EPT-shaped token must route to the EPT verifier even when its
+    signature is malformed. jwt.get_unverified_header() validates the whole
+    token and rejects bad signature padding, which used to push such tokens to
+    the human path — refused for the wrong reason, and readable as a human
+    identity via `sub` whenever require_verified_jwt was off."""
+    import base64
+    import json as _j
+
+    from api.app.ept import looks_like_ept
+
+    def seg(d):
+        return base64.urlsafe_b64encode(_j.dumps(d).encode()).rstrip(b"=").decode()
+
+    for hdr in ({"alg": "none", "typ": "EPT"}, {"alg": "ES256", "typ": "EPT"},
+                {"alg": "ES256"}):
+        tok = f"{seg(hdr)}.{seg({'sub': 'ET26-X'})}.x"  # deliberately bad signature
+        assert looks_like_ept(tok), f"{hdr} did not route to the EPT verifier"
+
+    assert not looks_like_ept("not-a-token")
+    assert not looks_like_ept("")

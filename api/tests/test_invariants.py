@@ -670,7 +670,10 @@ async def test_security_forged_agent_token_is_refused_in_production():
                         eternitas_platform_api_key="x")
     req = _fake_request(settings)
 
-    for typ, expected in (("JWT", "human_signin_not_ready"), ("EPT", "ept_invalid")):
+    # Both shapes now route to the EPT verifier, because alg:none is never
+    # valid for ANY caller — so 401 "your token is bad" is the honest answer,
+    # not 503 "that feature isn't ready".
+    for typ, expected in (("JWT", "ept_invalid"), ("EPT", "ept_invalid")):
         def seg(d):
             return _b64.urlsafe_b64encode(_json.dumps(d).encode()).rstrip(b"=").decode()
         forged = (f"{seg({'alg':'none','typ':typ})}"
