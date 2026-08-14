@@ -197,3 +197,66 @@ def test_unknown_or_missing_status_fails_closed():
                  {"status": ""}, {}):
         with pytest.raises(PassportNotInGoodStanding):
             decide_trust(body, "ET26-X")
+
+
+@pytest.mark.asyncio
+async def test_resolve_passport_raises_on_revoked_status_wiring(monkeypatch):
+    """Proves the WIRING, not just the decision: resolve_passport must feed the
+    real trust body through decide_trust and propagate the refusal. A validly
+    minted EPT can outlive the passport by ~a year, so this is the path that
+    stops a revoked-but-still-signed token."""
+
+    from api.app import auth
+    from api.app.auth import PassportNotInGoodStanding, resolve_passport
+    from api.app.config import Settings
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return {"status": "revoked", "band": "unproven", "allowed_actions": []}
+
+    class _Client:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, *a, **k):
+            return _Resp()
+
+    monkeypatch.setattr(auth.httpx, "AsyncClient", _Client)
+    settings = Settings(eternitas_platform_api_key="x", eternitas_base_url="https://api.eternitas.ai")
+
+    with pytest.raises(PassportNotInGoodStanding):
+        await resolve_passport(settings, "ET26-NJQT-QMR0")
+
+
+@pytest.mark.asyncio
+async def test_resolve_passport_returns_band_on_active_wiring(monkeypatch):
+    import httpx  # noqa: F401
+
+    from api.app import auth
+    from api.app.auth import resolve_passport
+    from api.app.config import Settings
+
+    class _Resp:
+        status_code = 200
+
+        def json(self):
+            return {"status": "active", "band": "gold", "allowed_actions": ["read"]}
+
+    class _Client:
+        def __init__(self, *a, **k): pass
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def get(self, *a, **k): return _Resp()
+
+    monkeypatch.setattr(auth.httpx, "AsyncClient", _Client)
+    settings = Settings(eternitas_platform_api_key="x")
+    band, actions = await resolve_passport(settings, "ET26-1EF9-VJAN")
+    assert band == "gold" and actions == ("read",)
