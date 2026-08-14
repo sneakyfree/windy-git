@@ -50,7 +50,16 @@ services:
     restart: unless-stopped
 
   runner:
-    image: docker.io/gitea/act_runner:0.2.11
+    # 0.2.11 -> 0.6.1 on 2026-08-14. The bundled act in 0.2.11 only knows
+    # `runs.using: node12|node16|node20`, so ANY repo pinning a current action
+    # major dies before its first step with "The runs.using key in action.yml
+    # must be one of: [...], got node24" — Windy-Clone on actions/checkout@v5
+    # is how this surfaced. Verified: `node24` is absent from the 0.2.11 binary
+    # and present in 0.6.1. Every key in this directory's config.yaml still
+    # exists in 0.6.1's schema (0.6.1 only ADDS keys), so the config carries
+    # over unchanged. Rollback is re-pinning 0.2.11; the registration in the
+    # runner-data volume survives either way.
+    image: docker.io/gitea/act_runner:0.6.1
     depends_on: [dind]
     environment:
       # The runner reaches its OWN daemon. Never the host's.
