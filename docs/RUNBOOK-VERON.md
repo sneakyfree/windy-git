@@ -47,6 +47,17 @@ sudo -E docker compose up -d --build
 curl -s https://api.windygit.com/version    # MUST equal git rev-parse HEAD
 ```
 
+⚠️ **Never `git pull -q` in a deploy script.** `-q` hides *errors*, not just
+noise. On 2026-08-14 a divergent branch made `pull -q` fail silently and the
+"deploy" ran for 20 minutes against stale code while reporting success. Use
+`git fetch && git merge --ff-only` (or `reset --hard origin/main` on THIS
+checkout only, which holds no local work) and read the output.
+
+⚠️ **Never force-push a branch a deploy checkout tracks.** An earlier
+`git commit --amend` + `--force-with-lease` rewrote history `/srv/windygit/src`
+was already sitting on, orphaning it. If you must amend, re-point the deploy
+checkout in the same breath.
+
 ⚠️ **Never put `COMMIT_SHA` in `.env`.** It does nothing here — the sha is baked
 into the image and a runtime override is ignored with a warning (I-12). That env
 pin is the documented root cause of nine sibling services misreporting their
