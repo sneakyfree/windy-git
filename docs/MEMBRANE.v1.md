@@ -15,6 +15,7 @@ Mirrored into `windy-cloud` and `eternitas` on change.
 | eternitas | `GET /api/v1/trust/{passport}` | band + allowed_actions |
 | eternitas | `GET /api/v1/registry/{passport}/integrity` | ⚠️ note the path — `windy-registry` calls `/api/v1/passports/{p}/status`, which 404s, which is why the integrity index has never been populated |
 | account-server | OIDC discovery + JWKS | human identity (G3.1) |
+| windy-admin ledger | `POST /v1/events` (admin.windyword.ai) | field telemetry: `ci.run`, `ci.job_cancelled`, `service.boot`, `service.health`, `forge.auth.failed`. Shapes are declared with the ledger owner BEFORE shipping (the server quarantines undeclared keys). Codes, counts, route templates only |
 | windy-cloud-sites | `POST /api/v1/sites/{id}/versions` | publish docs from a repo |
 
 ## Calls IN

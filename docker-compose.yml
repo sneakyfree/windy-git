@@ -16,7 +16,11 @@ services:
         # I-12: baked at build time. A runtime COMMIT_SHA override is ignored.
         COMMIT_SHA: ${COMMIT_SHA_BUILD:-}
         BUILT_AT: ${BUILT_AT:-}
-    env_file: [.env]
+    env_file:
+      - .env
+      # WINDYGIT_TELEMETRY_TOKEN (root-only on Veron). Optional: no file = no telemetry.
+      - path: /etc/windygit/telemetry.env
+        required: false
     environment:
       DATABASE_URL: postgresql+asyncpg://windygit:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@db:5432/windygit
       GITEA_BASE_URL: http://gitea:3000

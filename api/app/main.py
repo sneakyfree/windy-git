@@ -6,11 +6,13 @@ component and is reached only over its REST API (D-2 / I-1).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import socket
+import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
@@ -25,6 +27,7 @@ from api.app.providers.registry import (
     R2Provider,
 )
 from api.app.routes import health, repos, webhooks
+from api.app.telemetry import Telemetry, caller_class
 
 logging.basicConfig(
     level=logging.INFO,
@@ -98,8 +101,23 @@ async def lifespan(app: FastAPI):
         # systemd Restart=always, plus the runbook's `systemctl status`.
     ]
 
+    telemetry = Telemetry(
+        settings.telemetry_ingest_url,
+        settings.windygit_telemetry_token,
+        environment=settings.environment,
+        commit_sha=info.commit_sha,
+        version=info.version,
+    )
+    app.state.telemetry = telemetry
+    telemetry.boot()
+    await telemetry.flush()
+    task = asyncio.create_task(telemetry.run()) if telemetry.enabled else None
+
     yield
 
+    if task is not None:
+        task.cancel()
+        await telemetry.flush()
     if engine is not None:
         await engine.dispose()
 
@@ -119,8 +137,39 @@ app.include_router(repos.router)
 app.include_router(webhooks.router)
 
 
+@app.middleware("http")
+async def _count_requests(request: Request, call_next):
+    """Heartbeat counts (requests, 4xx/5xx, refusals, p95). Never raises."""
+    start = time.perf_counter()
+    response = await call_next(request)
+    tel = getattr(request.app.state, "telemetry", None)
+    if tel is not None:
+        tel.record_request(
+            response.status_code,
+            (time.perf_counter() - start) * 1000,
+            refused=getattr(request.state, "refused", False),
+        )
+    return response
+
+
 @app.exception_handler(RepairPointer)
-async def _repair_pointer_handler(_, exc: RepairPointer) -> JSONResponse:
+async def _repair_pointer_handler(request: Request, exc: RepairPointer) -> JSONResponse:
+    tel = getattr(request.app.state, "telemetry", None)
+    detail = exc.detail if isinstance(exc.detail, dict) else {}
+    code = detail.get("code")
+    if tel is not None and code in tel.auth_codes:
+        # A refusal is a failure row (field-visibility rule 1). The caller is
+        # unauthenticated by definition, so: system actor, no actor_id, and
+        # the route TEMPLATE, never the concrete path.
+        request.state.refused = True
+        route = request.scope.get("route")
+        tel.auth_failed(
+            code=code,
+            http_status=exc.status_code,
+            caller=caller_class(request.headers),
+            route=getattr(route, "path", None),
+            upstream_status=getattr(exc, "upstream_status", None),
+        )
     return JSONResponse(status_code=exc.status_code, content=exc.detail)
 
 

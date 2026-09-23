@@ -66,6 +66,12 @@ class Settings(BaseSettings):
     # Flip to True once the hub emits aud on every access token.
     hub_require_aud: bool = False
 
+    # ---- field telemetry (admin.windyword.ai ledger) ----------------------
+    # Unset token = nothing sent, nothing buffered. The token lives in the
+    # root-only /etc/windygit/telemetry.env on Veron, never in the repo.
+    windygit_telemetry_token: str = ""
+    telemetry_ingest_url: str = "https://admin.windyword.ai/v1/events"
+
     # Internal callers (the Cloud portal calling /internal/*). A first-class
     # caller class, not a bypass: unset means service calls are REFUSED.
     service_token: str = ""
