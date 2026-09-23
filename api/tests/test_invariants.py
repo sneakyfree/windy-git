@@ -734,3 +734,21 @@ def test_g23_brand_css_filename_is_versioned():
     assert m, "brand CSS must carry a version in its FILENAME"
     assert (ROOT / "deploy" / "branding" / "public" / "assets" / "css"
             / f"theme-windy.v{m.group(1)}.css").exists()
+
+
+def test_backup_never_bundles_credential_repos_to_r2():
+    """kit-army-config (the lockbox) and the *-soul / anima repos carry
+    credentials; the R2 bundles are plaintext. Behavioural: run the script's
+    own exclusion function against the names."""
+    import subprocess
+
+    script = (ROOT / "scripts" / "backup.sh").read_text()
+    fn = script[script.index('EXCLUDE="'):script.index("cleanup()")]
+    # A file named like a pattern in cwd must not break the match (glob expansion).
+    probe = "cd \"$(mktemp -d)\" && touch x-soul && " + fn + (
+        'for n in kit-army-config anima windy-0-soul kit-0c5-soul herm-0-soul '
+        'soulsafe windy-chat eternitas; do excluded "$n" && echo "X $n" || echo "- $n"; done'
+    )
+    out = subprocess.run(["bash", "-c", probe], capture_output=True, text=True, check=True).stdout
+    skipped = {ln[2:] for ln in out.splitlines() if ln.startswith("X ")}
+    assert skipped == {"kit-army-config", "anima", "windy-0-soul", "kit-0c5-soul", "herm-0-soul"}

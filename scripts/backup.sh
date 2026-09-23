@@ -23,6 +23,23 @@ BUCKET="${R2_BUCKET_BACKUPS:-windy-git-backups}"
 KEEP_DAYS="${BACKUP_KEEP_DAYS:-30}"
 FAILED=0
 
+# NEVER bundle these to R2 (orchestrator decision 2026-09-23). They carry
+# credentials in plaintext — kit-army-config IS the lockbox, and the soul repos
+# hold agent memory with keys in it — and these bundles are unencrypted, so
+# anyone holding the R2 key could read every secret in the fleet. They are
+# backed up ENCRYPTED elsewhere (Windy Drops lane, restic, restore-tested) and
+# stay mirrored on Veron's own disk in Gitea. Extended globs, matched on name.
+EXCLUDE="${BACKUP_EXCLUDE:-kit-army-config anima *-soul}"
+excluded() {
+  local n=$1 pat pats
+  read -ra pats <<< "$EXCLUDE"   # read never glob-expands; `for p in $EXCLUDE` would
+  for pat in "${pats[@]}"; do
+    # shellcheck disable=SC2053  # unquoted RHS: glob match is the point
+    [[ "$n" == $pat ]] && return 0
+  done
+  return 1
+}
+
 cleanup() { rm -rf "$WORK"; }
 trap cleanup EXIT
 
@@ -44,6 +61,10 @@ count=0
 for repo in "$GIT_ROOT"/*/*.git; do
   owner="$(basename "$(dirname "$repo")")"
   name="$(basename "$repo" .git)"
+  if excluded "$name"; then
+    log "skip ${owner}/${name} (credential-bearing: never bundled to R2 in plaintext)"
+    continue
+  fi
   out="$WORK/${owner}__${name}.bundle"
 
   # --all captures every ref, not just the default branch. A bundle of one
