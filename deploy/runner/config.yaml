@@ -54,6 +54,9 @@ container:
   privileged: false
   options:
   workdir_parent: /workspace
-  valid_volumes: []      # a job cannot bind-mount anything from the daemon host
+  # A job may bind-mount exactly ONE daemon path: the read-only windy-pro build
+  # inputs (mounted :ro into dind itself). Per-runner, not per-repo (act_runner
+  # limit): any windyadmin repo could mount it; it is non-secret and read-only.
+  valid_volumes: ["/ci-inputs/windy-pro"]
   docker_host: "-"       # do NOT expose the runner's own docker socket to jobs
   force_pull: false

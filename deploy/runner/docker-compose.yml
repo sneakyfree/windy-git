@@ -49,6 +49,11 @@ services:
       # A fresh volume: Sysbox shifts ownership to its own uid range. The old
       # `dind-storage` is kept untouched for the privileged rollback.
       - dind-storage-sysbox:/var/lib/docker
+      # READ-ONLY, non-secret build inputs for windy-pro's desktop jobs (models,
+      # linux-x64 portable bundle, enter-monitor build), copied from the frozen
+      # release clone by deploy/runner/refresh-ci-inputs.sh. Jobs may mount ONLY
+      # this path (config.yaml valid_volumes). Orchestrator-approved 09-23.
+      - /home/user1-gpu/ci-inputs/windy-pro:/ci-inputs/windy-pro:ro
     # G1.5 — bounded so a fork-bomb workflow cannot starve Grant's interactive
     # session. Veron 1 is his workstation, not a dedicated build box.
     cpus: 12.0            # 12 of 24 cores

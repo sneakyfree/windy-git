@@ -425,9 +425,28 @@ def test_i05_jobs_get_a_network_per_job_not_a_shared_bridge():
 
 
 def test_i05_jobs_cannot_bind_mount_from_the_daemon_host():
-    cfg = (ROOT / "deploy" / "runner" / "config.yaml").read_text()
-    assert "valid_volumes: []" in cfg
-    assert 'docker_host: "-"' in cfg
+    """Narrowed 2026-09-23 (orchestrator-approved): a job may bind-mount EXACTLY
+    one daemon path, windy-pro's non-secret build inputs, and only because dind
+    itself has that path READ-ONLY. Anything more (a second path, a writable
+    one, a glob) reopens the host to CI code. Still no docker socket for jobs."""
+    import re
+
+    import yaml
+
+    rd = ROOT / "deploy" / "runner"
+    cfg = yaml.safe_load((rd / "config.yaml").read_text())
+    allowed = cfg["container"]["valid_volumes"]
+    assert allowed in ([], ["/ci-inputs/windy-pro"]), f"I-5: jobs may mount nothing else: {allowed}"
+    assert cfg["container"]["docker_host"] == "-"
+    if allowed:
+        compose = yaml.safe_load((rd / "docker-compose.yml").read_text())
+        binds = [v for v in compose["services"]["dind"]["volumes"] if v.startswith("/")]
+        assert binds == ["/home/user1-gpu/ci-inputs/windy-pro:/ci-inputs/windy-pro:ro"], (
+            f"I-5: dind's only host bind must be the ci-inputs path, READ-ONLY: {binds}")
+        for name, svc in compose["services"].items():
+            if name != "dind":
+                for v in svc.get("volumes") or []:
+                    assert not re.match(r"^/home/user1-gpu/ci-inputs", v), f"I-5: {name} mounts ci-inputs"
 
 
 def test_i05_no_ci_container_can_reach_the_forge_network():
