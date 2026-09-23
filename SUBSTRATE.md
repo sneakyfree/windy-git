@@ -22,7 +22,7 @@ boot guard in `api/app/main.py` that refuses to start there in production.
 | 8600 | `windy-git-api` — our plane |
 | **3080** | Gitea — host 3000 and 3300 are taken by resident projects on Veron 1 |
 | 5432 | Postgres |
-| 2000 | cloudflared metrics (probe target) |
+| 2001 | cloudflared metrics — NOT 2000: `cornercall-tunnel` (another project) takes 2000, and a metrics bind failure kills the whole tunnel |
 
 ## Ingress — Cloudflare Tunnel `windy-git`
 

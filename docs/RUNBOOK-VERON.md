@@ -22,7 +22,7 @@ boot in production if it finds itself on `72.60.118.54`.
 |---|---|
 | `127.0.0.1:3080` | Gitea (host 3000 is a resident node dev server; 3300 is nginx — **do not fight them for a port**) |
 | `127.0.0.1:8600` | windy-git API |
-| `127.0.0.1:2000` | cloudflared metrics |
+| `127.0.0.1:2001` | cloudflared metrics (`metrics:` in `/etc/cloudflared/config.yml`) — **not 2000**, see Troubleshooting |
 
 **No inbound port is opened.** cloudflared dials out, so the dynamic residential
 IP is irrelevant and there is no firewall hole to maintain.
@@ -76,6 +76,14 @@ sudo ss -tlnp | grep -E "3080|8600"                   # both must be 127.0.0.1
 
 **A hostname returns 530 or won't resolve** — the tunnel is down. `sudo systemctl
 restart windygit-tunnel`, then `journalctl -u windygit-tunnel -n 50`.
+
+**`windygit-tunnel` crash-loops with `bind: address already in use` on the metrics
+port** — cloudflared exits if it cannot bind `metrics:`, taking ingress with it.
+Until 2026-09-23 this unit restarted ~91,000 times because another project's
+`cornercall-tunnel` held 127.0.0.1:2000; ingress only survived because a stray
+generic `cloudflared.service` ran the same config (now disabled). Windy Git's
+metrics port is **2001**. `sudo ss -ltnp | grep :2001` names any squatter.
+Keep exactly ONE unit running `/etc/cloudflared/config.yml`: `windygit-tunnel`.
 
 **TLS handshake fails with `curl` exit 35 and no HTTP status at all** — someone
 added a **two-level** hostname. Free Universal SSL covers `windygit.com` and

@@ -105,7 +105,7 @@ class DatabaseProvider(Provider):
 
 
 # TunnelProvider was removed deliberately. See the note in main.py: cloudflared
-# binds 127.0.0.1:2000 on the HOST, and this process runs in a container whose
+# binds 127.0.0.1:2001 on the HOST, and this process runs in a container whose
 # only route to the host is the bridge gateway (172.17.0.1), where nothing is
 # listening. Binding the metrics endpoint wider would fix the probe and make a
 # metrics bind failure able to take down ingress -- a worse trade than losing

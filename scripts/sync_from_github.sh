@@ -38,7 +38,7 @@ FAILED=0
 
 # Repos Windy Git tracks FROM GitHub. Remove a repo from this list at the moment
 # it flips to Windy-Git-first, or the sync will fight its authors and win.
-REPOS="${SYNC_REPOS:-windy-calendar windy-search windy-registry Windy-Clone WindyCloud windy-cloud-sites windy-mind eternitas windy-agent}"
+REPOS="${SYNC_REPOS:-windy-calendar windy-search windy-registry Windy-Clone WindyCloud windy-cloud-sites windy-mind eternitas windy-agent windy-git}"
 
 mkdir -p "$WORK"
 log() { printf '[sync %s] %s\n' "$(date -u +%H:%M:%SZ)" "$*"; }
