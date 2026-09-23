@@ -145,7 +145,7 @@ def scan_line(path: str, text: str) -> list[tuple[str, str]]:
 
 def check(repo: str, sha: str, default_branch: str, is_default_head: bool):
     bare = cg.WORK / f"{repo}.git"
-    if not bare.is_dir():
+    if not bare.is_dir() or not cg.fetched(bare, sha):  # pushed after the fetch: next cycle
         return None
     allow = cg.load_allow(ALLOW_FILE)
     rules = hashlib.sha256((PREFILTER + INCLUDE.pattern + EXACT_PY.pattern + EXACT_NPM.pattern).encode()).hexdigest()[:8]

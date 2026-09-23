@@ -182,3 +182,12 @@ def test_code_with_a_trailing_comment_still_counts():
 def test_windy_pro_desktop_is_byok_but_the_account_server_is_not():
     assert cg.allowed("windy-pro", "src/client/desktop/main.js", ALLOW)
     assert not cg.allowed("windy-pro", "account-server/src/routes/translations.ts", ALLOW)
+
+
+def test_a_commit_not_fetched_yet_is_skipped_not_an_error(tmp_path, monkeypatch):
+    bare, sha = _repo(tmp_path, {"app/llm.py": "import anthropic\n"})
+    monkeypatch.setattr(cg, "WORK", tmp_path)
+    monkeypatch.setattr(cg, "CACHE", tmp_path / "cache.json")
+    (tmp_path / "windy-chat.git").symlink_to(bare)
+    assert cg.check("windy-chat", "f" * 40, "main", True) is None     # pushed after the fetch
+    assert [f.kind for f in cg.check("windy-chat", sha, "main", True)] == ["provider SDK"]

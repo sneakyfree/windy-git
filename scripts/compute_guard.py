@@ -225,10 +225,21 @@ def cached_scan(key: str, fn) -> list[Finding]:
     return result
 
 
+def fetched(bare: Path, sha: str) -> bool:
+    """Is `sha` in the sync clone yet? The bridge learns PR / default heads from
+    GitHub's API AFTER the sync fetched, so a push in between is simply not here
+    until the next 5-min cycle. That is a race, not an error: skip quietly."""
+    try:
+        _git(bare, "cat-file", "-e", f"{sha}^{{commit}}")
+        return True
+    except subprocess.CalledProcessError:
+        return False
+
+
 def check(repo: str, sha: str, default_branch: str, is_default_head: bool) -> list[Finding] | None:
     """Findings for one commit, or None when the guard can't run (never a fake OK)."""
     bare = WORK / f"{repo}.git"
-    if not bare.is_dir():
+    if not bare.is_dir() or not fetched(bare, sha):
         return None
     allow = load_allow()
     fp = _fingerprint(allow)
