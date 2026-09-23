@@ -45,5 +45,4 @@ jobs:
           CANARY_LOGIN_EMAIL: ${{ secrets.CANARY_LOGIN_EMAIL }}
           CANARY_LOGIN_PASSWORD: ${{ secrets.CANARY_LOGIN_PASSWORD }}
           CANARY_ALERT_TO: ${{ secrets.CANARY_ALERT_TO }}
-          CANARY_SYNTHETIC_KEY: ${{ secrets.CANARY_SYNTHETIC_KEY }}
         run: python3 scripts/canary.py

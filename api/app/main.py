@@ -27,7 +27,7 @@ from api.app.providers.registry import (
     R2Provider,
 )
 from api.app.routes import health, repos, webhooks
-from api.app.telemetry import Telemetry, caller_class, is_synthetic
+from api.app.telemetry import SYNTHETIC, Telemetry, caller_class, is_synthetic
 
 logging.basicConfig(
     level=logging.INFO,
@@ -139,7 +139,11 @@ app.include_router(webhooks.router)
 async def _count_requests(request: Request, call_next):
     """Heartbeat counts (requests, 4xx/5xx, refusals, p95). Never raises."""
     start = time.perf_counter()
-    response = await call_next(request)
+    marker = SYNTHETIC.set(is_synthetic(request.headers))
+    try:
+        response = await call_next(request)
+    finally:
+        SYNTHETIC.reset(marker)
     tel = getattr(request.app.state, "telemetry", None)
     if tel is not None:
         tel.record_request(
@@ -167,11 +171,7 @@ async def _repair_pointer_handler(request: Request, exc: RepairPointer) -> JSONR
             caller=caller_class(request.headers),
             route=getattr(route, "path", None),
             upstream_status=getattr(exc, "upstream_status", None),
-            synthetic=is_synthetic(
-                request.headers, request.app.state.settings.windygit_synthetic_key
-            )
-            if hasattr(request.app.state, "settings")
-            else False,
+            synthetic=is_synthetic(request.headers),
         )
     return JSONResponse(status_code=exc.status_code, content=exc.detail)
 

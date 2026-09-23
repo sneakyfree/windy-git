@@ -20,6 +20,7 @@ import httpx
 
 from api.app.config import Settings
 from api.app.errors import RepairPointer, provider_unconfigured
+from api.app.telemetry import synthetic_headers
 
 _TIMEOUT = httpx.Timeout(20.0, connect=5.0)
 
@@ -36,6 +37,7 @@ class GiteaClient:
         return {
             "Authorization": f"token {self._s.gitea_admin_token}",
             "Content-Type": "application/json",
+            **synthetic_headers(),  # end-to-end synthetic convention (Telemetry UPDATE 4)
         }
 
     async def _request(self, method: str, path: str, **kw: Any) -> httpx.Response:

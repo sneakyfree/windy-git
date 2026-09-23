@@ -71,9 +71,6 @@ class Settings(BaseSettings):
     # root-only /etc/windygit/telemetry.env on Veron, never in the repo.
     windygit_telemetry_token: str = ""
     telemetry_ingest_url: str = "https://admin.windyword.ai/v1/events"
-    # Shared with our canary (Gitea repo secret CANARY_SYNTHETIC_KEY). A request
-    # carrying it in X-Windy-Synthetic is our own tooling -> synthetic:true.
-    windygit_synthetic_key: str = ""
 
     # Internal callers (the Cloud portal calling /internal/*). A first-class
     # caller class, not a bypass: unset means service calls are REFUSED.

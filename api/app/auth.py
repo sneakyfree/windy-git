@@ -28,6 +28,7 @@ from api.app.config import Settings
 from api.app.ept import EptInvalid, looks_like_ept, verify_ept
 from api.app.errors import RepairPointer, passport_unresolvable
 from api.app.hub_jwt import HubTokenInvalid, verify_hub_token
+from api.app.telemetry import synthetic_headers
 
 log = logging.getLogger(__name__)
 
@@ -125,7 +126,7 @@ async def resolve_passport(settings: Settings, passport: str) -> tuple[str, tupl
         )
 
     url = f"{settings.eternitas_base_url}/api/v1/trust/{passport}"
-    headers = {"X-API-Key": settings.eternitas_platform_api_key}
+    headers = {"X-API-Key": settings.eternitas_platform_api_key, **synthetic_headers()}
     last_status = 0
     for attempt in range(3):
         async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=3.0)) as client:

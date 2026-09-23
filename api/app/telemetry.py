@@ -26,6 +26,7 @@ rows (bounded) and retries on the next tick; it never raises into a request.
 from __future__ import annotations
 
 import asyncio
+import contextvars
 import json
 import logging
 import time
@@ -65,12 +66,21 @@ def _iso(epoch: float) -> str:
     return datetime.fromtimestamp(epoch, UTC).isoformat().replace("+00:00", "Z")
 
 
-def is_synthetic(headers, key: str) -> bool:
-    """Our own tooling proves itself with the shared key; a bare header proves nothing."""
-    import hmac
+# Ecosystem convention (Telemetry UPDATE 4): synthetic traffic travels END TO
+# END. Originators (canaries, probes, journeys) send `X-Windy-Synthetic: 1`;
+# every service marks all of that request's rows synthetic:true AND forwards the
+# header on every downstream call. Absent = real. Never strip it, never set it
+# on real traffic. The label separates rows — it never suppresses them.
+SYNTHETIC: contextvars.ContextVar[bool] = contextvars.ContextVar("windy_synthetic", default=False)
 
-    presented = headers.get("x-windy-synthetic") or ""
-    return bool(key) and bool(presented) and hmac.compare_digest(presented, key)
+
+def is_synthetic(headers) -> bool:
+    return bool((headers.get("x-windy-synthetic") or "").strip())
+
+
+def synthetic_headers() -> dict:
+    """Merge into every downstream request made while serving this one."""
+    return {"X-Windy-Synthetic": "1"} if SYNTHETIC.get() else {}
 
 
 def caller_class(headers) -> str:

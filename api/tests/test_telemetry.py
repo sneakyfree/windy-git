@@ -143,23 +143,20 @@ def test_caller_classes_are_the_declared_three():
 
 
 @pytest.mark.asyncio
-async def test_canary_refusals_are_marked_synthetic_only_with_the_real_key():
-    from types import SimpleNamespace
-
+async def test_synthetic_header_marks_the_row_and_absent_means_real():
     async def refusal(headers):
         tel = _tel()
-        app = _app(tel)
-        app.state.settings = SimpleNamespace(windygit_synthetic_key="k3y")
-        await _get(app, "/api/v1/repos/x/grants", headers)
-        return [e for e in tel.buffer if e["event_type"] == "forge.auth.failed"][0]["metadata"][
-            "synthetic"
-        ]
+        await _get(_app(tel), "/api/v1/repos/x/grants", headers)
+        return [e for e in tel.buffer if e["event_type"] == "forge.auth.failed"][0]["metadata"]["synthetic"]
 
-    assert await refusal({"X-Windy-Synthetic": "k3y"}) is True
-    assert await refusal({"X-Windy-Synthetic": "guess"}) is False  # an attacker can't hide
+    assert await refusal({"X-Windy-Synthetic": "1"}) is True
     assert await refusal({}) is False
 
 
-def test_synthetic_needs_a_configured_key():
-    assert tmod.is_synthetic({"x-windy-synthetic": ""}, "") is False
-    assert tmod.is_synthetic({"x-windy-synthetic": "anything"}, "") is False
+def test_synthetic_is_forwarded_downstream_only_for_synthetic_requests():
+    token = tmod.SYNTHETIC.set(True)
+    try:
+        assert tmod.synthetic_headers() == {"X-Windy-Synthetic": "1"}
+    finally:
+        tmod.SYNTHETIC.reset(token)
+    assert tmod.synthetic_headers() == {}
