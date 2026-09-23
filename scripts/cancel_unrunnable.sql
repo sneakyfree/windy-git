@@ -26,4 +26,16 @@ UPDATE action_run r
        stopped = CASE WHEN r.stopped = 0 THEN extract(epoch from now())::bigint ELSE r.stopped END
  WHERE r.id IN (SELECT DISTINCT run_id FROM dead)
 RETURNING r.id;
+
+-- Jobs BLOCKED on `needs:` inside a run that has already finished (a needed job
+-- failed): Gitea leaves them status 7 forever. They were never going to run;
+-- mark them skipped (4), which is what GitHub shows for the same situation.
+UPDATE action_run_job j
+   SET status = 4, updated = extract(epoch from now())::bigint
+  FROM action_run r
+ WHERE r.id = j.run_id
+   AND j.status = 7
+   AND r.status IN (1, 2, 3)
+   AND to_timestamp(j.created) < now() - interval '30 minutes'
+RETURNING j.run_id;
 COMMIT;
