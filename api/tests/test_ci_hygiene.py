@@ -139,3 +139,17 @@ def test_docker_in_ci_is_flagged_with_the_fix(text):
 ])
 def test_docker_not_flagged_outside_ci_steps(path, text):
     assert [k for k, _ in hy.scan_line(path, text) if k == "needs docker"] == []
+
+
+def test_needs_docker_skips_workflows_disabled_on_windy_git(monkeypatch):
+    """deploy.yml runs on the target host (a real daemon); Gitea has it disabled here."""
+    F = hy.cg.Finding
+    monkeypatch.setattr(hy, "_DISABLED", {"eternitas": {"deploy.yml"}})
+    got = hy._runs_here("Eternitas", [
+        F(".github/workflows/deploy.yml", 70, "needs docker", "docker compose in CI"),
+        F(".github/workflows/ci.yml", 176, "needs docker", "docker compose in CI"),
+        F(".github/workflows/deploy.yml", 12, "floating install", "npm install"),
+    ])
+    assert [(f.path.rsplit("/", 1)[1], f.kind) for f in got] == [
+        ("ci.yml", "needs docker"), ("deploy.yml", "floating install")]
+    assert hy._runs_here("eternitas", None) is None

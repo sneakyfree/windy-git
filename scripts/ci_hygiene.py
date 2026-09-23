@@ -28,9 +28,11 @@ Exceptions: ci/ci-hygiene-allow.yml, one reason per entry.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import shlex
+import subprocess
 import sys
 from pathlib import Path
 
@@ -156,7 +158,49 @@ def scan_line(path: str, text: str) -> list[tuple[str, str]]:
     return hits
 
 
+_DISABLED: dict[str, set[str]] | None = None
+
+
+def disabled_workflows() -> dict[str, set[str]]:
+    """Workflow file names Gitea has DISABLED per repo (lowercased repo name).
+
+    Deploy/release workflows are disabled on Windy Git: they run on the target
+    host, where a Docker daemon really exists, so "needs docker" must not flag
+    them. One bounded query per process; on any failure nothing is excused
+    (flag rather than hide).
+    """
+    global _DISABLED
+    if _DISABLED is not None:
+        return _DISABLED
+    _DISABLED = {}
+    query = ("select coalesce(json_object_agg(r.lower_name, u.config::json->'DisabledWorkflows'), '{}'::json)"
+             " from repo_unit u join repository r on r.id = u.repo_id"
+             " where u.type = 10 and u.config like '%DisabledWorkflows%';")
+    try:
+        out = subprocess.run(
+            ["docker", "exec", "-i", "windy-git-db-1", "sh", "-c",
+             'psql -U "$POSTGRES_USER" -d gitea -At -v ON_ERROR_STOP=1'],
+            input=query, capture_output=True, text=True, check=True, timeout=30,
+        ).stdout.strip()
+        _DISABLED = {k: set(v or []) for k, v in json.loads(out or "{}").items()}
+    except (subprocess.SubprocessError, OSError, ValueError):
+        pass
+    return _DISABLED
+
+
+def _runs_here(repo: str, findings):
+    """Drop "needs docker" hits in workflows that never run on Windy Git."""
+    if findings is None:
+        return None
+    off = disabled_workflows().get(repo.lower(), set())
+    return [f for f in findings if not (f.kind == "needs docker" and Path(f.path).name in off)]
+
+
 def check(repo: str, sha: str, default_branch: str, is_default_head: bool):
+    return _runs_here(repo, _check(repo, sha, default_branch, is_default_head))
+
+
+def _check(repo: str, sha: str, default_branch: str, is_default_head: bool):
     bare = cg.WORK / f"{repo}.git"
     if not bare.is_dir() or not cg.fetched(bare, sha):  # pushed after the fetch: next cycle
         return None
