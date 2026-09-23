@@ -10,10 +10,19 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends git curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY pyproject.toml ./
-RUN pip install --no-cache-dir -e .
-
+# Dependencies come from uv.lock, hash-pinned, never "latest at build time".
+# Floating installs meant a rebuild could ship different fastapi/starlette/
+# pydantic than CI tested (Windy Cloud's OpenAPI drift, 09-23). The lock was
+# cut to exactly what prod ran then. uv only exports; pip installs, so the
+# image layout (system python, uvicorn on PATH) is unchanged.
+COPY --from=ghcr.io/astral-sh/uv:0.12.5 /uv /usr/local/bin/uv
+COPY pyproject.toml uv.lock ./
+RUN uv export --frozen --no-dev --no-emit-project -o /tmp/requirements.txt \
+ && pip install --no-cache-dir --require-hashes -r /tmp/requirements.txt \
+ && rm /tmp/requirements.txt
 COPY api ./api
+RUN pip install --no-cache-dir --no-deps -e .
+
 COPY alembic ./alembic
 COPY alembic.ini ./
 COPY scripts ./scripts

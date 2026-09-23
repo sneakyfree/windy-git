@@ -51,9 +51,10 @@ jobs:
       - name: install
         run: |
           python3 --version
-          python3 -m venv .venv
-          .venv/bin/pip install -q --upgrade pip
-          .venv/bin/pip install -e ".[dev]"
+          # From uv.lock, never floating: CI tests exactly what the image ships.
+          # --locked also FAILS if pyproject.toml changed without re-locking.
+          python3 -m pip install -q uv==0.12.5
+          uv sync --locked --extra dev
 
       - name: lint
         run: .venv/bin/ruff check api scripts
