@@ -16,7 +16,8 @@
 # itself, so Windy Git is never left behind GitHub.
 set -euo pipefail
 repo="${1:?repo}"; branch="${2:?branch}"; want="${3:?sha prefix}"
-G="sudo docker exec -u git windy-git-gitea-1 git -C /data/git/repositories/windyadmin/${repo}.git"
+# Gitea stores repositories LOWERCASED on disk (WindyCloud -> windycloud.git).
+G="sudo docker exec -u git windy-git-gitea-1 git -C /data/git/repositories/windyadmin/${repo,,}.git"
 
 head=$($G rev-parse "refs/heads/${branch}")
 [[ "$head" == "$want"* ]] || { echo "refusing: ${branch} is at ${head:0:7}, not ${want}"; exit 1; }
