@@ -10,7 +10,7 @@
 # In-use images/volumes are never removed, so a running job is safe.
 set -euo pipefail
 CAP_GB="${CI_STORAGE_CAP_GB:-60}"
-D=(docker exec windy-git-runner-dind-1 docker)
+D=(docker exec windy-git-runner-dind-1 docker -H tcp://127.0.0.1:2375)  # dind listens on TCP only
 
 "${D[@]}" container prune -f --filter until=6h >/dev/null
 "${D[@]}" volume prune -af >/dev/null            # job workspaces of finished jobs
