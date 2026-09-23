@@ -28,6 +28,7 @@ repo code, and no secret is handed to any repo.
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -35,6 +36,8 @@ import sys
 import time
 import urllib.error
 import urllib.request
+
+import yaml
 
 GITEA = os.environ.get("BRIDGE_GITEA_URL", "http://localhost:3080").rstrip("/")
 PUBLIC = "https://app.windygit.com"
@@ -84,6 +87,62 @@ for _entry in os.environ.get(
     if ":" in _entry:
         _repo, _jobs = _entry.split(":", 1)
         NON_BLOCKING[_repo.strip()] = {j.strip() for j in _jobs.split(",") if j.strip()}
+
+
+# Gitea reads the FIRST of these dirs that has workflow files at a commit (1.24).
+WORKFLOW_DIRS = (".gitea/workflows", ".github/workflows")
+
+
+def workflow_problem(text: str) -> str | None:
+    """Why Gitea would drop this workflow file, or None if it looks runnable.
+
+    Gitea skips an invalid workflow with one log line and fires no run at all,
+    so on GitHub the PR just shows nothing, and people wait for CI that is never
+    coming. These are the shapes we have actually hit, not a full schema.
+    """
+    try:
+        doc = yaml.safe_load(text)
+    except yaml.YAMLError as e:
+        mark = getattr(e, "problem_mark", None)
+        return f"invalid YAML at line {mark.line + 1}" if mark else "invalid YAML"
+    if not isinstance(doc, dict):
+        return "not a YAML mapping"
+    if "on" not in doc and True not in doc:  # YAML 1.1 reads a bare `on` as True
+        return "no `on:` trigger"
+    jobs = doc.get("jobs")
+    if not isinstance(jobs, dict) or not jobs:
+        return "no `jobs:`"
+    for name, job in jobs.items():
+        if not isinstance(job, dict):
+            return f"job `{name}` is not a mapping"
+        if "runs-on" not in job and "uses" not in job:
+            return f"job `{name}` has no `runs-on:`"
+    return None
+
+
+def invalid_workflows(repo: str, sha: str) -> dict[str, tuple[str, str]]:
+    """{context: (path, problem)} for each workflow file at `sha` that won't run."""
+    for d in WORKFLOW_DIRS:
+        st, entries = gitea("GET", f"/repos/{WG_OWNER}/{repo}/contents/{d}?ref={sha}")
+        if st == 404:
+            continue
+        if st != 200:
+            raise RuntimeError(f"{repo}: Windy Git {d}@{sha[:7]} -> {st}")
+        files = [e for e in entries or [] if e.get("type") == "file"
+                 and e["name"].endswith((".yml", ".yaml"))]
+        if not files:
+            continue
+        bad = {}
+        for e in files:
+            st, f = gitea("GET", f"/repos/{WG_OWNER}/{repo}/contents/{e['path']}?ref={sha}")
+            if st != 200:
+                raise RuntimeError(f"{repo}: Windy Git {e['path']}@{sha[:7]} -> {st}")
+            problem = workflow_problem(base64.b64decode(f["content"]).decode("utf-8", "replace"))
+            if problem:
+                stem = re.sub(r"\.ya?ml$", "", e["name"])
+                bad[f"windy-git/{stem}/workflow"] = (e["path"], problem)
+        return bad
+    return {}
 
 
 def _call(base: str, token_header: str, method: str, path: str, body=None):
@@ -183,13 +242,29 @@ def post_statuses(repo: str, sha: str) -> None:
         ctx = f"windy-git/{r['workflow_id'].removesuffix('.yml')}/{r['name']}"
         if ctx not in latest or r["id"] > latest[ctx]["id"]:
             latest[ctx] = r
-    if not latest:
+    bad = invalid_workflows(repo, sha)
+    if not (latest or bad):
         return
 
     st, existing = github("GET", f"/repos/{GH_OWNER}/{repo}/commits/{sha}/statuses?per_page=100")
     current: dict[str, str] = {}
     for s in existing or []:  # newest first
         current.setdefault(s["context"], s["state"])
+
+    for ctx, (path, problem) in sorted(bad.items()):
+        if current.get(ctx) == "error":
+            continue
+        st, _ = github(
+            "POST",
+            f"/repos/{GH_OWNER}/{repo}/statuses/{sha}",
+            {
+                "state": "error",
+                "context": ctx,
+                "description": f"Windy Git ignored this workflow, no CI ran: {problem}"[:140],
+                "target_url": f"{PUBLIC}/{WG_OWNER}/{repo}/src/commit/{sha}/{path}",
+            },
+        )
+        print(f"  {repo}@{sha[:7]} {ctx} = error ({problem}) -> {st}")
 
     for ctx, r in sorted(latest.items()):
         state = STATE.get(r["status"])
