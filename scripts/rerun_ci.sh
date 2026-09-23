@@ -22,7 +22,11 @@ head=$($G rev-parse "refs/heads/${branch}")
 [[ "$head" == "$want"* ]] || { echo "refusing: ${branch} is at ${head:0:7}, not ${want}"; exit 1; }
 parent=$($G rev-parse "${head}^")
 
-while systemctl is-active -q windygit-sync; do sleep 5; done
+# NOT `systemctl is-active`: the sync is Type=oneshot, which reads "activating"
+# (exit 3) for its whole run, so is-active says "idle" mid-run.
+busy() { case "$(systemctl show windygit-sync -p ActiveState --value)" in
+  activating|active|deactivating|reloading) return 0;; esac; return 1; }
+while busy; do sleep 5; done
 $G update-ref "refs/heads/${branch}" "$parent" "$head"
 mark=$(awk '{print int($1*1000000)}' /proc/uptime)
 echo "rewound ${repo}:${branch} ${head:0:7} -> ${parent:0:7}"
