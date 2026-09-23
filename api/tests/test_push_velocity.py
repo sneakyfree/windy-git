@@ -18,8 +18,8 @@ _spec.loader.exec_module(te)
 NOW = 1_800_000_000.0
 
 
-def row(login="agent-et26abcd1234", uid=7, p1h=0, p24h=0, d24h=0, repos=1):
-    return {"uid": uid, "login": login, "p1h": p1h, "p24h": p24h, "d24h": d24h, "repos": repos}
+def row(login="agent-et26abcd1234", uid=7, p1h=0, p24h=0, d24h=0, repos=1, wid=None):
+    return {"uid": uid, "login": login, "wid": wid, "p1h": p1h, "p24h": p24h, "d24h": d24h, "repos": repos}
 
 
 def test_under_every_threshold_emits_nothing():
@@ -61,15 +61,20 @@ def test_the_sync_account_is_exempt():
     assert ev == []
 
 
-def test_human_rows_carry_no_invented_actor_id():
-    ev, _ = te.push_velocity_events([row(login="u-5e1b9569abc", d24h=11)], NOW, {})
-    assert [(e["actor_type"], e["metadata"]["rule"]) for e in ev] == [("human", "ref_deletes_24h")]
-    assert "actor_id" not in ev[0]
+def test_sso_human_is_keyed_on_windy_identity_id():
+    ev, _ = te.push_velocity_events([row(login="u-5e1b9569abc", wid="5e1b9569-full-id", d24h=11)], NOW, {})
+    assert [(e["actor_type"], e["actor_id"], e["metadata"]["rule"]) for e in ev] == [
+        ("human", "5e1b9569-full-id", "ref_deletes_24h")
+    ]
+    assert "caller" not in ev[0]["metadata"]
 
 
-def test_unparseable_agent_login_keeps_agent_type_without_actor_id():
-    ev, _ = te.push_velocity_events([row(login="agent-weird", p24h=501)], NOW, {})
-    assert ev[0]["actor_type"] == "agent" and "actor_id" not in ev[0]
+def test_no_provable_id_is_system_plus_caller_never_an_invented_id():
+    # UPDATE 2 actor rule: agent/human rows without an actor_id are quarantined.
+    for login in ("u-nolink", "agent-weird"):
+        ev, _ = te.push_velocity_events([row(login=login, p24h=501)], NOW, {})
+        assert ev[0]["actor_type"] == "system" and "actor_id" not in ev[0]
+        assert ev[0]["metadata"]["caller"] == "unknown"
 
 
 def test_passport_round_trip():

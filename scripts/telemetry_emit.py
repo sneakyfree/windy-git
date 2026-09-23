@@ -95,6 +95,8 @@ PV_EXEMPT = {"windyadmin"}
 # keeps exactly the actor's own copy.
 PV_QUERY = """
     select a.act_user_id as uid, u.lower_name as login,
+           (select el.external_id from external_login_user el
+             where el.user_id = u.id order by el.external_id limit 1) as wid,
            count(*) filter (where a.op_type in (5, 9) and a.created_unix > {h1}) as p1h,
            count(*) filter (where a.op_type in (5, 9)) as p24h,
            count(*) filter (where a.op_type in (16, 17)) as d24h,
@@ -139,7 +141,6 @@ def push_velocity_events(rows: list[dict], now: float, alerted: dict) -> tuple[l
                 "platform": PLATFORM,
                 "service": "forge",
                 "event_type": "forge.push_velocity",
-                "actor_type": "agent" if agent else "human",
                 "metadata": {
                     "rule": rule,
                     "window_s": window,
@@ -149,9 +150,16 @@ def push_velocity_events(rows: list[dict], now: float, alerted: dict) -> tuple[l
                     "gitea_user_id": int(r["uid"]),
                 },
             }
-            passport = passport_from_login(login) if agent else None
-            if passport:  # unknown is absent, never invented (I-12)
-                ev["actor_id"] = passport
+            # Actor rule (telemetry UPDATE 2): agent/human rows MUST carry an
+            # actor_id. Humans sign in to the forge only via Windy SSO, so the
+            # external login id IS their windy_identity_id. No id we can prove
+            # -> actor_type system + metadata.caller, never an invented id (I-12).
+            actor_id = passport_from_login(login) if agent else (r.get("wid") or None)
+            if actor_id:
+                ev["actor_type"], ev["actor_id"] = ("agent" if agent else "human"), str(actor_id)
+            else:
+                ev["actor_type"] = "system"
+                ev["metadata"]["caller"] = "unknown"
             events.append(ev)
     return events, keep
 
