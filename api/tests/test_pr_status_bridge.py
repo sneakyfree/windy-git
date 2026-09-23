@@ -390,3 +390,24 @@ def test_ci_hygiene_posts_under_its_own_context(fake, monkeypatch):
     bridge.post_ci_hygiene("windy-chat", SHA, "main", True)
     # the compute-guard status with the same description must not suppress it
     assert [(p["context"], p["description"]) for p in f.posted] == [("windy-git/ci-hygiene", "WARN 1")]
+
+
+def test_retargeted_pr_gets_a_fresh_mirror_on_the_new_base(fake):
+    # eternitas #167: stacked on fix/one-hallway, retargeted to main on GitHub.
+    gh = [{"number": 167, "title": "feat", "html_url": "u",
+           "head": {"ref": "feat/x", "sha": SHA, "repo": {"full_name": f"{bridge.GH_OWNER}/eternitas"}},
+           "base": {"ref": "main"}}]
+    wg = [{"number": 9, "title": "[GH#167] feat", "base": {"ref": "fix/one-hallway"}}]
+    f = fake(gh_prs=gh, wg_prs=wg)
+    assert bridge.sync_prs("eternitas") == [SHA]
+    assert f.closed == [f"/repos/{bridge.WG_OWNER}/eternitas/pulls/9"]
+    assert [(o["base"], o["head"]) for o in f.opened] == [("main", "feat/x")]
+
+
+def test_unchanged_base_leaves_the_mirror_alone(fake):
+    gh = [{"number": 5, "title": "t", "html_url": "u",
+           "head": {"ref": "b", "sha": SHA, "repo": {"full_name": f"{bridge.GH_OWNER}/windy-chat"}},
+           "base": {"ref": "main"}}]
+    f = fake(gh_prs=gh, wg_prs=[{"number": 3, "title": "[GH#5] t", "base": {"ref": "main"}}])
+    bridge.sync_prs("windy-chat")
+    assert f.closed == [] and f.opened == []

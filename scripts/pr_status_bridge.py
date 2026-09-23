@@ -202,7 +202,17 @@ def sync_prs(repo: str) -> list[str]:
         wanted.add(tag)
         heads.append(pr["head"]["sha"])
         if tag in ours:
-            continue
+            cur = (ours[tag].get("base") or {}).get("ref")
+            if cur is None or cur == pr["base"]["ref"]:  # unknown base: never guess, leave it
+                continue
+            # Retargeted on GitHub (e.g. a stacked PR moved to main after its
+            # parent merged). The mirror kept the OLD base, so workflows filtered
+            # on the base (`pull_request: branches: [main]`) silently stopped
+            # running: eternitas #167, 09-23. Replace the mirror: an "edited"
+            # event triggers nothing, a freshly opened PR runs CI at once.
+            gitea("PATCH", f"/repos/{WG_OWNER}/{repo}/pulls/{ours[tag]['number']}", {"state": "closed"})
+            print(f"  {repo}: GH#{pr['number']} retargeted {cur} -> "
+                  f"{pr['base']['ref']}: replacing its mirror PR")
         st, _ = gitea(
             "POST",
             f"/repos/{WG_OWNER}/{repo}/pulls",
