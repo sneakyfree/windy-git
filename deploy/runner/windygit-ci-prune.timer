@@ -1,0 +1,9 @@
+[Unit]
+Description=Windy Git - prune CI storage every 6 hours
+
+[Timer]
+OnCalendar=*-*-* 00/6:37:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

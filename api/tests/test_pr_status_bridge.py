@@ -138,3 +138,12 @@ def test_pr_mirror_opened_once_and_closed_when_github_closes(fake, monkeypatch):
     f2 = fake(gh_prs=[_gh_pr(7)], wg_prs=[{"number": 4, "title": "[GH#7] t"}])
     bridge.sync_prs("r")
     assert f2.opened == [] and f2.closed == []
+
+
+def test_image_build_jobs_are_not_posted(fake):
+    """No Docker daemon in job containers (I-5): a build job's red is structural."""
+    f = fake(
+        runs=[_run(1, "ci.yml", "Docker Build", "failure"), _run(2, "ci.yml", "docker", "failure")]
+    )
+    bridge.post_statuses("r", SHA)
+    assert f.posted == []

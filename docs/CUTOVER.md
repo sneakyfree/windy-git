@@ -107,6 +107,10 @@ their CI permanently, not a stopgap:
 - Covered repos: `BRIDGE_REPOS` in the script. Public repos are left out on
   purpose; they run real GitHub Actions and two verdicts per commit is noise.
 - `skipped` jobs post nothing — no green for a job nobody ran.
+- **Image-build jobs** (name matches `docker`) post nothing: job containers
+  have no Docker daemon by design (I-5), so they are red on every commit. A
+  rootless builder (BuildKit rootless / buildx in the capped dind) is the open
+  decision that would bring them back.
 
 **Onboarding another private repo** — the promotion steps below, then:
 

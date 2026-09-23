@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -59,6 +60,13 @@ STATE = {
     "blocked": "pending",
 }
 MIRROR_TAG = "[GH#"
+
+# Image-build jobs cannot pass here BY DESIGN: job containers get no Docker
+# daemon (I-5 — the host socket would hand every workflow root on Veron 1).
+# Posting them would put a permanent red X on every commit, and a signal that is
+# always red trains everyone to ignore red. Not posted until a rootless builder
+# exists; that is a decision, recorded in docs/CUTOVER.md, not a failure.
+NO_DAEMON_JOB = re.compile(r"docker", re.IGNORECASE)
 
 
 def _call(base: str, token_header: str, method: str, path: str, body=None):
@@ -142,7 +150,7 @@ def post_statuses(repo: str, sha: str) -> None:
             break
     latest: dict[str, dict] = {}
     for r in runs:
-        if r["head_sha"] != sha:
+        if r["head_sha"] != sha or NO_DAEMON_JOB.search(r["name"]):
             continue
         ctx = f"windy-git/{r['workflow_id'].removesuffix('.yml')}/{r['name']}"
         if ctx not in latest or r["id"] > latest[ctx]["id"]:

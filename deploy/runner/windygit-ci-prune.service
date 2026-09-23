@@ -1,0 +1,6 @@
+[Unit]
+Description=Windy Git - prune CI-only dind storage (bounded, never the host daemon)
+
+[Service]
+Type=oneshot
+ExecStart=/srv/windygit/src/deploy/runner/prune.sh
