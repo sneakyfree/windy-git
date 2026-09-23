@@ -14,7 +14,9 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-_spec = importlib.util.spec_from_file_location("pr_status_bridge", ROOT / "scripts" / "pr_status_bridge.py")
+_spec = importlib.util.spec_from_file_location(
+    "pr_status_bridge", ROOT / "scripts" / "pr_status_bridge.py"
+)
 bridge = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(bridge)
 
@@ -22,7 +24,14 @@ SHA = "a" * 40
 
 
 def _run(i, wf, job, status, sha=SHA, n=1):
-    return {"id": i, "workflow_id": wf, "name": job, "status": status, "head_sha": sha, "run_number": n}
+    return {
+        "id": i,
+        "workflow_id": wf,
+        "name": job,
+        "status": status,
+        "head_sha": sha,
+        "run_number": n,
+    }
 
 
 class Fake:
@@ -34,7 +43,7 @@ class Fake:
     def gitea(self, method, path, body=None):
         if "/actions/tasks" in path:
             page = int(path.rsplit("page=", 1)[1])
-            return 200, {"workflow_runs": self.runs[(page - 1) * 50: page * 50]}
+            return 200, {"workflow_runs": self.runs[(page - 1) * 50 : page * 50]}
         if method == "GET" and path.endswith("/pulls?state=open&limit=50"):
             return 200, self.wg_prs
         if method == "POST" and path.endswith("/pulls"):
@@ -63,6 +72,7 @@ def fake(monkeypatch):
         monkeypatch.setattr(bridge, "gitea", f.gitea)
         monkeypatch.setattr(bridge, "github", f.github)
         return f
+
     return make
 
 
@@ -74,8 +84,10 @@ def test_posts_latest_verdict_per_job(fake):
 
 
 def test_unchanged_state_is_not_reposted(fake):
-    f = fake(runs=[_run(1, "ci.yml", "test", "success")],
-             statuses=[{"context": "windy-git/ci/test", "state": "success"}])
+    f = fake(
+        runs=[_run(1, "ci.yml", "test", "success")],
+        statuses=[{"context": "windy-git/ci/test", "state": "success"}],
+    )
     bridge.post_statuses("r", SHA)
     assert f.posted == []
 
@@ -100,9 +112,13 @@ def test_runs_past_the_first_page_are_seen(fake):
 
 
 def _gh_pr(n, repo="sneakyfree/r"):
-    return {"number": n, "title": "t", "html_url": "u",
-            "head": {"ref": f"b{n}", "sha": SHA, "repo": {"full_name": repo} if repo else None},
-            "base": {"ref": "main"}}
+    return {
+        "number": n,
+        "title": "t",
+        "html_url": "u",
+        "head": {"ref": f"b{n}", "sha": SHA, "repo": {"full_name": repo} if repo else None},
+        "base": {"ref": "main"},
+    }
 
 
 def test_fork_prs_are_never_mirrored(fake, monkeypatch):

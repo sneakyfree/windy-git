@@ -43,7 +43,8 @@ WG_OWNER = os.environ.get("WINDYGIT_OWNER", "windyadmin")
 # Private repos only. Public repos run real GitHub Actions on veron1's GitHub
 # runner; bridging those too would put two competing verdicts on every commit.
 REPOS = os.environ.get(
-    "BRIDGE_REPOS", "windy-chat windy-mail windy-calendar Windy-Clone WindyCloud"
+    "BRIDGE_REPOS",
+    "windy-chat windy-mail windy-calendar Windy-Clone WindyCloud windy-search windy-connect",
 ).split()
 
 # Gitea run status -> GitHub status state. `skipped` is deliberately absent: a
@@ -108,13 +109,17 @@ def sync_prs(repo: str) -> list[str]:
         heads.append(pr["head"]["sha"])
         if tag in ours:
             continue
-        st, _ = gitea("POST", f"/repos/{WG_OWNER}/{repo}/pulls", {
-            "head": pr["head"]["ref"],
-            "base": pr["base"]["ref"],
-            "title": f"{tag} {pr['title']}"[:250],
-            "body": f"Mirror of {pr['html_url']} so CI runs here. Do not merge in Windy Git — "
-                    "GitHub is the source of truth; merge there.",
-        })
+        st, _ = gitea(
+            "POST",
+            f"/repos/{WG_OWNER}/{repo}/pulls",
+            {
+                "head": pr["head"]["ref"],
+                "base": pr["base"]["ref"],
+                "title": f"{tag} {pr['title']}"[:250],
+                "body": f"Mirror of {pr['html_url']} so CI runs here. Do not merge in Windy Git — "
+                "GitHub is the source of truth; merge there.",
+            },
+        )
         print(f"  {repo}: opened mirror PR for GH#{pr['number']} -> {st}")
 
     for tag, p in ours.items():
@@ -154,12 +159,16 @@ def post_statuses(repo: str, sha: str) -> None:
         state = STATE.get(r["status"])
         if state is None or current.get(ctx) == state:
             continue
-        st, _ = github("POST", f"/repos/{GH_OWNER}/{repo}/statuses/{sha}", {
-            "state": state,
-            "context": ctx,
-            "description": f"Windy Git CI on Veron 1: {r['status']}"[:140],
-            "target_url": f"{PUBLIC}/{WG_OWNER}/{repo}/actions/runs/{r['run_number']}",
-        })
+        st, _ = github(
+            "POST",
+            f"/repos/{GH_OWNER}/{repo}/statuses/{sha}",
+            {
+                "state": state,
+                "context": ctx,
+                "description": f"Windy Git CI on Veron 1: {r['status']}"[:140],
+                "target_url": f"{PUBLIC}/{WG_OWNER}/{repo}/actions/runs/{r['run_number']}",
+            },
+        )
         print(f"  {repo}@{sha[:7]} {ctx} = {state} -> {st}")
 
 
