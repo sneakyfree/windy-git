@@ -120,6 +120,9 @@ class Telemetry:
         self.window_start = time.time()
         self.requests = self.errors_5xx = self.errors_4xx = self.refusals_4xx = 0
         self.latencies_ms: list[float] = []
+        # UPDATE 7: rows the ledger quarantined (it still answers 202) and rows
+        # this process lost (buffer overflow). Non-zero = a bug in this emitter.
+        self.quarantined = self.dropped = 0
 
     # ---- recording (never raises into a request) --------------------------
     def record_request(self, status: int, duration_ms: float, *, refused: bool = False) -> None:
@@ -147,6 +150,7 @@ class Telemetry:
             }
         )
         if len(self.buffer) > MAX_BUFFER:
+            self.dropped += len(self.buffer) - MAX_BUFFER
             del self.buffer[: len(self.buffer) - MAX_BUFFER]
 
     def boot(self) -> None:
@@ -188,6 +192,8 @@ class Telemetry:
             "errors_5xx": self.errors_5xx,
             "errors_4xx": self.errors_4xx,
             "refusals_4xx": self.refusals_4xx,
+            "telemetry_quarantined": self.quarantined,
+            "telemetry_dropped": self.dropped,
         }
         if self.latencies_ms:  # no traffic = no p95, not a fake 0
             s = sorted(self.latencies_ms)
@@ -199,7 +205,7 @@ class Telemetry:
         self._reset_window()
 
     # ---- sending ------------------------------------------------------------
-    def _post(self, batch: list[dict]) -> int:
+    def _post(self, batch: list[dict]) -> tuple[int, dict]:
         req = urllib.request.Request(
             self.url,
             data=json.dumps({"events": batch}).encode(),
@@ -211,19 +217,32 @@ class Telemetry:
             },
         )
         with urllib.request.urlopen(req, timeout=20) as r:
-            return r.status
+            try:
+                body = json.loads(r.read() or b"{}")
+            except ValueError:
+                body = {}
+            return r.status, body if isinstance(body, dict) else {}
 
     async def flush(self) -> None:
         if not self.enabled or not self.buffer:
             return
         batch = self.buffer[:500]
         try:
-            status = await asyncio.to_thread(self._post, batch)
+            status, body = await asyncio.to_thread(self._post, batch)
         except Exception as exc:  # noqa: BLE001 - telemetry must never take the API down
             log.warning("telemetry flush failed (%d rows kept): %s", len(self.buffer), exc)
             return
         if 200 <= status < 300:
             del self.buffer[: len(batch)]
+            self.note_quarantine(body)
+
+    def note_quarantine(self, body: dict) -> None:
+        # 202 does NOT mean every row landed: refused rows are dead-lettered.
+        q = body.get("quarantined")
+        if isinstance(q, int) and q > 0:
+            self.quarantined += q
+            log.warning("telemetry: %d row(s) QUARANTINED by the ledger: %s", q,
+                        "; ".join(map(str, body.get("rejections") or [])) or "no reason given")
 
     async def run(self) -> None:
         """The one in-process timer: flush every minute, heartbeat every hour."""

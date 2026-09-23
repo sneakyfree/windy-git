@@ -161,6 +161,12 @@ def main() -> int:
     h["jobs_cancelled"] = sum(1 for j in jobs if j["status"] == 3)
     meta = {k: int(v) for k, v in h.items()}
     meta["interval_s"] = int(now - since)  # ecosystem-standard key
+    # UPDATE 7. Quarantines seen on earlier sends (the ledger answers 202 anyway)
+    # are carried in the state file until a heartbeat reports them. Dropped is 0
+    # by construction: a failed send keeps the cursor and the spool, so every row
+    # is re-sent next run (a partial failure can duplicate, never lose).
+    meta["telemetry_quarantined"] = int(state.get("quarantined_unreported", 0))
+    meta["telemetry_dropped"] = 0
     for k in ("repos_synced", "repos_sync_failed", "statuses_posted", "bridge_errors"):
         v = os.environ.get(f"TELEMETRY_{k.upper()}")
         if v is not None and v.isdigit():  # absent = couldn't count; never invent 0
@@ -216,6 +222,7 @@ def main() -> int:
         print("[telemetry] WINDYGIT_TELEMETRY_TOKEN unset — not sending (not a failure)")
         return 0
 
+    quarantined = 0
     for i in range(0, len(events), 500):
         req = urllib.request.Request(
             INGEST,
@@ -229,11 +236,20 @@ def main() -> int:
         )
         try:
             with urllib.request.urlopen(req, timeout=30) as r:
-                body = r.read()[:300]
+                body = r.read()
                 if r.status >= 300:
                     raise urllib.error.HTTPError(
-                        INGEST, r.status, body.decode(errors="replace"), None, None
+                        INGEST, r.status, body[:300].decode(errors="replace"), None, None
                     )
+            try:
+                resp = json.loads(body or b"{}")
+            except ValueError:
+                resp = {}
+            q = resp.get("quarantined") if isinstance(resp, dict) else None
+            if isinstance(q, int) and q > 0:
+                quarantined += q
+                reasons = "; ".join(map(str, resp.get("rejections") or [])) or "no reason given"
+                print(f"[telemetry] WARNING {q} row(s) QUARANTINED by the ledger: {reasons}")
         except urllib.error.HTTPError as e:
             print(f"[telemetry] FAILED ingest HTTP {e.code}: {e.read()[:200]!r}")
             return 1  # state NOT advanced: the same rows retry next run
@@ -246,7 +262,11 @@ def main() -> int:
     os.makedirs(os.path.dirname(STATE), exist_ok=True)
     new_fin, new_id = (jobs[-1]["fin"], jobs[-1]["id"]) if jobs else (last_fin, last_id)
     with open(STATE + ".tmp", "w") as f:
-        json.dump({"last_fin": new_fin, "last_id": new_id, "last_ts": now}, f)
+        json.dump(
+            {"last_fin": new_fin, "last_id": new_id, "last_ts": now,
+             "quarantined_unreported": quarantined},
+            f,
+        )
     os.replace(STATE + ".tmp", STATE)
     print(f"[telemetry] sent {len(events)} events ({len(jobs)} ci.run)")
     return 0

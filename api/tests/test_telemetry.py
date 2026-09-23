@@ -160,3 +160,43 @@ def test_synthetic_is_forwarded_downstream_only_for_synthetic_requests():
     finally:
         tmod.SYNTHETIC.reset(token)
     assert tmod.synthetic_headers() == {}
+
+
+# ---- UPDATE 7: the ledger answers 202 even when it quarantines rows ----------
+
+
+@pytest.mark.asyncio
+async def test_quarantined_rows_are_warned_and_counted_on_the_next_heartbeat(monkeypatch, caplog):
+    tel = _tel()
+    tel.boot()
+    monkeypatch.setattr(
+        tel, "_post", lambda b: (202, {"accepted": 0, "quarantined": 1, "rejections": ["undeclared key"]})
+    )
+    with caplog.at_level("WARNING", logger="windy-git.telemetry"):
+        await tel.flush()
+    assert tel.buffer == []  # sent; the ledger dead-lettered it, retrying won't help
+    assert "QUARANTINED" in caplog.text and "undeclared key" in caplog.text
+    tel.health()
+    assert tel.buffer[-1]["metadata"]["telemetry_quarantined"] == 1
+    assert tel.health_row()["telemetry_quarantined"] == 0  # reset per heartbeat window
+
+
+@pytest.mark.asyncio
+async def test_clean_send_reports_zero_and_logs_nothing(monkeypatch, caplog):
+    tel = _tel()
+    tel.boot()
+    monkeypatch.setattr(tel, "_post", lambda b: (202, {"accepted": 1, "quarantined": 0, "rejections": []}))
+    with caplog.at_level("WARNING", logger="windy-git.telemetry"):
+        await tel.flush()
+    assert caplog.text == ""
+    row = tel.health_row()
+    assert row["telemetry_quarantined"] == 0 and row["telemetry_dropped"] == 0
+
+
+def test_buffer_overflow_is_counted_as_dropped(monkeypatch):
+    monkeypatch.setattr(tmod, "MAX_BUFFER", 3)
+    tel = _tel()
+    for _ in range(5):
+        tel.boot()
+    assert len(tel.buffer) == 3
+    assert tel.health_row()["telemetry_dropped"] == 2
