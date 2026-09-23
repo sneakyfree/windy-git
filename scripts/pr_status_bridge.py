@@ -79,7 +79,8 @@ NO_DAEMON_JOB = re.compile(r"docker", re.IGNORECASE)
 # each lane converts the job to a no-Docker smoke test; until then it is not
 # posted). Format: "repo:workflow/job,...;repo2:...".
 NO_DAEMON_NAMED: dict[str, set[str]] = {}
-for _entry in os.environ.get("BRIDGE_NO_DAEMON", "eternitas:ci/build").split(";"):
+# eternitas:ci/build dropped 09-23: converted to a no-Docker ci/smoke (#179).
+for _entry in os.environ.get("BRIDGE_NO_DAEMON", "").split(";"):
     if ":" in _entry:
         _repo, _jobs = _entry.split(":", 1)
         NO_DAEMON_NAMED[_repo.strip()] = {j.strip() for j in _jobs.split(",") if j.strip()}

@@ -425,5 +425,6 @@ def test_named_no_daemon_job_is_not_posted_for_that_repo_only(fake, monkeypatch)
     assert sorted(p["context"] for p in f2.posted) == ["windy-git/ci/build", "windy-git/ci/test"]
 
 
-def test_default_no_daemon_named_is_eternitas_build():
-    assert bridge.NO_DAEMON_NAMED.get("eternitas") == {"ci/build"}
+def test_default_no_daemon_named_is_empty():
+    """eternitas converted its ci/build to a no-Docker ci/smoke (#179); nothing left."""
+    assert bridge.NO_DAEMON_NAMED == {}
