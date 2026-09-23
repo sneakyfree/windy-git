@@ -33,6 +33,19 @@ REPOS = os.environ.get("BRIDGE_REPOS", "").split() or [
     "windy-registry", "eternitas", "windy-translate", "windytranslate-site", "windytraveler-site",
     "windy-hand", "windy-cloud-sites", "windy-cloud-domains", "windy-cloud-vps", "windytalk",
     "windy-pro", "windy-mind", "windy-git"]
+# Owner lane per repo = the session name to message (orchestrator routing, 09-23 ~22:45Z:
+# hub/account-server/dashboard/site -> "Windy Hub"; windy-calendar only -> "Windy Calender";
+# windy-admin/telemetry -> "Windy Admin"). windy-pro here = its server/web side; the desktop
+# app is Grant-owned and listed in its own section below.
+OWNERS = {
+    "windy-chat": "grantwhitmer-ca", "windy-mail": "Windy Mail", "windy-calendar": "Windy Calender",
+    "Windy-Clone": "Windy Clone", "WindyCloud": "Windy Cloud", "windy-cloud-sites": "Windy Cloud",
+    "windy-cloud-domains": "Windy Cloud", "windy-cloud-vps": "Windy Cloud", "windy-search": "Windy Search",
+    "windy-connect": "Windy Connect", "windy-drops": "Windy Drops", "windy-registry": "Windy Drops",
+    "windy-code-web": "Windy Code", "windy-code": "Windy Code", "windy-traveler": "Windy Traveler",
+    "windytraveler-site": "Windy Traveler", "eternitas": "Eternitas", "windy-translate": "Windy Translate",
+    "windytranslate-site": "Windy Translate", "windy-hand": "Windy Hand", "windytalk": "Windy Talk",
+    "windy-pro": "Windy Hub", "windy-mind": "WIndy Mind", "windy-git": "Windy Git"}
 JOB = re.compile(r"^  ([A-Za-z0-9_-]+):\s*$")
 
 
@@ -96,12 +109,12 @@ def render(results: dict) -> str:
          "| Guard | Lane-owned findings | Grant-owned (proposals) | Ready to block? |", "|---|---|---|---|",
          f"| compute-guard (Mind is the only door) | {lane['compute']} | {grant['compute']} | {'✅ YES' if lane['compute'] == 0 else '❌ not yet'} |",
          f"| ci-hygiene (house rule 6) | {lane['hygiene']} | {grant['hygiene']} | {'✅ YES' if lane['hygiene'] == 0 else '❌ not yet'} |",
-         "", "## By repo (lane-owned)", "| Repo | head | compute | hygiene | first items |", "|---|---|---|---|---|"]
+         "", "## By repo (lane-owned)", "| Repo | owner | head | compute | hygiene | first items |", "|---|---|---|---|---|---|"]
     for repo, r in sorted(results.items()):
         c = [x for x in r["compute"] if not x[2]]
         h = [x for x in r["hygiene"] if not x[2]]
         items = "; ".join(f"`{f.path}:{f.line}` {f.match}" for f, _, _ in (c + h)[:3]) or "clean ✅"
-        L.append(f"| {repo} | {r['sha'][:7]} | {len(c)} | {len(h)} | {items} |")
+        L.append(f"| {repo} | {OWNERS.get(repo, '?')} | {r['sha'][:7]} | {len(c)} | {len(h)} | {items} |")
     L += ["", "## Grant-owned (windy-pro desktop app + its build jobs): proposals only, not blocking"]
     g = [(repo, f, job) for repo, r in sorted(results.items()) for k in ("compute", "hygiene")
          for f, job, own in r[k] if own]
