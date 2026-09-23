@@ -45,7 +45,8 @@ WG_OWNER = os.environ.get("WINDYGIT_OWNER", "windyadmin")
 # runner; bridging those too would put two competing verdicts on every commit.
 REPOS = os.environ.get(
     "BRIDGE_REPOS",
-    "windy-chat windy-mail windy-calendar Windy-Clone WindyCloud windy-search windy-connect",
+    "windy-chat windy-mail windy-calendar Windy-Clone WindyCloud windy-search windy-connect"
+    " windy-drops windy-code-web windy-code windy-traveler",
 ).split()
 
 # Gitea run status -> GitHub status state. `skipped` is deliberately absent: a
