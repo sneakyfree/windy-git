@@ -98,9 +98,18 @@ def load_allow(path: Path = ALLOW_FILE) -> list[dict]:
     return entries
 
 
-def allowed(repo: str, path: str, allow: list[dict]) -> bool:
+def allowed(repo: str, path: str, allow: list[dict], text: str | None = None) -> bool:
+    """An entry may carry `matches:` (regexes): then only lines matching one of
+    them are allowed, so an allowed file can't smuggle in a NEW call (e.g. an
+    OAuth sign-in endpoint is allowed, an inference endpoint in the same file
+    still flags). Entries without `matches` cover the whole path."""
     for e in allow:
-        if e["repo"] == repo and any(fnmatch.fnmatch(path, g) for g in e["paths"]):
+        if e["repo"] != repo or not any(fnmatch.fnmatch(path, g) for g in e["paths"]):
+            continue
+        pats = e.get("matches")
+        if not pats:
+            return True
+        if text is not None and any(re.search(rx, text) for rx in pats):
             return True
     return False
 
@@ -157,7 +166,7 @@ def scan_tree(repo: str, bare: Path, sha: str, allow: list[dict], *, line_fn=Non
             _, path, line, text = raw.split(":", 3)
         except ValueError:
             continue
-        if not path_ok(path) or allowed(repo, path, allow):
+        if not path_ok(path) or allowed(repo, path, allow, text):
             continue
         for kind, match in line_fn(path, text):
             found.append(Finding(path, int(line), kind, match))
@@ -190,7 +199,7 @@ def parse_added(repo: str, diff: str, allow: list[dict], *, line_fn=None, path_o
         if path is None or raw.startswith("--- "):
             continue
         if raw.startswith("+"):
-            if path_ok(path) and not allowed(repo, path, allow):
+            if path_ok(path) and not allowed(repo, path, allow, raw[1:]):
                 for kind, match in line_fn(path, raw[1:]):
                     found.append(Finding(path, line, kind, match))
             line += 1

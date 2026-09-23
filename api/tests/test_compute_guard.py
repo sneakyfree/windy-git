@@ -191,3 +191,32 @@ def test_a_commit_not_fetched_yet_is_skipped_not_an_error(tmp_path, monkeypatch)
     (tmp_path / "windy-chat.git").symlink_to(bare)
     assert cg.check("windy-chat", "f" * 40, "main", True) is None     # pushed after the fetch
     assert [f.kind for f in cg.check("windy-chat", sha, "main", True)] == ["provider SDK"]
+
+
+KEYCHAIN = "src/client/web/src/pages/panels/MindKeychain.jsx"
+
+
+def test_scoped_allow_admits_only_the_oauth_endpoints():
+    ok = [
+        "    window.location.href = `https://openrouter.ai/auth?callback_url=${encodeURIComponent(callback)}`",
+        "    const res = await fetch('https://openrouter.ai/api/v1/auth/keys', {",
+    ]
+    for line in ok:
+        assert cg.allowed("windy-pro", KEYCHAIN, ALLOW, line)
+    # an inference call smuggled into the same file still flags
+    assert not cg.allowed("windy-pro", KEYCHAIN, ALLOW,
+                          "  await fetch('https://openrouter.ai/api/v1/chat/completions', {")
+    # a scoped entry never allows a line it can't see
+    assert not cg.allowed("windy-pro", KEYCHAIN, ALLOW)
+
+
+def test_scoped_allow_in_a_real_diff():
+    diff = f"""--- /dev/null
++++ b/{KEYCHAIN}
+@@ -0,0 +1,3 @@
++  window.location.href = `https://openrouter.ai/auth?callback_url=x`
++  const res = await fetch('https://openrouter.ai/api/v1/auth/keys', {{
++  await fetch('https://openrouter.ai/api/v1/chat/completions', {{
+"""
+    fs = cg.parse_added("windy-pro", diff, ALLOW)
+    assert [(f.line, f.match) for f in fs] == [(3, "openrouter.ai")]
