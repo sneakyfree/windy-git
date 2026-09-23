@@ -82,7 +82,11 @@ done
 
 # Jobs that name labels no runner has (ubuntu/macos/windows-latest) would wait
 # forever and invisibly; cancel them after 30 min. Never fails the sync.
-bash "$(dirname "$0")/cancel_unrunnable.sh" || log "janitor failed (non-fatal)"
+# Both DB steps go through `docker exec`, which hangs outright while the host
+# is in an IO stall (09-23: data2 SMR cliff wedged this sync for 10+ min and
+# stopped mirroring + the bridge for every lane). They are optional; mirroring
+# and the bridge are not. Bound them so a stuck exec costs one step, not the run.
+timeout -k 10 120 bash "$(dirname "$0")/cancel_unrunnable.sh" || log "janitor failed or timed out (non-fatal)"
 
 # Private repos can't run GitHub Actions; mirror their open PRs here so CI
 # fires, and post the verdicts back to GitHub as commit statuses.
@@ -92,7 +96,7 @@ fi
 
 # CI telemetry -> admin.windyword.ai (shapes declared with Windy Telemetry 40).
 # Sends nothing until WINDYGIT_TELEMETRY_TOKEN is set; never fails the sync.
-python3 "$(dirname "$0")/telemetry_emit.py" || log "telemetry emit failed (non-fatal)"
+timeout -k 10 180 python3 "$(dirname "$0")/telemetry_emit.py" || log "telemetry emit failed or timed out (non-fatal)"
 
 [[ "$FAILED" -ne 0 ]] && { log "COMPLETED WITH FAILURES"; exit 1; }
 log "all repos in step with GitHub"
