@@ -96,7 +96,7 @@ PV_EXEMPT = {"windyadmin"}
 PV_QUERY = """
     select a.act_user_id as uid, u.lower_name as login,
            (select el.external_id from external_login_user el
-             where el.user_id = u.id order by el.external_id limit 1) as wid,
+             where el.user_id = a.act_user_id order by el.external_id limit 1) as wid,
            count(*) filter (where a.op_type in (5, 9) and a.created_unix > {h1}) as p1h,
            count(*) filter (where a.op_type in (5, 9)) as p24h,
            count(*) filter (where a.op_type in (16, 17)) as d24h,
