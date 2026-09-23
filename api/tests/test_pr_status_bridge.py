@@ -147,3 +147,27 @@ def test_image_build_jobs_are_not_posted(fake):
     )
     bridge.post_statuses("r", SHA)
     assert f.posted == []
+
+
+def test_non_blocking_jobs_are_not_posted_for_that_repo_only(fake, monkeypatch):
+    """Grant ruled windy-pro's desktop/installer jobs non-blocking: they must not
+    reach GitHub for windy-pro, and the rule must not leak to other repos."""
+    monkeypatch.setattr(bridge, "NON_BLOCKING", {"windy-pro": {"ci/build-desktop"}})
+    runs = [_run(1, "ci.yml", "build-desktop", "failure"), _run(2, "ci.yml", "test", "success")]
+    f = fake(runs=runs)
+    bridge.post_statuses("windy-pro", SHA)
+    assert [p["context"] for p in f.posted] == ["windy-git/ci/test"]
+    f2 = fake(runs=runs)
+    bridge.post_statuses("windy-chat", SHA)
+    assert sorted(p["context"] for p in f2.posted) == [
+        "windy-git/ci/build-desktop",
+        "windy-git/ci/test",
+    ]
+
+
+def test_default_non_blocking_is_grants_ruling():
+    assert bridge.NON_BLOCKING.get("windy-pro") == {
+        "ci/build-desktop",
+        "ci/test-installer",
+        "ci/reality-check",
+    }

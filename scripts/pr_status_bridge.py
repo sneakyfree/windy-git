@@ -71,6 +71,19 @@ MIRROR_TAG = "[GH#"
 # exists; that is a decision, recorded in docs/CUTOVER.md, not a failure.
 NO_DAEMON_JOB = re.compile(r"docker", re.IGNORECASE)
 
+# Jobs Grant ruled NON-BLOCKING (GRANT_DECISIONS_2026-09-23): still run on
+# Windy Git and visible there, but not posted to GitHub, so they cannot turn a
+# commit's combined status red. Format: "repo:workflow/job,workflow/job;repo2:..."
+# windy-pro's desktop/installer jobs belong to Grant's desktop side (fixed from
+# his Mac mini), not to any lane's merge gate.
+NON_BLOCKING: dict[str, set[str]] = {}
+for _entry in os.environ.get(
+    "BRIDGE_NON_BLOCKING", "windy-pro:ci/build-desktop,ci/test-installer,ci/reality-check"
+).split(";"):
+    if ":" in _entry:
+        _repo, _jobs = _entry.split(":", 1)
+        NON_BLOCKING[_repo.strip()] = {j.strip() for j in _jobs.split(",") if j.strip()}
+
 
 def _call(base: str, token_header: str, method: str, path: str, body=None):
     req = urllib.request.Request(
@@ -154,6 +167,8 @@ def post_statuses(repo: str, sha: str) -> None:
     latest: dict[str, dict] = {}
     for r in runs:
         if r["head_sha"] != sha or NO_DAEMON_JOB.search(r["name"]):
+            continue
+        if f"{r['workflow_id'].removesuffix('.yml')}/{r['name']}" in NON_BLOCKING.get(repo, ()):
             continue
         ctx = f"windy-git/{r['workflow_id'].removesuffix('.yml')}/{r['name']}"
         if ctx not in latest or r["id"] > latest[ctx]["id"]:
