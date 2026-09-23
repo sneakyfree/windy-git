@@ -53,16 +53,24 @@ class Settings(BaseSettings):
 
     # ---- account-server OIDC (human identity) -----------------------------
     account_server_base_url: str = "https://account.windyword.ai"
+    # G3.2 — what a hub ACCESS token must say about itself (see hub_jwt.py).
+    # The hub signs access tokens with iss "windy-identity" (observed
+    # 2026-09-23), not its discovery-doc issuer URL; id_tokens carry the URL and
+    # are deliberately NOT accepted as bearers.
+    hub_issuers: list[str] = ["windy-identity"]
+    # SSO matrix (lane 8c): once the hub emits `aud`, it must name one of these.
+    hub_audiences: list[str] = ["windy-git", "https://api.windygit.com"]
+    # Flip to True once the hub emits aud on every access token.
+    hub_require_aud: bool = False
 
     # Internal callers (the Cloud portal calling /internal/*). A first-class
     # caller class, not a bypass: unset means service calls are REFUSED.
     service_token: str = ""
 
-    # ⚠️ FAIL-CLOSED GATE. Full RS256/ES256 JWKS verification lands in G3.2.
-    # Until it does, the human token path must not be reachable in production —
-    # accepting an unverified JWT is not a shortcut, it is an authentication
-    # bypass. Agents are unaffected: their authority comes from a live Eternitas
-    # trust lookup, not from anything the token asserts about itself.
+    # ⚠️ FAIL-CLOSED GATE. Human tokens are verified against the hub's JWKS
+    # (G3.2, hub_jwt.py). False only enables the unverified local-dev path, and
+    # production verifies regardless — an unverified JWT is a bypass, not a
+    # shortcut.
     require_verified_jwt: bool = True
 
     # ---- storage law (I-3, G4.4) ------------------------------------------

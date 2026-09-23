@@ -308,12 +308,13 @@ def test_g36_trust_client_never_soft_allows():
 
 def test_g36_unverified_human_jwt_is_refused_in_production():
     """I-8 applied to ourselves: an unverified JWT is an authentication bypass,
-    not a shortcut. Until G3.2's JWKS verifier exists, production refuses."""
+    not a shortcut. G3.2's verifier now exists; behavioral proof that forged,
+    expired, mis-issued and mis-audienced tokens are refused lives in
+    test_hub_jwt.py. Here: the gate defaults closed."""
     from api.app.config import Settings
 
     assert Settings().require_verified_jwt is True
-    src = (ROOT / "api" / "app" / "auth.py").read_text()
-    assert "human_signin_not_ready" in src
+    assert Settings().hub_issuers == ["windy-identity"]
 
 
 def test_no_auth_bypass_env_var_anywhere():

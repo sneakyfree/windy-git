@@ -27,6 +27,7 @@ from fastapi import Header, Request
 from api.app.config import Settings
 from api.app.ept import EptInvalid, looks_like_ept, verify_ept
 from api.app.errors import RepairPointer, passport_unresolvable
+from api.app.hub_jwt import HubTokenInvalid, verify_hub_token
 
 log = logging.getLogger(__name__)
 
@@ -239,22 +240,29 @@ async def get_caller(
             allowed_actions=actions,
         )
 
-    # --- human (account-server RS256) -------------------------------------
-    if settings.is_production and settings.require_verified_jwt:
-        # I-8, applied to ourselves. G3.2's JWKS verifier is not written yet, and
-        # an unverified JWT is an authentication bypass rather than a shortcut.
-        # Refusing is the only honest answer until the verifier exists.
-        raise RepairPointer(
-            status_code=503,
-            code="human_signin_not_ready",
-            speak="Signing in isn't switched on yet. Nothing you have is affected.",
-            machine_cause=(
-                "JWKS verification (G3.2) is not implemented; refusing to accept "
-                "an unverified human token in production"
-            ),
-            remediation_tool=None,
-        )
+    # --- human (hub RS256 access token, G3.2) ------------------------------
+    # Production ALWAYS verifies, whatever require_verified_jwt says: the flag
+    # only exists to let local dev run against unsigned fixture tokens.
+    if settings.require_verified_jwt or settings.is_production:
+        try:
+            human = verify_hub_token(
+                token,
+                settings.account_server_base_url,
+                issuers=tuple(settings.hub_issuers),
+                audiences=tuple(settings.hub_audiences),
+                require_aud=settings.hub_require_aud,
+            )
+        except HubTokenInvalid as exc:
+            raise RepairPointer(
+                status_code=401,
+                code="token_invalid",
+                speak="We couldn't confirm that sign-in. Try signing in again.",
+                machine_cause=f"hub token verification failed: {exc}",
+                remediation_tool=None,
+            ) from exc
+        return Caller(actor_type=ActorType.human, identity_id=human.identity_id)
 
+    # Local dev only (require_verified_jwt=False outside production).
     identity_id = _unverified_claim(token, "windy_identity_id") or _unverified_claim(token, "sub")
     if not identity_id:
         raise RepairPointer(
@@ -274,10 +282,8 @@ def _unverified_claim(token: str, claim: str) -> str | None:
     on the result re-establishes trust independently: an agent's authority comes
     from a live Eternitas trust lookup, never from the token's own assertions.
 
-    ⚠️ Full RS256/ES256 JWKS verification for the human path lands in G3.2's
-    verifier and MUST be in place before `api.windygit.com` accepts a human
-    token from outside. Until then the human path is reachable only from inside
-    the tunnel, and `settings.require_verified_jwt` refuses it in production.
+    Humans are verified by hub_jwt.verify_hub_token (G3.2); this reader backs
+    only the local-dev path, which production never takes.
     """
     import base64
     import json
