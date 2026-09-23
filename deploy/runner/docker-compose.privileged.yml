@@ -1,0 +1,15 @@
+# ROLLBACK ONLY: the pre-Sysbox dind (privileged: true), kept one command away.
+# Use it if CI breaks under Sysbox:
+#
+#   cd /srv/windygit/src/deploy/runner
+#   sudo docker compose -f docker-compose.yml -f docker-compose.privileged.yml up -d dind
+#
+# (then restart the runners while idle). Compose merges `volumes` by container
+# path, so this puts back the old `dind-storage` volume with its image cache.
+# Going forward again: the same command without the second -f.
+services:
+  dind:
+    runtime: runc
+    privileged: true
+    volumes:
+      - dind-storage:/var/lib/docker

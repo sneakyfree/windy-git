@@ -26,8 +26,12 @@
 #   * `dind` and every job container it spawns are UNTRUSTED. They are on a
 #     private network with no access to the forge, its database, or its .env.
 #
-# dind itself is privileged — that is the cost, and it is the reason a job
-# escape lands in a disposable daemon rather than on Grant's workstation.
+# dind is NOT privileged (2026-09-23): it runs under the Sysbox runtime
+# (sysbox-ce on Veron, `runtime: sysbox-runc`), a user-namespaced system
+# container whose root is an unprivileged host uid. A job that escapes its own
+# container lands in dind as a nobody on the host, not as root on Grant's
+# workstation. Before Sysbox, dind was `privileged: true`; that config is kept
+# as docker-compose.privileged.yml (ROLLBACK ONLY, one command, see that file).
 #
 # ⚠️ Do NOT "simplify" this by mounting the host docker socket.
 
@@ -36,13 +40,15 @@ name: windy-git-runner
 services:
   dind:
     image: docker.io/library/docker:27-dind
-    privileged: true
+    runtime: sysbox-runc   # NOT privileged: see the I-5 note above
     environment:
       DOCKER_TLS_CERTDIR: ""   # plain TCP on an isolated network, no host route
     command: ["dockerd", "--host=tcp://0.0.0.0:2375", "--tls=false"]
     networks: [jobs]
     volumes:
-      - dind-storage:/var/lib/docker
+      # A fresh volume: Sysbox shifts ownership to its own uid range. The old
+      # `dind-storage` is kept untouched for the privileged rollback.
+      - dind-storage-sysbox:/var/lib/docker
     # G1.5 — bounded so a fork-bomb workflow cannot starve Grant's interactive
     # session. Veron 1 is his workstation, not a dedicated build box.
     cpus: 12.0            # 12 of 24 cores
@@ -159,6 +165,7 @@ networks:
 
 volumes:
   dind-storage:
+  dind-storage-sysbox:
   runner-data:
   runner-data-2:
   runner-data-3:
