@@ -47,7 +47,7 @@ REPOS = os.environ.get(
     "BRIDGE_REPOS",
     "windy-chat windy-mail windy-calendar Windy-Clone WindyCloud windy-search windy-connect"
     " windy-drops windy-code-web windy-code windy-traveler windy-registry eternitas"
-    " windy-translate windytranslate-site windytraveler-site",
+    " windy-translate windytranslate-site windytraveler-site windy-hand",
 ).split()
 
 # Gitea run status -> GitHub status state. `skipped` is deliberately absent: a
