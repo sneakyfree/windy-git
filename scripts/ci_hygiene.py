@@ -236,7 +236,7 @@ def report(repos: list[str]) -> int:
             continue
         head = cg._git(bare, "symbolic-ref", "--short", "HEAD").strip()
         sha = cg._git(bare, "rev-parse", head).strip()
-        fs = cg.scan_tree(repo, bare, sha, allow, line_fn=scan_line, path_ok=path_ok, prefilter=PREFILTER)
+        fs = _runs_here(repo, cg.scan_tree(repo, bare, sha, allow, line_fn=scan_line, path_ok=path_ok, prefilter=PREFILTER))
         total += len(fs)
         print(f"## {repo} ({head} {sha[:7]}): {len(fs)} issue(s)")
         for f in fs:
