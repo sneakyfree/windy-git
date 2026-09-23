@@ -93,3 +93,24 @@ mattered most, *is an agent really that agent*, shipped inverted and untested.
 The remedy is not more process; it is **behavioral tests and canary probes for
 the security-critical paths**, so verification persists instead of living in a
 transcript.
+
+## Disposition update — 2026-09-23 (lane 13)
+
+**Privileged dind beside the tokens — materially reduced, not closed.**
+- The account-wide R2 token is **gone from Veron**. `.env` now carries a token scoped
+  to Workers R2 Bucket Item Read/Write on `windy-git-lfs` + `windy-git-backups` only,
+  minted by API (verified: works on both buckets, refused on any other). A CI escape
+  now reaches Windy Git's own two buckets, not every bucket and zone in the account.
+- Runners take jobs **only from windyadmin-owned repos** (`action_runner.owner_id`), and
+  forge self-registration is off, so no stranger's workflow can run here.
+- A host egress filter (`deploy/runner/egress.sh`) stops job containers reaching Veron,
+  the LAN, WireGuard or Tailscale.
+- Still open: dind runs `--privileged` (next: Sysbox); the host still holds a GitHub
+  token and the Gitea admin token.
+
+**Revocation / webhook secret** — `ETERNITAS_WEBHOOK_SECRET` recovered from the
+Eternitas platform row and set; signed deliveries verify.
+
+**Tests are string asserts** — the security paths now have behavioural suites
+(`test_hub_jwt.py`, `test_webhooks_behavior.py`, `test_pr_status_bridge.py`);
+a mutation check showed the old grep invariant passing a broken HMAC prefix strip.
