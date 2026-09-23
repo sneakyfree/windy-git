@@ -1,0 +1,15 @@
+# Code Grant owns directly (orchestrator, 09-23): guard findings here are listed
+# SEPARATELY in the guards status page and never hold up "block". Changes to
+# these files are proposals for Grant / Windy Word 44, not a lane's fix.
+grant_owned:
+  - repo: windy-pro
+    reason: "Windy Word desktop (Electron) + its release/installer builds: Grant's, built from the Mac mini."
+    paths:
+      - "src/client/desktop/*"
+      - "installer-v2/*"
+      - ".github/workflows/build-windows.yml"
+      - ".github/workflows/release-mac.yml"
+      - ".github/workflows/build-installer.yml"
+      - ".github/workflows/build-offline-installers.yml"
+    jobs:
+      ".github/workflows/ci.yml": [reality-check, build-desktop, test-installer, build-electron]
