@@ -11,7 +11,7 @@ log:
 
 runner:
   file: /data/.runner
-  capacity: 1          # per runner; parallelism = number of runner services (4). See docker-compose.yml
+  capacity: 1          # per runner; parallelism = number of runner services (6). See docker-compose.yml
   timeout: 30m
   shutdown_timeout: 3m
   insecure: false

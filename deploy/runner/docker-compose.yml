@@ -134,6 +134,23 @@ services:
       <<: *env2
       GITEA_RUNNER_NAME: veron-1-4
     volumes: [./config.yaml:/config.yaml:ro, runner-data-4:/data]
+  # 5 and 6 added the same day: with ~11 private repos onboarded (windy-chat
+  # alone queues ~24 jobs per push) four runners left 50+ jobs waiting. The
+  # CPU ceiling is dind's (12 of 24 cores, G1.5), not the runner count, so more
+  # runners add concurrency for I/O-bound jobs (npm ci, uv sync) without
+  # taking more of Grant's workstation.
+  runner-5:
+    <<: *runner
+    environment:
+      <<: *env2
+      GITEA_RUNNER_NAME: veron-1-5
+    volumes: [./config.yaml:/config.yaml:ro, runner-data-5:/data]
+  runner-6:
+    <<: *runner
+    environment:
+      <<: *env2
+      GITEA_RUNNER_NAME: veron-1-6
+    volumes: [./config.yaml:/config.yaml:ro, runner-data-6:/data]
 
 networks:
   jobs:
@@ -146,4 +163,6 @@ volumes:
   runner-data-2:
   runner-data-3:
   runner-data-4:
+  runner-data-5:
+  runner-data-6:
 
