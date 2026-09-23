@@ -83,8 +83,17 @@ def test_warn_mode_never_turns_red(monkeypatch):
     assert state == "success" and desc.startswith("⚠ WARN (not blocking): 1 CI hygiene issue in CI/Dockerfiles")
 
 
-def test_allow_file_loads_and_is_empty_today():
-    assert hy.cg.load_allow(hy.ALLOW_FILE) == []
+def test_allow_file_is_line_scoped_exceptions_only():
+    """Every exception is line-scoped (`matches`), so an allowed file can't hide a
+    NEW floating install or docker step. Today: windy-pro's if:false deploy job."""
+    allow = hy.cg.load_allow(hy.ALLOW_FILE)
+    assert [(e["repo"], e["paths"]) for e in allow] == [("windy-pro", [".github/workflows/ci.yml"])]
+    assert all(e.get("matches") for e in allow)
+    ok = "        run: docker build -f account-server/Dockerfile -t windy-pro:${{ github.sha }} ."
+    new = "        run: docker build -t windy-pro-api ."
+    assert hy.cg.allowed("windy-pro", WF, allow, ok)
+    assert not hy.cg.allowed("windy-pro", WF, allow, new)
+    assert not hy.cg.allowed("windy-chat", WF, allow, ok)
 
 
 @pytest.mark.parametrize("path, text, want", [
