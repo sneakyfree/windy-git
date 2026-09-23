@@ -152,3 +152,16 @@ disqualifying the moment a stranger depends on it. **The trigger is not a date â
 it is the first external push.** Move the control plane to a dedicated VPS (not
 Kit 0), keep Veron 1 as the runner. It is an rsync, a Postgres dump and three
 DNS record edits.
+
+## Re-run a PR's CI (Gitea 1.24 has no rerun API)
+
+```bash
+ssh wg-veron
+cd /srv/windygit/src && bash scripts/rerun_ci.sh <repo> <branch> <github-head-sha-prefix>
+```
+Moves the Windy Git branch back one commit; the next sync force-pushes the
+GitHub head again and Gitea re-fires every workflow for that event on the same
+commit. Guarded: refuses unless the branch is at the given sha, waits for a
+sync that starts AFTER the rewind, restores the branch itself on timeout.
+Don't use the web "Re-run" button: it needs a hub-SSO session as windyadmin,
+which is Grant's identity.
