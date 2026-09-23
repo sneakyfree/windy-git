@@ -32,6 +32,7 @@ import base64
 import json
 import os
 import re
+import subprocess
 import sys
 import time
 import urllib.error
@@ -222,6 +223,54 @@ def sync_prs(repo: str) -> list[str]:
     return heads
 
 
+SAFE_NAME = re.compile(r"^[A-Za-z0-9._-]+$")
+SAFE_SHA = re.compile(r"^[0-9a-f]{40}$")
+
+
+def queued_jobs(repo: str, sha: str) -> list[dict]:
+    """Jobs at `sha` that are waiting for a runner and that a runner CAN take.
+
+    Gitea 1.24's API lists only PICKED-UP jobs (/actions/tasks), so a queued PR
+    showed nothing on GitHub and people asked whether the push was lost. The
+    truth is in the gitea DB. Bounded + non-fatal: during the 09-23 IO stall
+    `docker exec` hung for an hour and must never wedge the bridge again.
+
+    Only status 5 (waiting) with labels some live runner has. A `pending` we
+    post must end in a verdict we will also see, or it sits yellow forever:
+    blocked jobs (7) often end SKIPPED, and jobs for labels no runner has
+    (macos-/windows-/ubuntu-latest) are cancelled by the janitor unpicked;
+    neither ever appears in /actions/tasks.
+    """
+    if not (SAFE_NAME.match(repo) and SAFE_NAME.match(WG_OWNER) and SAFE_SHA.match(sha)):
+        return []
+    query = (
+        "select json_build_object("
+        " 'jobs', (select coalesce(json_agg(t), '[]'::json) from ("
+        "  select ar.index as run_number, ar.workflow_id, j.name, j.runs_on"
+        "  from action_run_job j join action_run ar on ar.id = j.run_id"
+        "  join repository r on r.id = j.repo_id join \"user\" o on o.id = r.owner_id"
+        f"  where o.lower_name = '{WG_OWNER.lower()}' and r.lower_name = '{repo.lower()}'"
+        f"  and ar.commit_sha = '{sha}' and j.status = 5) t),"
+        " 'labels', (select coalesce(json_agg(agent_labels), '[]'::json)"
+        "  from action_runner where coalesce(deleted, 0) = 0));"
+    )
+    try:
+        out = subprocess.run(
+            ["docker", "exec", "-i", "windy-git-db-1", "sh", "-c",
+             'psql -U "$POSTGRES_USER" -d gitea -At -v ON_ERROR_STOP=1'],
+            input=query, capture_output=True, text=True, check=True, timeout=30,
+        ).stdout.strip()
+        got = json.loads(out or "{}")
+        runners = [set(json.loads(x or "[]")) for x in got.get("labels") or []]
+        return [
+            j for j in got.get("jobs") or []
+            if any(set(json.loads(j.get("runs_on") or "[]")) <= r for r in runners)
+        ]
+    except (subprocess.SubprocessError, OSError, ValueError) as e:
+        print(f"  {repo}: queued-job lookup skipped ({type(e).__name__})")
+        return []
+
+
 def post_statuses(repo: str, sha: str) -> None:
     # Gitea caps a page at 50 (MAX_RESPONSE_ITEMS) whatever `limit` says, and a
     # daily scheduled workflow can push a quiet main's runs off page 1.
@@ -242,6 +291,17 @@ def post_statuses(repo: str, sha: str) -> None:
         ctx = f"windy-git/{r['workflow_id'].removesuffix('.yml')}/{r['name']}"
         if ctx not in latest or r["id"] > latest[ctx]["id"]:
             latest[ctx] = r
+    # Queued jobs: `pending` where nothing newer has been picked up. A re-run
+    # queued behind an old failure must read pending, not the stale red.
+    for q in queued_jobs(repo, sha):
+        if NO_DAEMON_JOB.search(q["name"]):
+            continue
+        wf = q["workflow_id"].removesuffix(".yml")
+        if f"{wf}/{q['name']}" in NON_BLOCKING.get(repo, ()):
+            continue
+        ctx = f"windy-git/{wf}/{q['name']}"
+        if ctx not in latest or q["run_number"] > latest[ctx]["run_number"]:
+            latest[ctx] = {"id": 0, "status": "waiting", "run_number": q["run_number"]}
     bad = invalid_workflows(repo, sha)
     if not (latest or bad):
         return

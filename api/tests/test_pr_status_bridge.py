@@ -79,10 +79,11 @@ class Fake:
 
 @pytest.fixture
 def fake(monkeypatch):
-    def make(**kw):
+    def make(queued=(), **kw):
         f = Fake(**kw)
         monkeypatch.setattr(bridge, "gitea", f.gitea)
         monkeypatch.setattr(bridge, "github", f.github)
+        monkeypatch.setattr(bridge, "queued_jobs", lambda repo, sha: list(queued))
         return f
 
     return make
@@ -272,3 +273,70 @@ def test_gitea_dir_wins_over_github_dir(fake):
 )
 def test_workflow_problem(text, problem):
     assert bridge.workflow_problem(text) == problem
+
+
+def _q(n, wf, job):
+    return {"run_number": n, "workflow_id": wf, "name": job}
+
+
+def test_queued_job_shows_pending_instead_of_nothing(fake):
+    f = fake(queued=[_q(5, "ci.yml", "test")])
+    bridge.post_statuses("windy-chat", SHA)
+    assert [(p["context"], p["state"]) for p in f.posted] == [("windy-git/ci/test", "pending")]
+    assert f.posted[0]["target_url"].endswith("/actions/runs/5")
+
+
+def test_queued_rerun_supersedes_the_stale_failure(fake):
+    f = fake(runs=[_run(1, "ci.yml", "test", "failure", n=4)], queued=[_q(7, "ci.yml", "test")])
+    bridge.post_statuses("windy-chat", SHA)
+    assert [(p["context"], p["state"]) for p in f.posted] == [("windy-git/ci/test", "pending")]
+
+
+def test_older_queued_job_never_overrides_a_newer_verdict(fake):
+    f = fake(runs=[_run(1, "ci.yml", "test", "success", n=9)], queued=[_q(3, "ci.yml", "test")])
+    bridge.post_statuses("windy-chat", SHA)
+    assert [(p["context"], p["state"]) for p in f.posted] == [("windy-git/ci/test", "success")]
+
+
+def test_queued_docker_and_non_blocking_jobs_stay_unposted(fake):
+    f = fake(queued=[_q(2, "ci.yml", "docker-build"), _q(2, "ci.yml", "build-desktop")])
+    bridge.post_statuses("windy-pro", SHA)
+    assert f.posted == []
+
+
+def test_queued_lookup_refuses_unsafe_input():
+    assert bridge.queued_jobs("x'; drop table t;--", SHA) == []
+    assert bridge.queued_jobs("windy-chat", "not-a-sha") == []
+
+
+def _db(monkeypatch, jobs, labels):
+    import json as _json
+    import subprocess as _sp
+
+    payload = _json.dumps({"jobs": jobs, "labels": [_json.dumps(x) for x in labels]})
+    monkeypatch.setattr(
+        bridge.subprocess, "run",
+        lambda *a, **k: _sp.CompletedProcess(a, 0, stdout=payload, stderr=""),
+    )
+
+
+RUNNER = ["veron-1", "linux-x64", "self-hosted", "linux", "x64"]
+
+
+def test_only_jobs_a_runner_can_take_are_pending(monkeypatch):
+    # macos-latest is cancelled unpicked by the janitor: pending would never resolve.
+    _db(monkeypatch, [
+        {"run_number": 3, "workflow_id": "ci.yml", "name": "test", "runs_on": '["self-hosted","linux","x64"]'},
+        {"run_number": 3, "workflow_id": "ci.yml", "name": "mac", "runs_on": '["macos-latest"]'},
+    ], [RUNNER])
+    assert [j["name"] for j in bridge.queued_jobs("windy-chat", SHA)] == ["test"]
+
+
+def test_lookup_failure_is_non_fatal(monkeypatch):
+    import subprocess as _sp
+
+    def boom(*a, **k):
+        raise _sp.TimeoutExpired("docker", 30)
+
+    monkeypatch.setattr(bridge.subprocess, "run", boom)
+    assert bridge.queued_jobs("windy-chat", SHA) == []
