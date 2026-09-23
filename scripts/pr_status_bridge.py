@@ -46,7 +46,7 @@ WG_OWNER = os.environ.get("WINDYGIT_OWNER", "windyadmin")
 REPOS = os.environ.get(
     "BRIDGE_REPOS",
     "windy-chat windy-mail windy-calendar Windy-Clone WindyCloud windy-search windy-connect"
-    " windy-drops windy-code-web windy-code windy-traveler",
+    " windy-drops windy-code-web windy-code windy-traveler windy-registry",
 ).split()
 
 # Gitea run status -> GitHub status state. `skipped` is deliberately absent: a
