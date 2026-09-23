@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -67,6 +68,92 @@ def load_state() -> dict:
 
 def iso(epoch: float) -> str:
     return datetime.fromtimestamp(epoch, UTC).isoformat().replace("+00:00", "Z")
+
+
+# ---- push velocity: DETECT + ALERT ONLY (G3.4, 2026-09-23) -----------------
+# `git push` goes straight to Gitea and never touches our API, so throttle.py
+# cannot see it (NOT_ENFORCED_HERE). Gitea's own `action` table does record
+# every push, so we read it here, emit `forge.push_velocity` when an account
+# crosses a threshold, and let Telemetry Boss's detector page. Nothing here sits
+# in the push path; nothing is ever refused (orchestrator, 09-23).
+#
+# Thresholds = the STANDARD-band bases from config.py (500 pushes/day; the
+# force-push base of 10/day is used for ref deletes, the closest thing we can
+# see). EI band multipliers are NOT applied: a platinum agent over 500/day is
+# still flagged, for a human to look at, not blocked. Gitea records no
+# "forced" flag, so force pushes cannot be told apart from pushes: named, not
+# guessed.
+PV_RULES = (  # (rule, row key, window_s, threshold)
+    ("pushes_1h", "p1h", 3600, 60),
+    ("pushes_24h", "p24h", 86400, 500),
+    ("ref_deletes_24h", "d24h", 86400, 10),
+)
+# The GitHub -> Windy Git sync pushes as windyadmin every 5 min, by design.
+PV_EXEMPT = {"windyadmin"}
+# Gitea op_type: 5 commit push, 9 tag push, 16 tag delete, 17 branch delete.
+# One action row per WATCHER is written for each push; user_id = act_user_id
+# keeps exactly the actor's own copy.
+PV_QUERY = """
+    select a.act_user_id as uid, u.lower_name as login,
+           count(*) filter (where a.op_type in (5, 9) and a.created_unix > {h1}) as p1h,
+           count(*) filter (where a.op_type in (5, 9)) as p24h,
+           count(*) filter (where a.op_type in (16, 17)) as d24h,
+           count(distinct a.repo_id) as repos
+      from action a join "user" u on u.id = a.act_user_id
+     where a.created_unix > {h24} and a.user_id = a.act_user_id
+       and a.op_type in (5, 9, 16, 17)
+     group by 1, 2"""
+
+
+def passport_from_login(login: str) -> str | None:
+    """agent-et26abcd1234 -> ET26-ABCD-1234 (repos.py _owner_login, reversed)."""
+    m = re.fullmatch(r"agent-([a-z0-9]{4})([a-z0-9]{4})([a-z0-9]{4})", login)
+    return "-".join(g.upper() for g in m.groups()) if m else None
+
+
+def push_velocity_events(rows: list[dict], now: float, alerted: dict) -> tuple[list[dict], dict]:
+    """(events, alerted') — one row per account per rule per window while over.
+
+    `alerted` maps "<uid>:<rule>" -> epoch of the last row. An account still over
+    the line is re-reported once per window, not every 5 minutes; one that drops
+    back under is forgotten, so a later burst reports again.
+    """
+    events, keep = [], {}
+    for r in rows:
+        login = str(r["login"])
+        if login in PV_EXEMPT:
+            continue
+        agent = login.startswith("agent-")
+        for rule, key, window, limit in PV_RULES:
+            n = int(r[key])
+            if n <= limit:
+                continue
+            k = f"{r['uid']}:{rule}"
+            last = alerted.get(k)
+            if last is not None and now - float(last) < window:
+                keep[k] = last
+                continue
+            keep[k] = now
+            ev = {
+                "ts": iso(now),
+                "platform": PLATFORM,
+                "service": "forge",
+                "event_type": "forge.push_velocity",
+                "actor_type": "agent" if agent else "human",
+                "metadata": {
+                    "rule": rule,
+                    "window_s": window,
+                    "count": n,
+                    "threshold": limit,
+                    "repos": int(r["repos"]),
+                    "gitea_user_id": int(r["uid"]),
+                },
+            }
+            passport = passport_from_login(login) if agent else None
+            if passport:  # unknown is absent, never invented (I-12)
+                ev["actor_id"] = passport
+            events.append(ev)
+    return events, keep
 
 
 def main() -> int:
@@ -182,6 +269,14 @@ def main() -> int:
         }
     )
 
+    pv_rows = sql(PV_QUERY.format(h1=int(now) - 3600, h24=int(now) - 86400))
+    pv_events, pv_alerted = push_velocity_events(pv_rows, now, state.get("pv_alerted", {}))
+    for e in pv_events:
+        m = e["metadata"]
+        print(f"[telemetry] WARNING push velocity: gitea user {m['gitea_user_id']} "
+              f"{m['rule']} = {m['count']} > {m['threshold']}")
+    events += pv_events
+
     # ci.job_cancelled: spooled by the janitor (cancel_unrunnable.sh), one JSON per job.
     spool = os.environ.get("JANITOR_SPOOL", "/var/lib/windy-git/janitor-cancelled.jsonl")
     spooled = 0
@@ -264,7 +359,7 @@ def main() -> int:
     with open(STATE + ".tmp", "w") as f:
         json.dump(
             {"last_fin": new_fin, "last_id": new_id, "last_ts": now,
-             "quarantined_unreported": quarantined},
+             "quarantined_unreported": quarantined, "pv_alerted": pv_alerted},
             f,
         )
     os.replace(STATE + ".tmp", STATE)
