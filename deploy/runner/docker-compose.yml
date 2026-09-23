@@ -49,7 +49,19 @@ services:
     mem_limit: 64g
     restart: unless-stopped
 
-  runner:
+  # ── FOUR runners × capacity 1, not one runner × capacity 4 (2026-09-23) ──
+  #
+  # act caches every action repo at /root/.cache/act/<hash> INSIDE the runner
+  # process and re-fetches it at the start of each job. With capacity 4, four
+  # concurrent jobs share that one directory: one job's refresh rewrites it while
+  # another is tarring it into its job container, and the job dies with
+  # `lstat /root/.cache/act/<hash>/…: no such file or directory` on
+  # `actions/setup-node` / `setup-uv` — a failure that reads like a broken
+  # workflow. windy-chat (~20 jobs per push) hit it on 3 jobs in its first run.
+  # `rm -rf /root/.cache/act` only reset the clock. Separate processes get
+  # separate caches, so the race cannot occur. Same total parallelism, same
+  # single capped dind — the blast radius is unchanged.
+  runner: &runner
     # 0.2.11 -> 0.6.1 on 2026-08-14. The bundled act in 0.2.11 only knows
     # `runs.using: node12|node16|node20`, so ANY repo pinning a current action
     # major dies before its first step with "The runs.using key in action.yml
@@ -99,6 +111,30 @@ services:
     mem_limit: 4g
     restart: unless-stopped
 
+  # Each extra runner registers itself on first start (own name, own volume —
+  # the registration lives in /data/.runner, so volumes must never be shared).
+  runner-2:
+    <<: *runner
+    environment: &env2
+      DOCKER_HOST: tcp://dind:2375
+      GITEA_INSTANCE_URL: https://app.windygit.com
+      GITEA_RUNNER_REGISTRATION_TOKEN: ${RUNNER_TOKEN:?set RUNNER_TOKEN}
+      GITEA_RUNNER_NAME: veron-1-2
+      CONFIG_FILE: /config.yaml
+    volumes: [./config.yaml:/config.yaml:ro, runner-data-2:/data]
+  runner-3:
+    <<: *runner
+    environment:
+      <<: *env2
+      GITEA_RUNNER_NAME: veron-1-3
+    volumes: [./config.yaml:/config.yaml:ro, runner-data-3:/data]
+  runner-4:
+    <<: *runner
+    environment:
+      <<: *env2
+      GITEA_RUNNER_NAME: veron-1-4
+    volumes: [./config.yaml:/config.yaml:ro, runner-data-4:/data]
+
 networks:
   jobs:
     # Untrusted job containers live here. No route to the forge.
@@ -107,4 +143,7 @@ networks:
 volumes:
   dind-storage:
   runner-data:
+  runner-data-2:
+  runner-data-3:
+  runner-data-4:
 

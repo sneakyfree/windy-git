@@ -43,7 +43,12 @@ import urllib.request
 #
 # Bulk import belongs on the host anyway: no hairpin through the edge, no
 # Cloudflare ~100s proxy ceiling (G4A.5) on a large clone. Run this on Veron 1.
-GITEA = os.environ.get("GITEA_BASE_URL", "http://localhost:3080")
+#
+# 🔴 Deliberately NOT `GITEA_BASE_URL`: the deploy `.env` sets that to
+# `http://gitea:3000` for the API container, and sourcing `.env` on the host
+# made this script die on DNS *after* a caller had already deleted the mirror it
+# was meant to replace (2026-09-23).
+GITEA = os.environ.get("IMPORT_GITEA_URL", "http://localhost:3080")
 GITEA_TOKEN = os.environ.get("GITEA_ADMIN_TOKEN", "")
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 GITHUB_OWNER = os.environ.get("GITHUB_OWNER", "sneakyfree")

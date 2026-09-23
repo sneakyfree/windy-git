@@ -87,6 +87,46 @@ Per repo, deliberately, when that repo is quiet:
 4. later, when it flips to Windy-Git-first: remove it from `REPOS` *first*,
    repoint its sessions, add a push-mirror back to GitHub
 
+## Private repos: Windy Git IS their CI (permanent, 2026-09-23)
+
+The platform repos stay **private** on GitHub (Grant, 2026-09-23), and private
+repos cannot run GitHub Actions on this account at all. Windy Git is therefore
+their CI permanently, not a stopgap:
+
+    GitHub push ──sync (15 min)──▶ Windy Git ──runner──▶ Veron 1
+         ▲                                                   │
+         └──── commit status  windy-git/<workflow>/<job> ◀───┘   scripts/pr_status_bridge.py
+
+- `pr_status_bridge.py` runs at the end of every sync. It opens a `[GH#N]`
+  mirror PR in Windy Git for every open **same-repo** GitHub PR (so
+  `pull_request` workflows fire), closes it when the GitHub PR closes, and posts
+  each job's result back to GitHub on PR heads and the default-branch head.
+  **Never merge a `[GH#N]` PR here** — merge on GitHub.
+- Fork PRs are never run: their branch is never synced, and untrusted code
+  beside the privileged dind is the open audit finding.
+- Covered repos: `BRIDGE_REPOS` in the script. Public repos are left out on
+  purpose; they run real GitHub Actions and two verdicts per commit is noise.
+- `skipped` jobs post nothing — no green for a job nobody ran.
+
+**Onboarding another private repo** — the promotion steps below, then:
+
+    # on Veron 1, as root
+    set -a; . /srv/windygit/src/.env; set +a
+    python3 scripts/import_from_github.py <repo>          # writable; aborts if the repo exists
+    # disable EVERY deploying workflow before anything is pushed:
+    curl -X PUT -H "Authorization: token $GITEA_ADMIN_TOKEN" \
+      http://localhost:3080/api/v1/repos/windyadmin/<repo>/actions/workflows/deploy.yml/disable
+    # add <repo> to REPOS in sync_from_github.sh AND BRIDGE_REPOS in pr_status_bridge.py
+
+An import fires no push event, so `main` has no verdict until its next commit.
+To get one now: force Windy Git's `main` back one commit, then
+`systemctl start windygit-sync` — the sync pushes it forward and CI fires.
+
+⚠️ **`/actions/tasks` lists only jobs a runner has PICKED UP.** Queued runs are
+invisible there, so a repo can read "0 runs" while work is waiting. The truth is
+`action_run` in the `gitea` database (status 1 success, 2 failure, 5 waiting,
+6 running).
+
 ## ⚠️ Deploy workflows are DISABLED on Windy Git, deliberately
 
 Six workflows fire on `push:` and deploy to production:

@@ -11,7 +11,7 @@ log:
 
 runner:
   file: /data/.runner
-  capacity: 4          # concurrent jobs; Veron has 24 cores, dind is capped at 12
+  capacity: 1          # per runner; parallelism = number of runner services (4). See docker-compose.yml
   timeout: 30m
   shutdown_timeout: 3m
   insecure: false
