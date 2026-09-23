@@ -38,7 +38,7 @@ REPOS = os.environ.get("BRIDGE_REPOS", "").split() or [
 # windy-admin/telemetry -> "Windy Admin"). windy-pro here = its server/web side; the desktop
 # app is Grant-owned and listed in its own section below.
 OWNERS = {
-    "windy-chat": "grantwhitmer-ca", "windy-mail": "Windy Mail", "windy-calendar": "Windy Calender",
+    "windy-chat": "Windy Chat", "windy-mail": "Windy Mail", "windy-calendar": "Windy Calender",
     "Windy-Clone": "Windy Clone", "WindyCloud": "Windy Cloud", "windy-cloud-sites": "Windy Cloud",
     "windy-cloud-domains": "Windy Cloud", "windy-cloud-vps": "Windy Cloud", "windy-search": "Windy Search",
     "windy-connect": "Windy Connect", "windy-drops": "Windy Drops", "windy-registry": "Windy Drops",
