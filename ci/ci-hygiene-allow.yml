@@ -2,4 +2,12 @@
 # a host port. House rule 6 (09-23): installs come from a lockfile. Every entry
 # is an exception and MUST say why. Paths are fnmatch globs from the repo root.
 # Owner: Windy Git lane (13); changes go through the orchestrator.
-allow: []
+allow:
+  - repo: windy-pro
+    paths: [".github/workflows/ci.yml"]
+    # ONLY the old deploy job's two docker lines. That job is `if: false`
+    # (CD boundary, 2026-07), and the compose line runs ON windyword.ai inside
+    # the ssh string. Any other docker step in ci.yml still flags.
+    matches: ['docker build -f account-server/Dockerfile -t windy-pro:', 'docker compose down && docker compose up -d --build']
+    reason: "needs-docker false positive: the deploy job is if: false and its compose runs on the remote host over ssh. Added with the needs-docker rule (orchestrator option A, 09-23)."
+
