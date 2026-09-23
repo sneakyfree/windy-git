@@ -25,7 +25,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 INGEST = os.environ.get("TELEMETRY_INGEST_URL", "https://admin.windyword.ai/v1/events")
 TOKEN = os.environ.get("WINDYGIT_TELEMETRY_TOKEN", "")
@@ -66,7 +66,7 @@ def load_state() -> dict:
 
 
 def iso(epoch: float) -> str:
-    return datetime.fromtimestamp(epoch, timezone.utc).isoformat().replace("+00:00", "Z")
+    return datetime.fromtimestamp(epoch, UTC).isoformat().replace("+00:00", "Z")
 
 
 def main() -> int:
