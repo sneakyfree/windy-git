@@ -33,6 +33,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 STATE_PATH = os.environ.get("CANARY_STATE", "canary-state.json")
@@ -46,6 +47,16 @@ ALERT_FROM = os.environ.get("CANARY_ALERT_FROM", "office@thewindstorm.uk")
 LOGIN_WARN_SECONDS = float(os.environ.get("CANARY_LOGIN_WARN_S", "35"))
 TIMEOUT = float(os.environ.get("CANARY_TIMEOUT_S", "60"))
 
+# Journey cleanup rule (orchestrator, 2026-09-23). The login probe creates a hub
+# session (access + refresh token) every run, so it must end it. The hub's
+# /auth/logout revokes the token AND every refresh token of the account
+# (verified live: access 401, refresh 401 after it). So the next successful
+# logout also heals anything a failed run left behind; no ledger needed.
+LOGOUT_URL = "https://account.windyword.ai/api/v1/auth/logout"
+LOGOUT_ATTEMPTS = 8       # retried on 5xx / no response only
+LOGOUT_GAP_S = 15.0
+LOGOUT_GONE = (401, 404, 410)  # the session is already over = done
+
 
 @dataclass
 class Result:
@@ -54,6 +65,7 @@ class Result:
     detail: str
     seconds: float = 0.0
     user_visible: str = ""
+    followups: list[Result] = field(default_factory=list)
 
 
 @dataclass
@@ -68,6 +80,8 @@ class Check:
     # When True this check INVERTS: a 2xx is a critical failure (a security
     # control opened) and a 401/403/503 is the healthy, expected outcome.
     must_refuse: bool = False
+    # Runs on a 2xx with the response body; returns follow-up results (cleanup).
+    after: Callable[[bytes], list[Result]] | None = None
 
 
 def _probe(c: Check) -> Result:
@@ -91,13 +105,18 @@ def _probe(c: Check) -> Result:
                               elapsed, c.what_it_proves)
             if r.status >= 400:
                 return Result(c.name, "down", f"HTTP {r.status}", elapsed, c.what_it_proves)
+            raw = r.read()
             warn = c.warn_seconds
             if warn and elapsed > warn:
-                return Result(
+                res = Result(
                     c.name, "slow", f"HTTP {r.status} in {elapsed:.1f}s (warn >{warn:.0f}s)",
                     elapsed, c.what_it_proves,
                 )
-            return Result(c.name, "ok", f"HTTP {r.status} in {elapsed:.1f}s", elapsed, c.what_it_proves)
+            else:
+                res = Result(c.name, "ok", f"HTTP {r.status} in {elapsed:.1f}s", elapsed, c.what_it_proves)
+            if c.after:
+                res.followups = c.after(raw)
+            return res
     except urllib.error.HTTPError as e:
         if c.must_refuse and e.code in (401, 403, 503):
             return Result(c.name, "ok", f"correctly refused (HTTP {e.code})",
@@ -108,6 +127,52 @@ def _probe(c: Check) -> Result:
             c.name, "down", f"{type(e).__name__}: {str(e)[:80]}",
             time.monotonic() - start, c.what_it_proves,
         )
+
+
+def logout(token: str, *, attempts: int = LOGOUT_ATTEMPTS, gap: float = LOGOUT_GAP_S,
+           sleep: Callable[[float], None] = time.sleep) -> Result:
+    """End the session the login probe opened. Honest: never ok unless proven."""
+    what = "the canary leaves no live session behind (journey cleanup rule)"
+    headers = {
+        "User-Agent": "windy-git-canary/1.0",
+        "X-Windy-Synthetic": "1",
+        "Authorization": f"Bearer {token}",
+    }
+    start = time.monotonic()
+    last = "no attempt"
+    for i in range(attempts):
+        if i:
+            sleep(gap)
+        req = urllib.request.Request(LOGOUT_URL, data=b"", method="POST", headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
+                return Result("identity.logout", "ok", f"session ended (HTTP {r.status})",
+                              time.monotonic() - start, what)
+        except urllib.error.HTTPError as e:
+            if e.code in LOGOUT_GONE:
+                return Result("identity.logout", "ok", f"session already over (HTTP {e.code})",
+                              time.monotonic() - start, what)
+            if e.code < 500:  # a 4xx won't change on retry: fail fast
+                return Result("identity.logout", "down", f"CLEANUP FAILED: HTTP {e.code}",
+                              time.monotonic() - start, what)
+            last = f"HTTP {e.code}"
+        except Exception as e:  # noqa: BLE001 — no response / timeout: retry
+            last = f"{type(e).__name__}"
+    return Result("identity.logout", "down",
+                  f"CLEANUP FAILED after {attempts} tries: {last} (next run's logout heals it)",
+                  time.monotonic() - start, what)
+
+
+def _logout_after_login(raw: bytes) -> list[Result]:
+    try:
+        token = (json.loads(raw or b"{}") or {}).get("token")
+    except ValueError:
+        token = None
+    if not token:
+        return [Result("identity.logout", "down",
+                       "CLEANUP FAILED: login returned no token to log out with",
+                       0.0, "the canary leaves no live session behind (journey cleanup rule)")]
+    return [logout(token)]
 
 
 def build_checks() -> list[Check]:
@@ -187,6 +252,7 @@ def build_checks() -> list[Check]:
                 method="POST",
                 body={"email": email, "password": pw},
                 warn_seconds=LOGIN_WARN_SECONDS,
+                after=_logout_after_login,
             )
         )
     return checks
@@ -263,7 +329,10 @@ def main() -> int:
     args = ap.parse_args()
 
     previous = load_state()
-    results = [_probe(c) for c in build_checks()]
+    results = []
+    for c in build_checks():
+        r = _probe(c)
+        results += [r, *r.followups]
 
     print(f"windy canary — {time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}\n")
     for r in results:
