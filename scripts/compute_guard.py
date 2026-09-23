@@ -130,11 +130,20 @@ def _git(bare: Path, *args: str) -> str:
     ).stdout
 
 
-def scan_tree(repo: str, bare: Path, sha: str, allow: list[dict]) -> list[Finding]:
+def _default_path_ok(path: str) -> bool:
+    return not SKIP.search(path)
+
+
+def scan_tree(repo: str, bare: Path, sha: str, allow: list[dict], *, line_fn=None,
+              path_ok=None, prefilter: str | None = None) -> list[Finding]:
     """Every line in the tree at `sha` (default branch: the baseline)."""
     # A cheap prefilter by git, then the real rules in Python.
-    pre = "|".join([re.escape(h) for h in HOSTS] + KEYS + ["anthropic", "openai", "groq", "mistral",
-                   "generativeai", "genai", "cohere", "together", "cerebras", "litellm"])
+    # Other guards (ci_hygiene) reuse this walker with their own line rules.
+    line_fn = line_fn or scan_line
+    path_ok = path_ok or _default_path_ok
+    pre = prefilter or "|".join([re.escape(h) for h in HOSTS] + KEYS + [
+        "anthropic", "openai", "groq", "mistral", "generativeai", "genai", "cohere",
+        "together", "cerebras", "litellm"])
     try:
         out = _git(bare, "grep", "-nIE", "-e", pre, sha, "--", ".")
     except subprocess.CalledProcessError as e:
@@ -148,24 +157,26 @@ def scan_tree(repo: str, bare: Path, sha: str, allow: list[dict]) -> list[Findin
             _, path, line, text = raw.split(":", 3)
         except ValueError:
             continue
-        if SKIP.search(path) or allowed(repo, path, allow):
+        if not path_ok(path) or allowed(repo, path, allow):
             continue
-        for kind, match in scan_line(path, text):
+        for kind, match in line_fn(path, text):
             found.append(Finding(path, int(line), kind, match))
     return found
 
 
-def scan_added(repo: str, bare: Path, base_ref: str, sha: str, allow: list[dict]) -> list[Finding]:
+def scan_added(repo: str, bare: Path, base_ref: str, sha: str, allow: list[dict], **kw) -> list[Finding]:
     """Only the lines a PR adds, vs its merge-base with the default branch."""
     mb = _git(bare, "merge-base", base_ref, sha).strip()
     diff = _git(bare, "diff", "-U0", "--no-color", "--no-ext-diff", mb, sha)
-    return parse_added(repo, diff, allow)
+    return parse_added(repo, diff, allow, **kw)
 
 
 HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@")
 
 
-def parse_added(repo: str, diff: str, allow: list[dict]) -> list[Finding]:
+def parse_added(repo: str, diff: str, allow: list[dict], *, line_fn=None, path_ok=None) -> list[Finding]:
+    line_fn = line_fn or scan_line
+    path_ok = path_ok or _default_path_ok
     found, path, line = [], None, 0
     for raw in diff.splitlines():
         if raw.startswith("+++ "):
@@ -179,8 +190,8 @@ def parse_added(repo: str, diff: str, allow: list[dict]) -> list[Finding]:
         if path is None or raw.startswith("--- "):
             continue
         if raw.startswith("+"):
-            if not (SKIP.search(path) or allowed(repo, path, allow)):
-                for kind, match in scan_line(path, raw[1:]):
+            if path_ok(path) and not allowed(repo, path, allow):
+                for kind, match in line_fn(path, raw[1:]):
                     found.append(Finding(path, line, kind, match))
             line += 1
     return found

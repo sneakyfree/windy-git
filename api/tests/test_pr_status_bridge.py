@@ -382,3 +382,11 @@ def test_guard_that_cannot_run_posts_nothing(fake, monkeypatch):
     monkeypatch.setitem(sys.modules, "compute_guard", _Guard(None))
     bridge.post_compute_guard("windy-chat", SHA, "main", True)
     assert f.posted == []
+
+
+def test_ci_hygiene_posts_under_its_own_context(fake, monkeypatch):
+    f = fake(statuses=[{"context": "windy-git/compute-guard", "state": "success", "description": "WARN 1"}])
+    monkeypatch.setitem(sys.modules, "ci_hygiene", _Guard([_F()]))
+    bridge.post_ci_hygiene("windy-chat", SHA, "main", True)
+    # the compute-guard status with the same description must not suppress it
+    assert [(p["context"], p["description"]) for p in f.posted] == [("windy-git/ci-hygiene", "WARN 1")]

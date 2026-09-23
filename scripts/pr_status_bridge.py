@@ -344,34 +344,45 @@ def post_statuses(repo: str, sha: str) -> None:
 
 
 GUARD_CTX = "windy-git/compute-guard"
+HYGIENE_CTX = "windy-git/ci-hygiene"
 
 
 def post_compute_guard(repo: str, sha: str, default_branch: str, is_default_head: bool) -> None:
-    """Windy Mind is the only door to AI compute: flag direct provider use (warn-only).
+    """Windy Mind is the only door to AI compute: flag direct provider use (warn-only)."""
+    _post_guard("compute_guard", GUARD_CTX, repo, sha, default_branch, is_default_head)
 
-    Non-fatal and never a fake OK: if the guard can't run, nothing is posted.
-    """
+
+def post_ci_hygiene(repo: str, sha: str, default_branch: str, is_default_head: bool) -> None:
+    """House rule 6: lockfile-only installs, pinned images, no host-port services (warn-only)."""
+    _post_guard("ci_hygiene", HYGIENE_CTX, repo, sha, default_branch, is_default_head)
+
+
+def _post_guard(modname: str, ctx: str, repo: str, sha: str, default_branch: str,
+                is_default_head: bool) -> None:
+    """One code path for every repo-scanning guard. Non-fatal and never a fake OK:
+    if the guard can't run, nothing is posted."""
     try:
-        import compute_guard as cg  # same directory; loaded lazily so the bridge never depends on it
+        import importlib
 
-        findings = cg.check(repo, sha, default_branch, is_default_head)
-    except Exception as e:  # noqa: BLE001 — the guard must never break CI signals
-        print(f"  {repo}@{sha[:7]} compute-guard skipped ({type(e).__name__}: {str(e)[:80]})")
+        g = importlib.import_module(modname)  # same directory; lazy so the bridge never depends on it
+        findings = g.check(repo, sha, default_branch, is_default_head)
+    except Exception as e:  # noqa: BLE001 — a guard must never break CI signals
+        print(f"  {repo}@{sha[:7]} {ctx} skipped ({type(e).__name__}: {str(e)[:80]})")
         return
     if findings is None:
         return
-    state, desc, first = cg.status_for(findings, whole_tree=is_default_head)
+    state, desc, first = g.status_for(findings, whole_tree=is_default_head)
     st, existing = github("GET", f"/repos/{GH_OWNER}/{repo}/commits/{sha}/statuses?per_page=100")
     for s in existing or []:  # newest first: compare the latest guard status only
-        if s["context"] == GUARD_CTX:
+        if s["context"] == ctx:
             if (s["state"], s.get("description")) == (state, desc):
                 return
             break
     url = (f"{PUBLIC}/{WG_OWNER}/{repo}/src/commit/{sha}/{first.path}#L{first.line}"
            if first else f"{PUBLIC}/{WG_OWNER}/{repo}/src/commit/{sha}")
     st, _ = github("POST", f"/repos/{GH_OWNER}/{repo}/statuses/{sha}",
-                   {"state": state, "context": GUARD_CTX, "description": desc, "target_url": url})
-    print(f"  {repo}@{sha[:7]} {GUARD_CTX} = {state} ({len(findings)} finding(s)) -> {st}")
+                   {"state": state, "context": ctx, "description": desc, "target_url": url})
+    print(f"  {repo}@{sha[:7]} {ctx} = {state} ({len(findings)} finding(s)) -> {st}")
 
 
 def main() -> int:
@@ -392,6 +403,7 @@ def main() -> int:
             for sha in dict.fromkeys(shas):
                 post_statuses(repo, sha)
                 post_compute_guard(repo, sha, default_branch, sha == default_head)
+                post_ci_hygiene(repo, sha, default_branch, sha == default_head)
         except Exception as e:  # one repo's failure must not hide the others'
             print(f"  FAILED {repo}: {e}")
             failed = 1

@@ -1,0 +1,5 @@
+# CI hygiene allow-list: installs that may float, or services that may publish
+# a host port. House rule 6 (09-23): installs come from a lockfile. Every entry
+# is an exception and MUST say why. Paths are fnmatch globs from the repo root.
+# Owner: Windy Git lane (13); changes go through the orchestrator.
+allow: []
