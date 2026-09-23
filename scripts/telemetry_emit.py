@@ -135,6 +135,7 @@ def main() -> int:
           (select coalesce(extract(epoch from now())::bigint - min(created), 0)
              from action_run_job where status in (5, 7)) as oldest_waiting_s""")[0]
     meta = {k: int(v) for k, v in h.items()}
+    meta["interval_s"] = int(now - since)  # ecosystem-standard key
     for k in ("repos_synced", "repos_sync_failed", "statuses_posted", "bridge_errors"):
         v = os.environ.get(f"TELEMETRY_{k.upper()}")
         if v is not None and v.isdigit():  # absent = couldn't count; never invent 0
@@ -149,6 +150,33 @@ def main() -> int:
             "metadata": meta,
         }
     )
+
+    # ci.job_cancelled: spooled by the janitor (cancel_unrunnable.sh), one JSON per job.
+    spool = os.environ.get("JANITOR_SPOOL", "/var/lib/windy-git/janitor-cancelled.jsonl")
+    spooled = 0
+    try:
+        with open(spool) as f:
+            for line in f:
+                try:
+                    m = json.loads(line)
+                except ValueError:
+                    continue
+                events.append(
+                    {
+                        "ts": iso(now),
+                        "platform": PLATFORM,
+                        "service": SERVICE,
+                        "event_type": "ci.job_cancelled",
+                        "actor_type": "system",
+                        "metadata": {
+                            k: m[k]
+                            for k in ("repo", "workflow", "job", "reason", "runs_on", "waited_s")
+                        },
+                    }
+                )
+                spooled += 1
+    except OSError:
+        pass
 
     if dry:
         print(json.dumps({"events": events}, indent=1)[:4000])
@@ -183,6 +211,8 @@ def main() -> int:
             print(f"[telemetry] FAILED ingest: {e.reason}")
             return 1
 
+    if spooled:
+        open(spool, "w").close()  # only after every batch was accepted
     os.makedirs(os.path.dirname(STATE), exist_ok=True)
     new_last = max([j["id"] for j in jobs], default=last_job)
     with open(STATE + ".tmp", "w") as f:

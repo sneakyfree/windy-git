@@ -15,17 +15,29 @@ WITH dead AS (
      AND to_timestamp(j.created) < now() - interval '30 minutes'
      AND EXISTS (SELECT 1 FROM jsonb_array_elements_text(j.runs_on::jsonb) l
                  WHERE l NOT IN ('veron-1', 'linux-x64', 'self-hosted', 'linux', 'x64'))
-  RETURNING j.run_id
+  RETURNING j.id, j.run_id, j.name, j.runs_on, j.created
+), runs AS (
+  UPDATE action_run r
+     SET status = CASE
+           WHEN EXISTS (SELECT 1 FROM action_run_job x WHERE x.run_id = r.id AND x.status = 2) THEN 2
+           WHEN EXISTS (SELECT 1 FROM action_run_job x WHERE x.run_id = r.id AND x.status IN (5, 6, 7)
+                          AND x.id NOT IN (SELECT id FROM dead)) THEN r.status
+           ELSE 3 END,
+         stopped = CASE WHEN r.stopped = 0 THEN extract(epoch from now())::bigint ELSE r.stopped END
+   WHERE r.id IN (SELECT DISTINCT run_id FROM dead)
+  RETURNING r.id
 )
-UPDATE action_run r
-   SET status = CASE
-         WHEN EXISTS (SELECT 1 FROM action_run_job x WHERE x.run_id = r.id AND x.status = 2) THEN 2
-         WHEN EXISTS (SELECT 1 FROM action_run_job x WHERE x.run_id = r.id AND x.status IN (5, 6, 7)) THEN r.status
-         WHEN EXISTS (SELECT 1 FROM action_run_job x WHERE x.run_id = r.id AND x.status = 3) THEN 3
-         ELSE 1 END,
-       stopped = CASE WHEN r.stopped = 0 THEN extract(epoch from now())::bigint ELSE r.stopped END
- WHERE r.id IN (SELECT DISTINCT run_id FROM dead)
-RETURNING r.id;
+-- One JSON line per cancelled job: the telemetry emitter ships these as
+-- ci.job_cancelled (declared with Telemetry Boss, 2026-09-23).
+SELECT json_build_object(
+         'repo', p.lower_name,
+         'workflow', regexp_replace(r.workflow_id, '\.ya?ml$', ''),
+         'job', d.name,
+         'reason', 'unrunnable_label',
+         'runs_on', (SELECT string_agg(l, ',') FROM jsonb_array_elements_text(d.runs_on::jsonb) l),
+         'waited_s', (extract(epoch from now())::bigint - d.created))::text
+  FROM dead d JOIN action_run r ON r.id = d.run_id JOIN repository p ON p.id = r.repo_id
+ WHERE (SELECT count(*) FROM runs) >= 0;
 
 -- Jobs BLOCKED on `needs:` inside a run that has already finished (a needed job
 -- failed): Gitea leaves them status 7 forever. They were never going to run;
