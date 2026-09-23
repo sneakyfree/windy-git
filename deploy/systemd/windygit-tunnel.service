@@ -1,0 +1,16 @@
+[Unit]
+Description=Windy Git - Cloudflare Tunnel (the only ingress; no inbound port is opened)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+ExecStart=/usr/bin/cloudflared --no-autoupdate --config /etc/cloudflared/config.yml tunnel run
+Restart=always
+RestartSec=5
+# G1.4 - bounded, so a misbehaving ingress can never starve Grant's workstation.
+MemoryMax=512M
+CPUQuota=100%
+
+[Install]
+WantedBy=multi-user.target

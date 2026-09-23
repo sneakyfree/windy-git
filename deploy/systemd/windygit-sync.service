@@ -1,0 +1,12 @@
+[Unit]
+Description=Sync GitHub -> Windy Git (Phase 1: GitHub is the source of truth)
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/srv/windygit/src
+EnvironmentFile=/srv/windygit/src/.env
+# GITHUB_TOKEN is set on the host only (root-only unit file / .env) — NEVER commit it.
+Environment=GITHUB_OWNER=sneakyfree
+ExecStart=/bin/bash /srv/windygit/src/scripts/sync_from_github.sh
+Nice=10

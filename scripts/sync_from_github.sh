@@ -40,6 +40,12 @@ FAILED=0
 # it flips to Windy-Git-first, or the sync will fight its authors and win.
 REPOS="${SYNC_REPOS:-windy-calendar windy-search windy-registry Windy-Clone WindyCloud windy-cloud-sites windy-mind eternitas windy-agent windy-git windy-chat windy-mail windy-connect windy-drops windy-code-web windy-code windy-traveler windy-translate windytranslate-site windytraveler-site windy-hand windy-cloud-domains windy-cloud-vps windytalk windy-pro}"
 
+# Repos whose TAGS must not reach Windy Git. A tag push fires `on: push: tags`
+# workflows; windy-pro's build-electron is a matrix over ubuntu/macos/windows-
+# latest, labels no runner here has, so every leg would queue forever (and
+# queued jobs are invisible in /actions/tasks). Releases are built elsewhere.
+NO_TAGS="${SYNC_NO_TAGS:-windy-pro}"
+
 mkdir -p "$WORK"
 log() { printf '[sync %s] %s\n' "$(date -u +%H:%M:%SZ)" "$*"; }
 
@@ -63,7 +69,7 @@ for r in $REPOS; do
 
   if git --git-dir="$bare" push --quiet --force \
        "https://${WG_OWNER}:${GITEA_ADMIN_TOKEN}@${WG}/${WG_OWNER}/${r}.git" \
-       '+refs/heads/*:refs/heads/*' '+refs/tags/*:refs/tags/*' 2>/dev/null; then
+       '+refs/heads/*:refs/heads/*' $([[ " $NO_TAGS " == *" $r "* ]] || echo '+refs/tags/*:refs/tags/*') 2>/dev/null; then
     log "$r ok (${before:0:7})"
   else
     log "FAILED push $r -> windy git"; FAILED=1

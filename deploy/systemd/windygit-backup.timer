@@ -1,0 +1,12 @@
+[Unit]
+Description=Nightly Windy Git backup
+
+[Timer]
+OnCalendar=*-*-* 04:17:00
+# Grant's workstation is not always on at 04:17. Without this a missed window
+# is simply skipped and the backup silently never runs.
+Persistent=true
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target
