@@ -12,7 +12,8 @@ log:
 runner:
   file: /data/.runner
   capacity: 1          # per runner; parallelism = number of runner services (6). See docker-compose.yml
-  timeout: 30m
+  timeout: 90m          # hard ceiling per job. eternitas's serial pytest is ~50 min; keep
+                        # timeout-minutes in each workflow — a hang still reads as a hang
   shutdown_timeout: 3m
   insecure: false
   fetch_timeout: 5s

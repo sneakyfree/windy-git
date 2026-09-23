@@ -7,7 +7,7 @@ authentication bypass, not a shortcut. This module is what lets it say yes.
 The token it accepts is the hub's ACCESS token, as observed live 2026-09-23:
 
     header  {alg: RS256, typ: JWT, kid: <published at /.well-known/jwks.json>}
-    claims  iss = "windy-identity"   ← NOT the discovery doc's issuer URL
+    claims  iss = "windy-identity"   (contract v1 also allows the discovery URL)
             type = "human", exp - iat = 900 s
             sub = per-row user id    ← NOT the cross-product identity
             windy_identity_id = the Windy Account UUID (what Gitea's OIDC links on)
@@ -18,17 +18,19 @@ What it refuses, by construction:
 * **Anything but RS256.** One algorithm, never a list. Closes `alg: none` and
   HS256-with-the-public-key confusion.
 * **An unknown `kid`**, a wrong issuer, an expired token — library-checked.
-* **An id_token used as a bearer.** id_tokens carry iss = the discovery URL and
-  aud = some relying party; they prove a login happened to *someone else's*
-  client, not that this caller may act here.
+* **An id_token used as a bearer.** id_tokens prove a login happened to a
+  relying party (for the forge: aud `windy-git`), not that this caller may act
+  here. They carry no `type` and no `windy_identity_id`, and their aud is a
+  client id, not the product name `windy_git` — any one of the three refuses.
 * **A non-human `type`.** An agent's authority comes from its EPT and a live
   Eternitas lookup, never from a hub token dressed as a person.
 * **A token with no `windy_identity_id`.** `sub` is a different namespace (the
   per-row user id); falling back to it would silently mint identities that
   match nothing Gitea knows.
 
-`aud` (SSO matrix, lane 8c): the hub will start emitting it once every
-consumer is ready. Today it is optional; when present it MUST name Windy Git.
+`aud` (token contract v1, lane 8c): an array; first-party tokens list every
+product and Windy Git's is `windy_git`. Optional until the hub emits it; when
+present it MUST include `windy_git`.
 `hub_require_aud=True` makes it mandatory — flip it once the hub emits it.
 """
 
@@ -117,7 +119,9 @@ def verify_hub_token(
         if not presented & set(audiences):
             raise HubTokenInvalid(f"aud {sorted(presented)} does not name Windy Git")
 
-    if claims.get("type", "human") != "human":
+    # REQUIRED, not defaulted: id_tokens carry no `type`, and this is one of the
+    # two claims (with windy_identity_id) that keep them from acting as bearers.
+    if claims.get("type") != "human":
         raise HubTokenInvalid(f"token type {claims.get('type')!r} is not a human access token")
 
     identity = claims.get("windy_identity_id") or claims.get("windyIdentityId")

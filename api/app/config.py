@@ -54,12 +54,15 @@ class Settings(BaseSettings):
     # ---- account-server OIDC (human identity) -----------------------------
     account_server_base_url: str = "https://account.windyword.ai"
     # G3.2 — what a hub ACCESS token must say about itself (see hub_jwt.py).
-    # The hub signs access tokens with iss "windy-identity" (observed
-    # 2026-09-23), not its discovery-doc issuer URL; id_tokens carry the URL and
-    # are deliberately NOT accepted as bearers.
-    hub_issuers: list[str] = ["windy-identity"]
-    # SSO matrix (lane 8c): once the hub emits `aud`, it must name one of these.
-    hub_audiences: list[str] = ["windy-git", "https://api.windygit.com"]
+    # Token contract v1 (lane 8c, 2026-09-23): access tokens may carry either
+    # issuer. id_tokens are kept out by `type` + `windy_identity_id` + aud, not
+    # by issuer.
+    hub_issuers: list[str] = ["windy-identity", "https://account.windyword.ai"]
+    # Contract v1: aud is an ARRAY; first-party tokens list every product, and
+    # Windy Git's entry is `windy_git` (underscore). ⚠️ NEVER add "windy-git"
+    # (hyphen): that is Gitea's OIDC client_id, so an id_token minted for the
+    # forge would carry it and pass as a bearer here.
+    hub_audiences: list[str] = ["windy_git"]
     # Flip to True once the hub emits aud on every access token.
     hub_require_aud: bool = False
 

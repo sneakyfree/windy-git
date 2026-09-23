@@ -314,7 +314,7 @@ def test_g36_unverified_human_jwt_is_refused_in_production():
     from api.app.config import Settings
 
     assert Settings().require_verified_jwt is True
-    assert Settings().hub_issuers == ["windy-identity"]
+    assert "windy-git" not in Settings().hub_audiences  # Gitea's client_id: id_token confusion
 
 
 def test_no_auth_bypass_env_var_anywhere():

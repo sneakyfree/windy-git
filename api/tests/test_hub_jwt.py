@@ -99,8 +99,20 @@ async def test_expired_token_is_refused():
 @pytest.mark.asyncio
 async def test_wrong_issuer_and_id_tokens_are_refused():
     await _refused(_sign(_claims(iss="https://evil.example")))
-    # An id_token (discovery-URL issuer, a relying party's aud) is not a bearer.
-    await _refused(_sign(_claims(iss="https://account.windyword.ai", aud="some-other-client")))
+    # Contract v1: the discovery-URL issuer is legal for ACCESS tokens...
+    c = await _caller(_sign(_claims(iss="https://account.windyword.ai")))
+    assert c.identity_id == IDENTITY
+    # ...but an id_token minted for the forge (aud = Gitea's client id
+    # "windy-git", no type, sub = identity) must never act as a bearer here.
+    id_token = _claims(
+        iss="https://account.windyword.ai",
+        aud="windy-git",
+        type=None,
+        windy_identity_id=None,
+        sub=IDENTITY,
+    )
+    await _refused(_sign(id_token))
+    await _refused(_sign(dict(id_token, windy_identity_id=IDENTITY, type="human")))
 
 
 @pytest.mark.asyncio
@@ -120,8 +132,9 @@ async def test_hs256_confusion_is_refused():
 
 
 @pytest.mark.asyncio
-async def test_non_human_type_is_refused():
+async def test_non_human_or_missing_type_is_refused():
     await _refused(_sign(_claims(type="agent")))
+    await _refused(_sign(_claims(type=None)))
 
 
 @pytest.mark.asyncio
@@ -133,15 +146,15 @@ async def test_missing_windy_identity_is_refused_not_read_from_sub():
 async def test_aud_is_tolerated_when_it_names_windy_git_and_refused_otherwise():
     """PyJWT rejects ANY aud-bearing token when no audience is configured — the
     trap that would break the day the hub starts emitting aud."""
-    c = await _caller(_sign(_claims(aud=["windy-chat", "windy-git"])))
+    c = await _caller(_sign(_claims(aud=["windy_chat", "windy_git", "windy_mail"])))
     assert c.identity_id == IDENTITY
-    await _refused(_sign(_claims(aud="windy-chat")))
+    await _refused(_sign(_claims(aud=["windy_chat"])))
 
 
 @pytest.mark.asyncio
 async def test_require_aud_refuses_tokens_without_it():
     await _refused(_sign(_claims()), hub_require_aud=True)
-    c = await _caller(_sign(_claims(aud="windy-git")), hub_require_aud=True)
+    c = await _caller(_sign(_claims(aud=["windy_git"])), hub_require_aud=True)
     assert c.identity_id == IDENTITY
 
 
