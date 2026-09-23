@@ -2,11 +2,17 @@
 
 Read this before touching anything. Then read `DNA_STRAND_MASTER_PLAN.md`, which is the source of truth.
 
-## Current state
+## Current state (2026-09-23)
 
-**GENESIS.** No code. No `make dev` yet — building it is codon **G0.8**.
+**LIVE on Veron 1** — `app.windygit.com` (Gitea 1.24.6, Windy SSO only),
+`api.windygit.com` (our plane: humans via hub JWKS, agents via Eternitas EPT),
+`models.windygit.com`. Strands G0–G5, G7, G11 done; see the plan for the rest.
 
-The next work is Strand **G0** (cell substrate), then **G1** (Veron 1 host + Cloudflare Tunnel), then **G2** (Gitea, stock and branded), then **G3** (identity), then **G4** (storage). G0–G4 are sequential. G5–G12 are concurrent once G4 lands.
+It is also **the permanent CI for the private platform repos** (GitHub Actions
+cannot run on them): `scripts/sync_from_github.sh` + `scripts/pr_status_bridge.py`,
+onboarding in `docs/CUTOVER.md`, operations in `docs/RUNBOOK-VERON.md`.
+
+Standing dev checkout: **OC5 `~/windy-git`**. Deploy copy: Veron `/srv/windygit/src`.
 
 ## The rules that will get you reverted if you break them
 
@@ -28,7 +34,7 @@ The next work is Strand **G0** (cell substrate), then **G1** (Veron 1 host + Clo
 - Errors are 4-field repair pointers: `{code, speak, machine_cause, remediation_tool}`. No exceptions, including validation errors.
 - Every tool response carries `state_proof` + `next_actions`.
 - Telemetry `actor_type` comes from the enum `{human, agent, system}`. **`'service'` is not legal** — it 422s and silently drops the whole batch. A sibling service is losing telemetry to exactly this today.
-- Runner labels are explicit and pinned. **`ubuntu-latest` is banned** — all four `windy-registry` workflows use it and every run fails.
+- Runner labels are explicit and pinned: `[self-hosted, linux, x64]` or `veron-1`. **`ubuntu-latest` is banned** — no runner here has it, so the job queues forever.
 
 ## Membrane
 

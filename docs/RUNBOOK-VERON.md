@@ -1,6 +1,10 @@
 # RUNBOOK — Windy Git on Veron 1 (rung R0)
 
-Host `Veron-1-5090`, WireGuard `10.10.0.6`, alias `wg-veron`. Passwordless sudo.
+Host `Veron-1-5090`, WireGuard `10.10.0.6`, alias `wg-veron` (or `ts-veron`). Passwordless sudo.
+
+**Checkouts (one-repo doctrine):** the ONE standing dev checkout is **OC5
+`~/windy-git`** (platform repos live on OC5). `/srv/windygit/src` on Veron is the
+*deploy* copy — it holds no local work. Nothing else should exist.
 
 ⛔ **Kit 0 is never a host for this service** (D-4). `api/app/main.py` refuses to
 boot in production if it finds itself on `72.60.118.54`.
@@ -15,6 +19,9 @@ boot in production if it finds itself on `72.60.118.54`.
 | `/etc/cloudflared/config.yml` | tunnel ingress |
 | `/etc/cloudflared/windy-git.json` | tunnel credentials, mode 600 |
 | `/srv/windygit/src/.env` | secrets, mode 600, **never committed** |
+| `/srv/windygit/git/gitea/conf/app.ini` | Gitea's persisted config — env-to-ini SETS but never UNSETS; edit here when removing a `GITEA__*` var |
+| `/srv/windygit/sync/*.git` | bare staging copies the GitHub→Windy Git sync pushes from |
+| `/srv/windygit/src/deploy/runner/.env` | `RUNNER_TOKEN` — a **windyadmin user-level** registration token (not instance-level; see CI) |
 
 ## Ports — all loopback, on purpose
 
@@ -41,11 +48,14 @@ sudo systemctl status windygit-tunnel
 
 ```bash
 ssh wg-veron
-cd /srv/windygit/src && git pull
+cd /srv/windygit/src && git fetch origin && git merge --ff-only origin/main   # READ the output
 export COMMIT_SHA_BUILD=$(git rev-parse HEAD) BUILT_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-sudo -E docker compose up -d --build
+sudo -E docker compose up -d --build --no-deps api      # API only: no forge restart
 curl -s https://api.windygit.com/version    # MUST equal git rev-parse HEAD
 ```
+
+A Gitea config change (compose `GITEA__*`) needs `sudo docker compose up -d --no-deps gitea`
+— a ~6 s forge outage; running CI jobs survive it. Check `app.ini` afterwards.
 
 ⚠️ **Never `git pull -q` in a deploy script.** `-q` hides *errors*, not just
 noise. On 2026-08-14 a divergent branch made `pull -q` fail silently and the
@@ -71,6 +81,41 @@ curl -s https://api.windygit.com/health/full | jq     # degraded is HONEST, not 
 curl -sI https://app.windygit.com/ | head -1          # Gitea, 200
 sudo ss -tlnp | grep -E "3080|8600"                   # both must be 127.0.0.1
 ```
+
+## Timers (host systemd units — the sync timer is NOT in the repo)
+
+| Unit | Cadence | Does |
+|---|---|---|
+| `windygit-sync.timer` | every 5 min (`OnUnitActiveSec`) | GitHub → Windy Git for `REPOS` in `scripts/sync_from_github.sh`, then `scripts/pr_status_bridge.py` (mirror PRs + GitHub commit statuses). A manual `systemctl start` RESETS the 5-min clock. |
+| `windygit-backup.timer` | nightly | `git bundle` + pg_dump → R2, 30-day retention |
+| `windygit-ci-prune.timer` | every 6 h | `deploy/runner/prune.sh` — CI dind storage, 60 GB cap |
+| `windygit-tunnel.service` | always | the only ingress |
+
+## CI (Gitea Actions) — see `docs/CUTOVER.md` for onboarding a repo
+
+- **Six runners × capacity 1** (`deploy/runner/docker-compose.yml`), one shared
+  dind capped at 12 cores / 64 GB. Capacity >1 in one runner shares
+  `/root/.cache/act` between jobs and races (`lstat …: no such file`).
+- **Runners are scoped to the `windyadmin` user** (`action_runner.owner_id=1`),
+  so only first-party repos run. A repo owned by anyone else — a plane-created
+  agent or `u-system` repo — gets NO runner. Re-registrations inherit this
+  because `RUNNER_TOKEN` is user-level.
+- Job ceiling 90 min (`config.yaml` `runner.timeout`); a `config.yaml` change
+  needs each runner restarted **while idle** — `compose up -d` won't recreate it.
+- `/actions/tasks` lists only PICKED-UP jobs. Queue truth is `action_run_job`
+  in the `gitea` DB: `sudo docker exec -i windy-git-db-1 psql -U windygit -d gitea`
+  (status 1 ok · 2 fail · 3 cancelled · 4 skipped · 5 waiting · 6 running).
+- Job logs are in R2, not on disk. `GET /api/v1/repos/{o}/{r}/actions/jobs/{JOB_ID}/logs`
+  takes the `action_run_job` id, not the task id.
+
+## Sign-in posture
+
+- Windy SSO only: password + passkey forms OFF, `ACCOUNT_LINKING=login`,
+  **auto-registration OFF** — opening the forge to non-Grant users is a §7
+  Grant decision.
+- **Break-glass:** `sudo docker exec -u git windy-git-gitea-1 gitea admin user generate-access-token --username windyadmin --token-name <name> --scopes <scopes> --raw`
+  (delete it after: `delete from access_token where name='<name>'` in the gitea DB —
+  Gitea refuses token management over token auth).
 
 ## Troubleshooting
 
