@@ -80,6 +80,10 @@ for r in $REPOS; do
   fi
 done
 
+# Jobs that name labels no runner has (ubuntu/macos/windows-latest) would wait
+# forever and invisibly; cancel them after 30 min. Never fails the sync.
+bash "$(dirname "$0")/cancel_unrunnable.sh" || log "janitor failed (non-fatal)"
+
 # Private repos can't run GitHub Actions; mirror their open PRs here so CI
 # fires, and post the verdicts back to GitHub as commit statuses.
 if ! python3 "$(dirname "$0")/pr_status_bridge.py"; then
