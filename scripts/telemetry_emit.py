@@ -277,8 +277,14 @@ def main() -> int:
         }
     )
 
-    pv_rows = sql(PV_QUERY.format(h1=int(now) - 3600, h24=int(now) - 86400))
-    pv_events, pv_alerted = push_velocity_events(pv_rows, now, state.get("pv_alerted", {}))
+    # Isolated: a failing push-velocity query must never cost the ci.run rows.
+    pv_alerted = state.get("pv_alerted", {})
+    try:
+        pv_rows = sql(PV_QUERY.format(h1=int(now) - 3600, h24=int(now) - 86400))
+        pv_events, pv_alerted = push_velocity_events(pv_rows, now, pv_alerted)
+    except (subprocess.CalledProcessError, ValueError, KeyError) as e:
+        print(f"[telemetry] push velocity check FAILED (non-fatal): {type(e).__name__}")
+        pv_events = []
     for e in pv_events:
         m = e["metadata"]
         print(f"[telemetry] WARNING push velocity: gitea user {m['gitea_user_id']} "
