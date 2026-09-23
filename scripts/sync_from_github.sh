@@ -90,5 +90,9 @@ if ! python3 "$(dirname "$0")/pr_status_bridge.py"; then
   log "FAILED pr status bridge"; FAILED=1
 fi
 
+# CI telemetry -> admin.windyword.ai (shapes declared with Windy Telemetry 40).
+# Sends nothing until WINDYGIT_TELEMETRY_TOKEN is set; never fails the sync.
+python3 "$(dirname "$0")/telemetry_emit.py" || log "telemetry emit failed (non-fatal)"
+
 [[ "$FAILED" -ne 0 ]] && { log "COMPLETED WITH FAILURES"; exit 1; }
 log "all repos in step with GitHub"
