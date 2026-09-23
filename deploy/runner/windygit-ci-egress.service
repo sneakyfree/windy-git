@@ -1,0 +1,13 @@
+[Unit]
+Description=Windy Git - CI egress filter (jobs reach the internet, never the LAN/host)
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# The jobs network exists once the runner compose project is up; retry until it does.
+ExecStart=/bin/bash -c 'for i in $(seq 1 60); do /srv/windygit/src/deploy/runner/egress.sh && exit 0; sleep 5; done; exit 1'
+
+[Install]
+WantedBy=multi-user.target
