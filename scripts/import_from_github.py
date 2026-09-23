@@ -229,13 +229,12 @@ def main() -> int:
     if not targets:
         ap.error("name a repo, or pass --safe-batch / --list-candidates")
 
-    if "windy-pro" in targets:
-        sys.exit(
-            "REFUSING windy-pro. Six checkouts exist, the build counter has forked "
-            "three ways (main 12 / overnight 34 / wave-44 56), and two sessions "
-            "recorded different HEADs hours apart. Resolve which is current and "
-            "write it down BEFORE importing (G11.5)."
-        )
+    # G11.5 RESOLVED 2026-09-23 (lane 8c, ~/windy-orchestra/WINDYPRO_CHECKOUTS.md):
+    # a read-only audit of all 14 windy-pro checkouts on 5 machines found GitHub
+    # main is canonical (Kit 0 prod and Windy 0 sit exactly on it; the others are
+    # stale, not divergent). Phase 1 keeps GitHub the source of truth anyway, so a
+    # writable Windy Git copy is CI only. Its six deploy/release workflows must be
+    # disabled on import — see docs/CUTOVER.md.
 
     if args.mirror:
         print("mirror mode: repos will be read-only and will NOT run CI.\n")
