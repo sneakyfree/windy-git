@@ -8,6 +8,7 @@ no status at all.
 
 from __future__ import annotations
 
+import base64
 import importlib.util
 from pathlib import Path
 
@@ -35,12 +36,23 @@ def _run(i, wf, job, status, sha=SHA, n=1):
 
 
 class Fake:
-    def __init__(self, runs=(), statuses=(), gh_prs=(), wg_prs=()):
+    def __init__(self, runs=(), statuses=(), gh_prs=(), wg_prs=(), workflows=None):
         self.runs, self.statuses = list(runs), list(statuses)
+        self.workflows = workflows or {}  # {path: yaml text} at every commit
         self.gh_prs, self.wg_prs = list(gh_prs), list(wg_prs)
         self.posted, self.opened, self.closed = [], [], []
 
     def gitea(self, method, path, body=None):
+        if "/contents/" in path:
+            want = path.split("/contents/", 1)[1].split("?", 1)[0]
+            if want in self.workflows:
+                return 200, {"content": base64.b64encode(self.workflows[want].encode()).decode()}
+            files = [
+                {"type": "file", "name": k.rsplit("/", 1)[1], "path": k}
+                for k in self.workflows
+                if k.rsplit("/", 1)[0] == want
+            ]
+            return (200, files) if files else (404, None)
         if "/actions/tasks" in path:
             page = int(path.rsplit("page=", 1)[1])
             return 200, {"workflow_runs": self.runs[(page - 1) * 50 : page * 50]}
@@ -209,3 +221,54 @@ def test_transport_blips_are_retried_but_http_errors_are_not(monkeypatch):
     monkeypatch.setattr(bridge.urllib.request, "urlopen", forbidden)
     assert bridge._call("http://x", "t", "GET", "/p") == (403, None)
     assert calls["n"] == 1
+
+
+GOOD = "on: push\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps: []\n"
+BROKEN = "on: push\njobs:\n  test:\n    runs-on: x\n   steps: [\n"
+
+
+def test_invalid_workflow_gets_an_error_status_even_with_no_runs(fake):
+    # Gitea fires NO run for an invalid file: without this the PR shows nothing.
+    f = fake(workflows={".github/workflows/ci.yml": BROKEN})
+    bridge.post_statuses("windy-chat", SHA)
+    assert [(p["context"], p["state"]) for p in f.posted] == [("windy-git/ci/workflow", "error")]
+    assert "invalid YAML at line 5" in f.posted[0]["description"]
+    assert f.posted[0]["target_url"].endswith(f"/src/commit/{SHA}/.github/workflows/ci.yml")
+
+
+def test_valid_workflows_post_nothing_extra(fake):
+    f = fake(runs=[_run(1, "ci.yml", "test", "success")], workflows={".github/workflows/ci.yml": GOOD})
+    bridge.post_statuses("windy-chat", SHA)
+    assert [p["context"] for p in f.posted] == ["windy-git/ci/test"]
+
+
+def test_workflow_error_is_not_reposted(fake):
+    f = fake(
+        workflows={".github/workflows/ci.yml": BROKEN},
+        statuses=[{"context": "windy-git/ci/workflow", "state": "error"}],
+    )
+    bridge.post_statuses("windy-chat", SHA)
+    assert f.posted == []
+
+
+def test_gitea_dir_wins_over_github_dir(fake):
+    # Gitea runs .gitea/workflows when it has files and ignores .github/workflows.
+    f = fake(workflows={".gitea/workflows/ci.yml": GOOD, ".github/workflows/old.yml": BROKEN})
+    bridge.post_statuses("windy-chat", SHA)
+    assert f.posted == []
+
+
+@pytest.mark.parametrize(
+    "text, problem",
+    [
+        (GOOD, None),
+        ("on: push\njobs:\n  a:\n    uses: ./x.yml\n", None),
+        (BROKEN, "invalid YAML at line 5"),
+        ("jobs:\n  a:\n    runs-on: x\n", "no `on:` trigger"),
+        ("on: push\n", "no `jobs:`"),
+        ("on: push\njobs:\n  a:\n    steps: []\n", "job `a` has no `runs-on:`"),
+        ("- a\n", "not a YAML mapping"),
+    ],
+)
+def test_workflow_problem(text, problem):
+    assert bridge.workflow_problem(text) == problem
