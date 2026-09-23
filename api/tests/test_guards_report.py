@@ -57,7 +57,8 @@ def test_render_splits_lane_and_grant_counts():
     md = gr.render(res)
     assert "| ci-hygiene (house rule 6) | 1 | 1 | ❌ not yet |" in md
     assert "| compute-guard (Mind is the only door) | 0 | 0 | ✅ YES |" in md
-    assert "| windy-git | bbbbbbb | 0 | 0 | clean ✅ |" in md
+    assert "| windy-git | Windy Git | bbbbbbb | 0 | 0 | clean ✅ |" in md
+    assert "| windy-pro | Windy Hub | aaaaaaa |" in md  # owner = session to message
     assert "(job reality-check)" in md
 
 

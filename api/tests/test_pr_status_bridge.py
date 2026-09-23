@@ -411,3 +411,19 @@ def test_unchanged_base_leaves_the_mirror_alone(fake):
     f = fake(gh_prs=gh, wg_prs=[{"number": 3, "title": "[GH#5] t", "base": {"ref": "main"}}])
     bridge.sync_prs("windy-chat")
     assert f.closed == [] and f.opened == []
+
+
+def test_named_no_daemon_job_is_not_posted_for_that_repo_only(fake, monkeypatch):
+    """eternitas ci/build needs Docker but its name doesn't say so (option A, 09-23)."""
+    monkeypatch.setattr(bridge, "NO_DAEMON_NAMED", {"eternitas": {"ci/build"}})
+    runs = [_run(1, "ci.yml", "build", "failure"), _run(2, "ci.yml", "test", "success")]
+    f = fake(runs=runs)
+    bridge.post_statuses("eternitas", SHA)
+    assert [p["context"] for p in f.posted] == ["windy-git/ci/test"]
+    f2 = fake(runs=runs)
+    bridge.post_statuses("windy-chat", SHA)
+    assert sorted(p["context"] for p in f2.posted) == ["windy-git/ci/build", "windy-git/ci/test"]
+
+
+def test_default_no_daemon_named_is_eternitas_build():
+    assert bridge.NO_DAEMON_NAMED.get("eternitas") == {"ci/build"}

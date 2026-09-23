@@ -116,3 +116,26 @@ def test_optional_lock_globs_are_flagged(text):
 ])
 def test_pinned_images_and_real_locks_pass(path, text):
     assert hy.scan_line(path, text) == []
+
+
+@pytest.mark.parametrize("text", [
+    "      - run: docker compose -f docker-compose.yml -f docker-compose.ci.yml build",  # eternitas ci/build
+    "        run: docker build -t windy-mail .",
+    "      - run: docker-compose up -d",
+    "        run: docker buildx build --load .",
+    "      - uses: docker/build-push-action@v6",
+])
+def test_docker_in_ci_is_flagged_with_the_fix(text):
+    hits = hy.scan_line(WF, text)
+    assert [k for k, _ in hits] == ["needs docker"]
+    assert "no-Docker smoke test" in hits[0][1]
+
+
+@pytest.mark.parametrize("path, text", [
+    ("Dockerfile", "RUN docker build ."),                     # not a workflow
+    (WF, "        run: ssh host 'docker compose up -d'"),      # remote host has a daemon
+    (WF, "      # docker compose build"),                     # comment
+    (WF, "        run: echo docker build"),
+])
+def test_docker_not_flagged_outside_ci_steps(path, text):
+    assert [k for k, _ in hy.scan_line(path, text) if k == "needs docker"] == []

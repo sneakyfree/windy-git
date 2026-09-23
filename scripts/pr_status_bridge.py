@@ -75,6 +75,19 @@ MIRROR_TAG = "[GH#"
 # always red trains everyone to ignore red. Not posted until a rootless builder
 # exists; that is a decision, recorded in docs/CUTOVER.md, not a failure.
 NO_DAEMON_JOB = re.compile(r"docker", re.IGNORECASE)
+# Image-build jobs whose NAME doesn't say docker (orchestrator 09-23, option A:
+# each lane converts the job to a no-Docker smoke test; until then it is not
+# posted). Format: "repo:workflow/job,...;repo2:...".
+NO_DAEMON_NAMED: dict[str, set[str]] = {}
+for _entry in os.environ.get("BRIDGE_NO_DAEMON", "eternitas:ci/build").split(";"):
+    if ":" in _entry:
+        _repo, _jobs = _entry.split(":", 1)
+        NO_DAEMON_NAMED[_repo.strip()] = {j.strip() for j in _jobs.split(",") if j.strip()}
+
+
+def needs_daemon(repo: str, wf: str, job: str) -> bool:
+    """True for image-build jobs, which cannot run here (no Docker daemon, I-5)."""
+    return bool(NO_DAEMON_JOB.search(job)) or f"{wf}/{job}" in NO_DAEMON_NAMED.get(repo, ())
 
 # Jobs Grant ruled NON-BLOCKING (GRANT_DECISIONS_2026-09-23): still run on
 # Windy Git and visible there, but not posted to GitHub, so they cannot turn a
@@ -294,7 +307,7 @@ def post_statuses(repo: str, sha: str) -> None:
             break
     latest: dict[str, dict] = {}
     for r in runs:
-        if r["head_sha"] != sha or NO_DAEMON_JOB.search(r["name"]):
+        if r["head_sha"] != sha or needs_daemon(repo, r["workflow_id"].removesuffix(".yml"), r["name"]):
             continue
         if f"{r['workflow_id'].removesuffix('.yml')}/{r['name']}" in NON_BLOCKING.get(repo, ()):
             continue
@@ -304,9 +317,9 @@ def post_statuses(repo: str, sha: str) -> None:
     # Queued jobs: `pending` where nothing newer has been picked up. A re-run
     # queued behind an old failure must read pending, not the stale red.
     for q in queued_jobs(repo, sha):
-        if NO_DAEMON_JOB.search(q["name"]):
-            continue
         wf = q["workflow_id"].removesuffix(".yml")
+        if needs_daemon(repo, wf, q["name"]):
+            continue
         if f"{wf}/{q['name']}" in NON_BLOCKING.get(repo, ()):
             continue
         ctx = f"windy-git/{wf}/{q['name']}"

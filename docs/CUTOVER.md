@@ -110,7 +110,12 @@ their CI permanently, not a stopgap:
 - **Image-build jobs** (name matches `docker`) post nothing: job containers
   have no Docker daemon by design (I-5), so they are red on every commit. A
   rootless builder (BuildKit rootless / buildx in the capped dind) is the open
-  decision that would bring them back.
+  decision that would bring them back. Jobs that need Docker but are named otherwise go in
+  `BRIDGE_NO_DAEMON` (default `eternitas:ci/build`). DECIDED 09-23 (orchestrator,
+  option A): lanes convert these jobs to no-Docker smoke tests (job `services:` +
+  start the app + curl /health); the real image build is the deploy step on the
+  target host. ci-hygiene flags docker build/compose/run in workflows ("needs docker").
+  No host Docker socket for CI without a separate decision.
 
 **Onboarding another private repo** — the promotion steps below, then:
 
