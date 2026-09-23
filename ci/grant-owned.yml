@@ -6,6 +6,10 @@ grant_owned:
     reason: "Windy Word desktop (Electron) + its release/installer builds: Grant's, built from the Mac mini."
     paths:
       - "src/client/desktop/*"
+      # ROOT .env.example only (exact path): documents the desktop app's BYOK dev
+      # fallback keys; the hub reads neither (8c, 09-23). account-server/.env.example
+      # is NOT matched and stays the hub lane's.
+      - ".env.example"
       - "installer-v2/*"
       - ".github/workflows/build-windows.yml"
       - ".github/workflows/release-mac.yml"

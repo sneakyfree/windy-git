@@ -59,3 +59,8 @@ def test_render_splits_lane_and_grant_counts():
     assert "| compute-guard (Mind is the only door) | 0 | 0 | ✅ YES |" in md
     assert "| windy-git | bbbbbbb | 0 | 0 | clean ✅ |" in md
     assert "(job reality-check)" in md
+
+
+def test_windy_pro_root_env_example_is_grant_owned_but_not_the_account_servers():
+    assert gr.grant_owned("windy-pro", ".env.example", None, OWNED)
+    assert not gr.grant_owned("windy-pro", "account-server/.env.example", None, OWNED)
