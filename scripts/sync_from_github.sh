@@ -38,7 +38,7 @@ FAILED=0
 
 # Repos Windy Git tracks FROM GitHub. Remove a repo from this list at the moment
 # it flips to Windy-Git-first, or the sync will fight its authors and win.
-REPOS="${SYNC_REPOS:-windy-calendar windy-search windy-registry Windy-Clone WindyCloud windy-cloud-sites windy-mind eternitas windy-agent windy-git}"
+REPOS="${SYNC_REPOS:-windy-calendar windy-search windy-registry Windy-Clone WindyCloud windy-cloud-sites windy-mind eternitas windy-agent windy-git windy-chat windy-mail}"
 
 mkdir -p "$WORK"
 log() { printf '[sync %s] %s\n' "$(date -u +%H:%M:%SZ)" "$*"; }
@@ -69,6 +69,12 @@ for r in $REPOS; do
     log "FAILED push $r -> windy git"; FAILED=1
   fi
 done
+
+# Private repos can't run GitHub Actions; mirror their open PRs here so CI
+# fires, and post the verdicts back to GitHub as commit statuses.
+if ! python3 "$(dirname "$0")/pr_status_bridge.py"; then
+  log "FAILED pr status bridge"; FAILED=1
+fi
 
 [[ "$FAILED" -ne 0 ]] && { log "COMPLETED WITH FAILURES"; exit 1; }
 log "all repos in step with GitHub"
