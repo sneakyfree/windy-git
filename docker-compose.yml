@@ -66,7 +66,13 @@ services:
       # G3.1 — a Windy account IS the account. Signing in with Windy provisions
       # the Gitea user on first arrival; nobody is asked to invent a second
       # identity for the same person, and no local password ever exists.
-      GITEA__oauth2_client__ENABLE_AUTO_REGISTRATION: "true"
+      # 🔴 OFF (2026-09-23). With it on, ANY stranger with a Windy Word account
+      # (public signup, not even email-verified) got a forge account on first
+      # sign-in — and the CI runners were instance-wide, so their workflows
+      # would run on Veron beside the R2 god token. Proven with a throwaway
+      # account, then closed. Opening the forge to non-Grant users is a §7
+      # Grant decision; until then new accounts are created deliberately.
+      GITEA__oauth2_client__ENABLE_AUTO_REGISTRATION: "false"
       GITEA__oauth2_client__USERNAME: email
       # 🔴 `login`, NOT `auto` (SSO #8). `auto` linked any hub login whose EMAIL
       # matched an existing account — and windyadmin (SITE ADMIN) carries Grant's
