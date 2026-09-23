@@ -171,3 +171,41 @@ def test_default_non_blocking_is_grants_ruling():
         "ci/test-installer",
         "ci/reality-check",
     }
+
+
+def test_transport_blips_are_retried_but_http_errors_are_not(monkeypatch):
+    import urllib.error
+
+    calls = {"n": 0}
+
+    class _R:
+        status = 200
+
+        def read(self):
+            return b"{}"
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    def flaky(req, timeout):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise urllib.error.URLError("_ssl.c:983: The handshake operation timed out")
+        return _R()
+
+    monkeypatch.setattr(bridge.urllib.request, "urlopen", flaky)
+    monkeypatch.setattr(bridge.time, "sleep", lambda s: None)
+    assert bridge._call("http://x", "t", "GET", "/p") == (200, {})
+    assert calls["n"] == 3
+
+    def forbidden(req, timeout):
+        calls["n"] += 1
+        raise urllib.error.HTTPError("http://x/p", 403, "no", {}, None)
+
+    calls["n"] = 0
+    monkeypatch.setattr(bridge.urllib.request, "urlopen", forbidden)
+    assert bridge._call("http://x", "t", "GET", "/p") == (403, None)
+    assert calls["n"] == 1

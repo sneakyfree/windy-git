@@ -32,6 +32,7 @@ import json
 import os
 import re
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -98,12 +99,21 @@ def _call(base: str, token_header: str, method: str, path: str, body=None):
             "User-Agent": "windy-git-pr-bridge/1",
         },
     )
-    try:
-        with urllib.request.urlopen(req, timeout=60) as r:
-            raw = r.read()
-            return r.status, (json.loads(raw) if raw else None)
-    except urllib.error.HTTPError as e:
-        return e.code, None
+    # Transport errors (TLS handshake timeout, reset) are retried: one GitHub
+    # blip used to fail the whole sync, flip its heartbeat to ok:false and page
+    # someone for nothing. HTTP errors are answers, not blips — never retried.
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                raw = r.read()
+                return r.status, (json.loads(raw) if raw else None)
+        except urllib.error.HTTPError as e:
+            return e.code, None
+        except (urllib.error.URLError, TimeoutError, ConnectionError):
+            if attempt == 2:
+                raise
+            time.sleep(2 * (attempt + 1))
+    raise AssertionError("unreachable")
 
 
 def gitea(method, path, body=None):
