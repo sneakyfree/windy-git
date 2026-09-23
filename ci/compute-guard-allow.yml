@@ -1,0 +1,40 @@
+# Compute guard allow-list: code that MAY talk to an AI provider directly.
+# Windy Mind is the ONLY door to AI compute (Grant, 2026-09-23). Every entry
+# here is an exception to that rule and MUST say why. Paths are fnmatch globs
+# relative to the repo root. Owner of this file: Windy Git lane (13); changes
+# go through the orchestrator. Source of the first entries: COMPUTE_BYPASS_AUDIT.md.
+allow:
+  - repo: windy-mind
+    paths: ["*"]
+    reason: "Windy Mind IS the door: provider clients belong here by definition."
+
+  - repo: windy-agent
+    paths: ["*"]
+    reason: >-
+      User BYOK: self-hosted agents call providers on the USER's own keys.
+      Mind stays opt-in there, or every self-hosted user's inference lands on
+      Grant's bill (no-cloud-cost-liability rule; audit #7).
+
+  - repo: windy-code
+    paths: ["extensions/windy-ai/*"]
+    reason: "User BYOK AI extension: the user's own provider keys; Mind is one opt-in provider (audit #8)."
+
+  - repo: windy-connect
+    paths: ["*writers/*"]
+    reason: "Writes client configs that NAME the user's own provider env vars; makes no provider calls (audit #11)."
+
+  - repo: windy-pro
+    paths: ["src/client/desktop/*"]
+    reason: >-
+      User BYOK desktop client: cloud STT/translate keys come from what the USER
+      enters (renderer localStorage -> electron-store; env var only for dev), and
+      the CSP line allows exactly those user-keyed hosts (audit #10). The
+      account-server is NOT covered: server-side calls go through Mind.
+
+  - repo: windy-pro
+    paths: ["src/client/web/src/pages/panels/MindPanel.jsx"]
+    reason: "Validates the USER's own OpenRouter key for BYOK (audit #10); spends no house money."
+
+  - repo: windy-git
+    paths: ["scripts/compute_guard.py", "ci/compute-guard-allow.yml"]
+    reason: "The guard's own pattern list and this file."

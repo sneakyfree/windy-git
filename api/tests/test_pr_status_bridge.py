@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import importlib.util
+import sys
 from pathlib import Path
 
 import pytest
@@ -340,3 +341,44 @@ def test_lookup_failure_is_non_fatal(monkeypatch):
 
     monkeypatch.setattr(bridge.subprocess, "run", boom)
     assert bridge.queued_jobs("windy-chat", SHA) == []
+
+
+class _Guard:
+    def __init__(self, findings):
+        self.findings = findings
+
+    def check(self, repo, sha, default_branch, is_default_head):
+        return self.findings
+
+    @staticmethod
+    def status_for(findings, whole_tree):
+        if not findings:
+            return "success", "OK: clean", None
+        return "success", f"WARN {len(findings)}", findings[0]
+
+
+class _F:
+    path, line = "app/llm.py", 7
+
+
+def test_guard_posts_warn_with_a_link_to_the_first_finding(fake, monkeypatch):
+    f = fake()
+    monkeypatch.setitem(sys.modules, "compute_guard", _Guard([_F()]))
+    bridge.post_compute_guard("windy-chat", SHA, "main", False)
+    assert [(p["context"], p["state"], p["description"]) for p in f.posted] == [
+        ("windy-git/compute-guard", "success", "WARN 1")]
+    assert f.posted[0]["target_url"].endswith(f"/src/commit/{SHA}/app/llm.py#L7")
+
+
+def test_guard_same_status_is_not_reposted(fake, monkeypatch):
+    f = fake(statuses=[{"context": "windy-git/compute-guard", "state": "success", "description": "WARN 1"}])
+    monkeypatch.setitem(sys.modules, "compute_guard", _Guard([_F()]))
+    bridge.post_compute_guard("windy-chat", SHA, "main", False)
+    assert f.posted == []
+
+
+def test_guard_that_cannot_run_posts_nothing(fake, monkeypatch):
+    f = fake()
+    monkeypatch.setitem(sys.modules, "compute_guard", _Guard(None))
+    bridge.post_compute_guard("windy-chat", SHA, "main", True)
+    assert f.posted == []

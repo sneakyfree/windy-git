@@ -343,6 +343,37 @@ def post_statuses(repo: str, sha: str) -> None:
         print(f"  {repo}@{sha[:7]} {ctx} = {state} -> {st}")
 
 
+GUARD_CTX = "windy-git/compute-guard"
+
+
+def post_compute_guard(repo: str, sha: str, default_branch: str, is_default_head: bool) -> None:
+    """Windy Mind is the only door to AI compute: flag direct provider use (warn-only).
+
+    Non-fatal and never a fake OK: if the guard can't run, nothing is posted.
+    """
+    try:
+        import compute_guard as cg  # same directory; loaded lazily so the bridge never depends on it
+
+        findings = cg.check(repo, sha, default_branch, is_default_head)
+    except Exception as e:  # noqa: BLE001 — the guard must never break CI signals
+        print(f"  {repo}@{sha[:7]} compute-guard skipped ({type(e).__name__}: {str(e)[:80]})")
+        return
+    if findings is None:
+        return
+    state, desc, first = cg.status_for(findings, whole_tree=is_default_head)
+    st, existing = github("GET", f"/repos/{GH_OWNER}/{repo}/commits/{sha}/statuses?per_page=100")
+    for s in existing or []:  # newest first: compare the latest guard status only
+        if s["context"] == GUARD_CTX:
+            if (s["state"], s.get("description")) == (state, desc):
+                return
+            break
+    url = (f"{PUBLIC}/{WG_OWNER}/{repo}/src/commit/{sha}/{first.path}#L{first.line}"
+           if first else f"{PUBLIC}/{WG_OWNER}/{repo}/src/commit/{sha}")
+    st, _ = github("POST", f"/repos/{GH_OWNER}/{repo}/statuses/{sha}",
+                   {"state": state, "context": GUARD_CTX, "description": desc, "target_url": url})
+    print(f"  {repo}@{sha[:7]} {GUARD_CTX} = {state} ({len(findings)} finding(s)) -> {st}")
+
+
 def main() -> int:
     if not (GITEA_TOKEN and GITHUB_TOKEN):
         sys.exit("GITEA_ADMIN_TOKEN and GITHUB_TOKEN are required")
@@ -350,13 +381,17 @@ def main() -> int:
     for repo in REPOS:
         try:
             shas = sync_prs(repo)
+            default_branch, default_head = "main", None
             st, br = github("GET", f"/repos/{GH_OWNER}/{repo}")
             if st == 200:
-                st, b = github("GET", f"/repos/{GH_OWNER}/{repo}/branches/{br['default_branch']}")
+                default_branch = br["default_branch"]
+                st, b = github("GET", f"/repos/{GH_OWNER}/{repo}/branches/{default_branch}")
                 if st == 200:
-                    shas.append(b["commit"]["sha"])
+                    default_head = b["commit"]["sha"]
+                    shas.append(default_head)
             for sha in dict.fromkeys(shas):
                 post_statuses(repo, sha)
+                post_compute_guard(repo, sha, default_branch, sha == default_head)
         except Exception as e:  # one repo's failure must not hide the others'
             print(f"  FAILED {repo}: {e}")
             failed = 1
