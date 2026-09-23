@@ -27,7 +27,7 @@ from api.app.providers.registry import (
     R2Provider,
 )
 from api.app.routes import health, repos, webhooks
-from api.app.telemetry import Telemetry, caller_class
+from api.app.telemetry import Telemetry, caller_class, is_synthetic
 
 logging.basicConfig(
     level=logging.INFO,
@@ -47,9 +47,7 @@ def _refuse_kit_zero(settings) -> None:
     if not settings.is_production:
         return
     try:
-        local_ips = {
-            info[4][0] for info in socket.getaddrinfo(socket.gethostname(), None)
-        }
+        local_ips = {info[4][0] for info in socket.getaddrinfo(socket.gethostname(), None)}
     except socket.gaierror:
         return
     if settings.kit0_host in local_ips:
@@ -169,6 +167,11 @@ async def _repair_pointer_handler(request: Request, exc: RepairPointer) -> JSONR
             caller=caller_class(request.headers),
             route=getattr(route, "path", None),
             upstream_status=getattr(exc, "upstream_status", None),
+            synthetic=is_synthetic(
+                request.headers, request.app.state.settings.windygit_synthetic_key
+            )
+            if hasattr(request.app.state, "settings")
+            else False,
         )
     return JSONResponse(status_code=exc.status_code, content=exc.detail)
 

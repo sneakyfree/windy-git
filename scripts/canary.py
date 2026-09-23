@@ -73,6 +73,10 @@ class Check:
 def _probe(c: Check) -> Result:
     data = json.dumps(c.body).encode() if c.body else None
     headers = {"User-Agent": "windy-git-canary/1.0", **c.headers}
+    # Mark our own probes so the ledger can tell a canary forgery from an attack.
+    # A shared secret, not a flag: a bare header would let an attacker hide.
+    if os.environ.get("CANARY_SYNTHETIC_KEY"):
+        headers["X-Windy-Synthetic"] = os.environ["CANARY_SYNTHETIC_KEY"]
     if data:
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(c.url, data=data, method=c.method, headers=headers)

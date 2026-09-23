@@ -65,6 +65,14 @@ def _iso(epoch: float) -> str:
     return datetime.fromtimestamp(epoch, UTC).isoformat().replace("+00:00", "Z")
 
 
+def is_synthetic(headers, key: str) -> bool:
+    """Our own tooling proves itself with the shared key; a bare header proves nothing."""
+    import hmac
+
+    presented = headers.get("x-windy-synthetic") or ""
+    return bool(key) and bool(presented) and hmac.compare_digest(presented, key)
+
+
 def caller_class(headers) -> str:
     """Declared values: anonymous_human | anonymous_agent | unknown."""
     from api.app.ept import looks_like_ept
@@ -145,10 +153,16 @@ class Telemetry:
         caller: str,
         route: str | None = None,
         upstream_status: int | None = None,
+        synthetic: bool = False,
     ) -> None:
         if code not in AUTH_CODES:
             return
-        meta: dict = {"code": code, "http_status": int(http_status), "caller": caller}
+        meta: dict = {
+            "code": code,
+            "http_status": int(http_status),
+            "caller": caller,
+            "synthetic": bool(synthetic),
+        }
         if route:
             meta["route"] = route
         if upstream_status is not None:

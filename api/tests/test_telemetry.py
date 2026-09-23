@@ -14,7 +14,7 @@ from fastapi import Depends, FastAPI
 from api.app import telemetry as tmod
 from api.app.errors import RepairPointer
 
-DECLARED_AUTH_KEYS = {"code", "http_status", "caller", "route", "upstream_status"}
+DECLARED_AUTH_KEYS = {"code", "http_status", "caller", "route", "upstream_status", "synthetic"}
 
 
 def _app(tel: tmod.Telemetry) -> FastAPI:
@@ -140,3 +140,26 @@ def test_caller_classes_are_the_declared_three():
         tmod.caller_class({"authorization": "Bearer eyJhbGciOiJSUzI1NiJ9.e30.x"})
         == "anonymous_human"
     )
+
+
+@pytest.mark.asyncio
+async def test_canary_refusals_are_marked_synthetic_only_with_the_real_key():
+    from types import SimpleNamespace
+
+    async def refusal(headers):
+        tel = _tel()
+        app = _app(tel)
+        app.state.settings = SimpleNamespace(windygit_synthetic_key="k3y")
+        await _get(app, "/api/v1/repos/x/grants", headers)
+        return [e for e in tel.buffer if e["event_type"] == "forge.auth.failed"][0]["metadata"][
+            "synthetic"
+        ]
+
+    assert await refusal({"X-Windy-Synthetic": "k3y"}) is True
+    assert await refusal({"X-Windy-Synthetic": "guess"}) is False  # an attacker can't hide
+    assert await refusal({}) is False
+
+
+def test_synthetic_needs_a_configured_key():
+    assert tmod.is_synthetic({"x-windy-synthetic": ""}, "") is False
+    assert tmod.is_synthetic({"x-windy-synthetic": "anything"}, "") is False
