@@ -48,7 +48,7 @@ REPOS = os.environ.get(
     "windy-chat windy-mail windy-calendar Windy-Clone WindyCloud windy-search windy-connect"
     " windy-drops windy-code-web windy-code windy-traveler windy-registry eternitas"
     " windy-translate windytranslate-site windytraveler-site windy-hand"
-    " windy-cloud-sites windy-cloud-domains windy-cloud-vps windytalk windy-pro",
+    " windy-cloud-sites windy-cloud-domains windy-cloud-vps windytalk windy-pro windy-mind",
 ).split()
 
 # Gitea run status -> GitHub status state. `skipped` is deliberately absent: a
