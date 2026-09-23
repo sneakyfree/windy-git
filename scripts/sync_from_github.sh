@@ -46,6 +46,10 @@ REPOS="${SYNC_REPOS:-windy-calendar windy-search windy-registry Windy-Clone Wind
 # queued jobs are invisible in /actions/tasks). Releases are built elsewhere.
 NO_TAGS="${SYNC_NO_TAGS:-windy-pro}"
 
+# `archive/*` branches never reach Windy Git (negative refspec, git >= 2.29).
+# They are off-machine safety copies of unpushed work (one-repo doctrine), not
+# work in progress: GitHub holds them, and CI time on them is waste.
+
 mkdir -p "$WORK"
 log() { printf '[sync %s] %s\n' "$(date -u +%H:%M:%SZ)" "$*"; }
 
@@ -69,7 +73,7 @@ for r in $REPOS; do
 
   if git --git-dir="$bare" push --quiet --force \
        "https://${WG_OWNER}:${GITEA_ADMIN_TOKEN}@${WG}/${WG_OWNER}/${r}.git" \
-       '+refs/heads/*:refs/heads/*' $([[ " $NO_TAGS " == *" $r "* ]] || echo '+refs/tags/*:refs/tags/*') 2>/dev/null; then
+       '+refs/heads/*:refs/heads/*' '^refs/heads/archive/*' $([[ " $NO_TAGS " == *" $r "* ]] || echo '+refs/tags/*:refs/tags/*') 2>/dev/null; then
     log "$r ok (${before:0:7})"
   else
     log "FAILED push $r -> windy git"; FAILED=1
