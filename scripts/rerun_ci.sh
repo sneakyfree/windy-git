@@ -16,6 +16,8 @@
 # itself, so Windy Git is never left behind GitHub.
 set -euo pipefail
 repo="${1:?repo}"; branch="${2:?branch}"; want="${3:?sha prefix}"
+# wg-q lives in the INVOKING user's ~/bin; under sudo, ~ is /root.
+WGQ="${WGQ:-$(getent passwd "${SUDO_USER:-$USER}" | cut -d: -f6)/bin/wg-q}"
 # Gitea stores repositories LOWERCASED on disk (WindyCloud -> windycloud.git).
 G="sudo docker exec -u git windy-git-gitea-1 git -C /data/git/repositories/windyadmin/${repo,,}.git"
 
@@ -43,7 +45,7 @@ until [ "$(systemctl show windygit-sync -p ExecMainStartTimestampMonotonic --val
 done
 echo "restored by sync: ${branch} = ${head:0:7}"
 sleep 5
-~/bin/wg-q <<SQL
+"$WGQ" <<SQL
 select ar.index, ar.workflow_id, ar.event, ar.status, to_char(to_timestamp(ar.created),'HH24:MI:SS')
   from action_run ar join repository r on r.id = ar.repo_id
  where r.name = '${repo}' and ar.commit_sha = '${head}' order by ar.id desc limit 6;
