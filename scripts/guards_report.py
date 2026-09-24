@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Live status of the repo guards (compute-guard + ci-hygiene) as one markdown page.
+"""Live status of the repo guards (compute-guard + ci-hygiene + secret-guard) as one markdown page.
 
 Scans every bridged repo's DEFAULT branch with both guards and renders what is
 left, per repo and owner lane. Findings in code Grant owns (ci/grant-owned.yml:
@@ -24,6 +24,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import ci_hygiene as hy  # noqa: E402
 import compute_guard as cg  # noqa: E402
+import secret_guard as sgd  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
 OWNED = Path(os.environ.get("GRANT_OWNED", ROOT / "ci" / "grant-owned.yml"))
@@ -101,10 +102,11 @@ def scan(repo: str, owned: list[dict]):
         return None
     head = cg._git(bare, "symbolic-ref", "--short", "HEAD").strip()
     sha = cg._git(bare, "rev-parse", head).strip()
-    out = {"sha": sha, "compute": [], "hygiene": []}
+    out = {"sha": sha, "compute": [], "hygiene": [], "secrets": []}
     texts: dict[str, str] = {}
     for key, fs in (("compute", cg.check(repo, sha, head, True) or []),
-                    ("hygiene", hy.check(repo, sha, head, True) or [])):
+                    ("hygiene", hy.check(repo, sha, head, True) or []),
+                    ("secrets", sgd.check(repo, sha, head, True) or [])):
         for f in fs:
             job = None
             if "/workflows/" in f.path:
@@ -117,27 +119,29 @@ def scan(repo: str, owned: list[dict]):
 
 def render(results: dict) -> str:
     now = time.strftime("%Y-%m-%d %H:%MZ", time.gmtime())
-    lane = {k: 0 for k in ("compute", "hygiene")}
-    grant = {k: 0 for k in ("compute", "hygiene")}
+    lane = {k: 0 for k in ("compute", "hygiene", "secrets")}
+    grant = {k: 0 for k in ("compute", "hygiene", "secrets")}
     for r in results.values():
         for k in lane:
-            lane[k] += sum(1 for _, _, g in r[k] if not g)
-            grant[k] += sum(1 for _, _, g in r[k] if g)
+            lane[k] += sum(1 for _, _, g in r.get(k, []) if not g)
+            grant[k] += sum(1 for _, _, g in r.get(k, []) if g)
     L = [f"# Repo guards: live status (generated {now}; windy-git scripts/guards_report.py)",
          "_Default branches only. WARN-only today; the orchestrator says \"block\" per guard when its LANE column is 0. "
          "Grant-owned code (ci/grant-owned.yml) is listed separately and never holds up a block._", "",
          "| Guard | Lane-owned findings | Grant-owned (proposals) | Ready to block? |", "|---|---|---|---|",
          f"| compute-guard (Mind is the only door) | {lane['compute']} | {grant['compute']} | {'✅ YES' if lane['compute'] == 0 else '❌ not yet'} |",
          f"| ci-hygiene (house rule 6) | {lane['hygiene']} | {grant['hygiene']} | {'✅ YES' if lane['hygiene'] == 0 else '❌ not yet'} |",
-         "", "## By repo (lane-owned)", "| Repo | owner | head | compute | hygiene | first items |", "|---|---|---|---|---|---|"]
+         f"| secret-guard (no credentials in repos; hash only) | {lane['secrets']} | {grant['secrets']} | {'✅ YES' if lane['secrets'] == 0 else '❌ not yet'} |",
+         "", "## By repo (lane-owned)", "| Repo | owner | head | compute | hygiene | secrets | first items |", "|---|---|---|---|---|---|---|"]
     for repo, r in sorted(results.items()):
         c = [x for x in r["compute"] if not x[2]]
         h = [x for x in r["hygiene"] if not x[2]]
-        items = "; ".join(f"`{f.path}:{f.line}` {f.match}" for f, _, _ in (c + h)[:3]) or "clean ✅"
-        L.append(f"| {repo} | {OWNERS.get(repo, '?')} | {r['sha'][:7]} | {len(c)} | {len(h)} | {items} |")
+        s = [x for x in r.get("secrets", []) if not x[2]]
+        items = "; ".join(f"`{f.path}:{f.line}` {f.match}" for f, _, _ in (s + c + h)[:3]) or "clean ✅"
+        L.append(f"| {repo} | {OWNERS.get(repo, '?')} | {r['sha'][:7]} | {len(c)} | {len(h)} | {len(s)} | {items} |")
     L += ["", "## Grant-owned (windy-pro desktop app + its build jobs): proposals only, not blocking"]
-    g = [(repo, f, job) for repo, r in sorted(results.items()) for k in ("compute", "hygiene")
-         for f, job, own in r[k] if own]
+    g = [(repo, f, job) for repo, r in sorted(results.items()) for k in ("compute", "hygiene", "secrets")
+         for f, job, own in r.get(k, []) if own]
     L += [f"- {repo} `{f.path}:{f.line}`{f' (job {job})' if job else ''}: {f.match}" for repo, f, job in g] or ["- none"]
     return "\n".join(L) + "\n"
 

@@ -372,11 +372,17 @@ def post_statuses(repo: str, sha: str) -> None:
 
 GUARD_CTX = "windy-git/compute-guard"
 HYGIENE_CTX = "windy-git/ci-hygiene"
+SECRET_CTX = "windy-git/secret-guard"
 
 
 def post_compute_guard(repo: str, sha: str, default_branch: str, is_default_head: bool) -> None:
     """Windy Mind is the only door to AI compute: flag direct provider use (warn-only)."""
     _post_guard("compute_guard", GUARD_CTX, repo, sha, default_branch, is_default_head)
+
+
+def post_secret_guard(repo: str, sha: str, default_branch: str, is_default_head: bool) -> None:
+    """No live credential in a bridged repo (leak hunt 09-24). Findings carry sha256[:8] only."""
+    _post_guard("secret_guard", SECRET_CTX, repo, sha, default_branch, is_default_head)
 
 
 def post_ci_hygiene(repo: str, sha: str, default_branch: str, is_default_head: bool) -> None:
@@ -438,6 +444,7 @@ def main() -> int:
                 post_statuses(repo, sha)
                 post_compute_guard(repo, sha, default_branch, sha == default_head)
                 post_ci_hygiene(repo, sha, default_branch, sha == default_head)
+                post_secret_guard(repo, sha, default_branch, sha == default_head)
         except Exception as e:  # one repo's failure must not hide the others'
             print(f"  FAILED {repo}: {e}")
             failed = 1
