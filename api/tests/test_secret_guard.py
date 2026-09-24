@@ -61,13 +61,35 @@ def test_allow_is_by_hash_only():
     F = sg.cg.Finding
     fake = F("tests/t.py", 3, "telegram bot token", f"telegram bot token #{ss.h8(TG)}")
     real = F("tests/t.py", 9, "telegram bot token", "telegram bot token #deadbeef")
-    kept = sg._drop_allowed("windy-chat", [fake, real], {"windy-chat": {ss.h8(TG)}})
-    assert kept == [real]
-    assert sg._drop_allowed("windy-mail", [fake], {"windy-chat": {ss.h8(TG)}}) == [fake]
+    allow = {"windy-chat": {"hashes": {ss.h8(TG)}, "paths": []}}
+    assert sg._drop_allowed("windy-chat", [fake, real], allow) == [real]
+    assert sg._drop_allowed("windy-mail", [fake], allow) == [fake]
+
+
+def test_private_key_blocks_are_allowed_by_path_never_by_hash():
+    F = sg.cg.Finding
+    hdr = "private key block #" + ss.h8("-----BEGIN PRIVATE KEY-----")
+    test_key = F("tests/keys/test.pem", 1, "private key block", hdr)
+    prod_key = F("deploy/prod.pem", 1, "private key block", hdr)
+    allow = {"r": {"hashes": {hdr.rsplit("#", 1)[1]}, "paths": [("tests/keys/*", {"private key block"})]}}
+    assert sg._drop_allowed("r", [test_key, prod_key], allow) == [prod_key]
+
+
+def test_path_allow_cannot_cover_real_token_kinds(tmp_path):
+    bad = tmp_path / "a.yml"
+    bad.write_text("allow:\n  - repo: r\n    paths: [tests/*]\n    kinds: [telegram bot token]\n    reason: no\n")
+    with pytest.raises(ValueError):
+        sg.load_allow(bad)
+
+
+def test_shipped_allow_file_never_excuses_the_real_leaked_tokens():
+    a = sg.load_allow()
+    every = set().union(*(v["hashes"] for v in a.values())) if a else set()
+    assert not {"1354fc9b", "d49dc2ba"} & every  # real (now revoked) credentials: remove, never allow
 
 
 def test_allow_file_loads_and_needs_reasons(tmp_path):
-    assert sg.load_allow() == {} or isinstance(sg.load_allow(), dict)
+    assert isinstance(sg.load_allow(), dict)
     bad = tmp_path / "a.yml"
     bad.write_text("allow:\n  - repo: r\n    hashes: [abcd1234]\n")
     with pytest.raises(ValueError):

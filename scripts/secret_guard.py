@@ -11,6 +11,7 @@ BY HASH in ci/secret-guard-allow.yml (repo + hashes + reason).
 
 from __future__ import annotations
 
+import fnmatch
 import hashlib
 import os
 import re
@@ -33,14 +34,24 @@ def path_ok(path: str) -> bool:
     return not NEVER.search(path)
 
 
-def load_allow(path: Path = ALLOW_FILE) -> dict[str, set[str]]:
-    """{repo: {hash8, ...}}; every entry needs a reason."""
+# A private-key match is only its BEGIN line, so its hash is the same everywhere:
+# those are allowed by PATH (entries with `paths` + `kinds`), everything else by HASH.
+PATH_ONLY_KINDS = {"private key block"}
+
+
+def load_allow(path: Path = ALLOW_FILE) -> dict[str, dict]:
+    """{repo: {"hashes": {hash8}, "paths": [(glob, {kind})]}}; every entry needs a reason."""
     data = yaml.safe_load(path.read_text()) if path.exists() else {}
-    out: dict[str, set[str]] = {}
+    out: dict[str, dict] = {}
     for e in (data or {}).get("allow") or []:
-        if not (e.get("repo") and e.get("hashes") and str(e.get("reason", "")).strip()):
-            raise ValueError(f"allow entry needs repo, hashes and a reason: {e}")
-        out.setdefault(e["repo"], set()).update(str(h) for h in e["hashes"])
+        if not (e.get("repo") and (e.get("hashes") or (e.get("paths") and e.get("kinds")))
+                and str(e.get("reason", "")).strip()):
+            raise ValueError(f"allow entry needs repo, hashes (or paths + kinds) and a reason: {e}")
+        if e.get("paths") and not set(e["kinds"]) <= PATH_ONLY_KINDS:
+            raise ValueError(f"path allows are only for {sorted(PATH_ONLY_KINDS)}: {e}")
+        r = out.setdefault(e["repo"], {"hashes": set(), "paths": []})
+        r["hashes"].update(str(h) for h in e.get("hashes") or [])
+        r["paths"] += [(g, set(e["kinds"])) for g in e.get("paths") or []]
     return out
 
 
@@ -48,9 +59,14 @@ def scan_line(path: str, text: str) -> list[tuple[str, str]]:
     return [(kind, f"{kind} #{h}") for kind, h in ss.find(text)]
 
 
-def _drop_allowed(repo: str, findings, allow: dict[str, set[str]]):
-    ok = allow.get(repo, set())
-    return [f for f in findings if f.match.rsplit("#", 1)[-1] not in ok]
+def _drop_allowed(repo: str, findings, allow: dict[str, dict]):
+    a = allow.get(repo) or {"hashes": set(), "paths": []}
+
+    def ok(f) -> bool:
+        if f.kind in PATH_ONLY_KINDS:
+            return any(f.kind in kinds and fnmatch.fnmatch(f.path, g) for g, kinds in a["paths"])
+        return f.match.rsplit("#", 1)[-1] in a["hashes"]
+    return [f for f in findings if not ok(f)]
 
 
 def check(repo: str, sha: str, default_branch: str, is_default_head: bool):
