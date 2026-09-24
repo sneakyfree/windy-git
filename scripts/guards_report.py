@@ -32,7 +32,7 @@ REPOS = os.environ.get("BRIDGE_REPOS", "").split() or [
     "windy-connect", "windy-drops", "windy-code-web", "windy-code", "windy-traveler",
     "windy-registry", "eternitas", "windy-translate", "windytranslate-site", "windytraveler-site",
     "windy-hand", "windy-cloud-sites", "windy-cloud-domains", "windy-cloud-vps", "windytalk",
-    "windy-pro", "windy-mind", "windy-git"]
+    "windy-pro", "windy-mind", "windy-git", "windy-inbox"]
 # Owner lane per repo = the session name to message (orchestrator routing, 09-23 ~22:45Z:
 # hub/account-server/dashboard/site -> "Windy Hub"; windy-calendar only -> "Windy Calender";
 # windy-admin/telemetry -> "Windy Admin"). windy-pro here = its server/web side; the desktop
@@ -45,7 +45,8 @@ OWNERS = {
     "windy-code-web": "Windy Code", "windy-code": "Windy Code", "windy-traveler": "Windy Traveler",
     "windytraveler-site": "Windy Traveler", "eternitas": "Eternitas", "windy-translate": "Windy Translate",
     "windytranslate-site": "Windy Translate", "windy-hand": "Windy Hand", "windytalk": "Windy Talk",
-    "windy-pro": "Windy Hub", "windy-mind": "WIndy Mind", "windy-git": "Windy Git"}
+    "windy-pro": "Windy Hub", "windy-mind": "WIndy Mind", "windy-git": "Windy Git",
+    "windy-inbox": "Windy Drops"}  # Windy Inbox build lead (09-24)
 JOB = re.compile(r"^  ([A-Za-z0-9_-]+):\s*$")
 
 
