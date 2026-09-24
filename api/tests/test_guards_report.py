@@ -65,3 +65,13 @@ def test_render_splits_lane_and_grant_counts():
 def test_windy_pro_root_env_example_is_grant_owned_but_not_the_account_servers():
     assert gr.grant_owned("windy-pro", ".env.example", None, OWNED)
     assert not gr.grant_owned("windy-pro", "account-server/.env.example", None, OWNED)
+
+
+def test_split_grant_sends_desktop_code_to_grant(monkeypatch):
+    F = gr.cg.Finding
+    fs = [F("src/client/desktop/main.js", 3, "provider host", "x"),
+          F("account-server/src/llm.ts", 5, "provider host", "y")]
+    lane, grant = gr.split_grant("windy-pro", "a" * 40, fs)
+    assert [f.path for f in grant] == ["src/client/desktop/main.js"]
+    assert [f.path for f in lane] == ["account-server/src/llm.ts"]
+    assert gr.split_grant("windy-chat", "a" * 40, fs) == (fs, [])

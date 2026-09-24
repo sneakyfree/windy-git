@@ -75,6 +75,25 @@ def grant_owned(repo: str, path: str, job: str | None, owned: list[dict]) -> boo
     return False
 
 
+def split_grant(repo: str, sha: str, findings: list) -> tuple[list, list]:
+    """(lane-owned, Grant-owned) findings at `sha`, by ci/grant-owned.yml, with
+    workflow lines attributed to their job exactly as the status page does."""
+    owned = (yaml.safe_load(OWNED.read_text()) or {}).get("grant_owned") or []
+    if not any(e["repo"] == repo for e in owned):
+        return list(findings), []
+    bare = cg.WORK / f"{repo}.git"
+    texts: dict[str, str] = {}
+    lane, grant = [], []
+    for f in findings:
+        job = None
+        if "/workflows/" in f.path:
+            if f.path not in texts:
+                texts[f.path] = cg._git(bare, "show", f"{sha}:{f.path}")
+            job = job_of(texts[f.path], f.line)
+        (grant if grant_owned(repo, f.path, job, owned) else lane).append(f)
+    return lane, grant
+
+
 def scan(repo: str, owned: list[dict]):
     bare = cg.WORK / f"{repo}.git"
     if not bare.is_dir():

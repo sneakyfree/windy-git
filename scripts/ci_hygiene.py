@@ -215,8 +215,13 @@ def _check(repo: str, sha: str, default_branch: str, is_default_head: bool):
                           lambda: cg.scan_added(repo, bare, f"refs/heads/{default_branch}", sha, allow, **kw))
 
 
-def status_for(findings, whole_tree: bool):
+def status_for(findings, whole_tree: bool, grant=()):
+    """Same contract as compute_guard.status_for: `grant` findings never block."""
     scope = "in CI/Dockerfiles" if whole_tree else "added"
+    if not findings and grant:
+        g, n = grant[0], len(grant)
+        desc = f"⚠ WARN (Grant-owned, not blocking): {n} CI hygiene issue{'s' if n > 1 else ''} {scope}, e.g. {g.path}:{g.line} {g.match}"
+        return "success", desc[:140], g
     if not findings:
         return "success", f"OK: no floating install or host-port service {scope}", None
     f = findings[0]

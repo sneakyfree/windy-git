@@ -260,9 +260,19 @@ def check(repo: str, sha: str, default_branch: str, is_default_head: bool) -> li
     )
 
 
-def status_for(findings: list[Finding], whole_tree: bool) -> tuple[str, str, Finding | None]:
-    """(state, description, first finding) for the GitHub commit status."""
+def status_for(findings: list[Finding], whole_tree: bool,
+               grant: list[Finding] = ()) -> tuple[str, str, Finding | None]:
+    """(state, description, first finding) for the GitHub commit status.
+
+    `findings` = lane-owned (these block in MODE=block); `grant` = findings in
+    Grant-owned code (ci/grant-owned.yml): always WARN, never red (orchestrator
+    09-23: his desktop work is never blocked by us)."""
     scope = "in tree" if whole_tree else "added"
+    if not findings and grant:
+        g, n = grant[0], len(grant)
+        desc = (f"⚠ WARN (Grant-owned, not blocking): {n} direct AI-provider use{'s' if n > 1 else ''} "
+                f"{scope}, e.g. {g.path}:{g.line} {g.match}")
+        return "success", desc[:140], g
     if not findings:
         what = "no direct AI-provider use in tree" if whole_tree else "no direct AI-provider use added"
         return "success", f"OK: {what} (Windy Mind is the only door)", None

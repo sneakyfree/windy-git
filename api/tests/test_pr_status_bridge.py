@@ -351,10 +351,12 @@ class _Guard:
         return self.findings
 
     @staticmethod
-    def status_for(findings, whole_tree):
+    def status_for(findings, whole_tree, grant=()):
+        if not findings and grant:
+            return "success", f"GRANT-WARN {len(grant)}", grant[0]
         if not findings:
             return "success", "OK: clean", None
-        return "success", f"WARN {len(findings)}", findings[0]
+        return "failure", f"BLOCK {len(findings)}", findings[0]
 
 
 class _F:
@@ -366,12 +368,12 @@ def test_guard_posts_warn_with_a_link_to_the_first_finding(fake, monkeypatch):
     monkeypatch.setitem(sys.modules, "compute_guard", _Guard([_F()]))
     bridge.post_compute_guard("windy-chat", SHA, "main", False)
     assert [(p["context"], p["state"], p["description"]) for p in f.posted] == [
-        ("windy-git/compute-guard", "success", "WARN 1")]
+        ("windy-git/compute-guard", "failure", "BLOCK 1")]
     assert f.posted[0]["target_url"].endswith(f"/src/commit/{SHA}/app/llm.py#L7")
 
 
 def test_guard_same_status_is_not_reposted(fake, monkeypatch):
-    f = fake(statuses=[{"context": "windy-git/compute-guard", "state": "success", "description": "WARN 1"}])
+    f = fake(statuses=[{"context": "windy-git/compute-guard", "state": "failure", "description": "BLOCK 1"}])
     monkeypatch.setitem(sys.modules, "compute_guard", _Guard([_F()]))
     bridge.post_compute_guard("windy-chat", SHA, "main", False)
     assert f.posted == []
@@ -385,11 +387,11 @@ def test_guard_that_cannot_run_posts_nothing(fake, monkeypatch):
 
 
 def test_ci_hygiene_posts_under_its_own_context(fake, monkeypatch):
-    f = fake(statuses=[{"context": "windy-git/compute-guard", "state": "success", "description": "WARN 1"}])
+    f = fake(statuses=[{"context": "windy-git/compute-guard", "state": "failure", "description": "BLOCK 1"}])
     monkeypatch.setitem(sys.modules, "ci_hygiene", _Guard([_F()]))
     bridge.post_ci_hygiene("windy-chat", SHA, "main", True)
     # the compute-guard status with the same description must not suppress it
-    assert [(p["context"], p["description"]) for p in f.posted] == [("windy-git/ci-hygiene", "WARN 1")]
+    assert [(p["context"], p["description"]) for p in f.posted] == [("windy-git/ci-hygiene", "BLOCK 1")]
 
 
 def test_retargeted_pr_gets_a_fresh_mirror_on_the_new_base(fake):
@@ -428,3 +430,24 @@ def test_named_no_daemon_job_is_not_posted_for_that_repo_only(fake, monkeypatch)
 def test_default_no_daemon_named_is_empty():
     """eternitas converted its ci/build to a no-Docker ci/smoke (#179); nothing left."""
     assert bridge.NO_DAEMON_NAMED == {}
+
+
+def test_grant_owned_findings_never_block(fake, monkeypatch):
+    """Orchestrator 09-23: compute-guard blocks lane-owned code only."""
+    f = fake()
+    monkeypatch.setitem(sys.modules, "compute_guard", _Guard([_F()]))
+    monkeypatch.setitem(sys.modules, "guards_report",
+                        type("GR", (), {"split_grant": staticmethod(lambda r, s, fs: ([], list(fs)))}))
+    bridge.post_compute_guard("windy-pro", SHA, "main", True)
+    assert [(p["state"], p["description"]) for p in f.posted] == [("success", "GRANT-WARN 1")]
+
+
+def test_failed_grant_split_warns_instead_of_blocking(fake, monkeypatch):
+    def boom(*a):
+        raise RuntimeError("no bare clone")
+
+    f = fake()
+    monkeypatch.setitem(sys.modules, "compute_guard", _Guard([_F()]))
+    monkeypatch.setitem(sys.modules, "guards_report", type("GR", (), {"split_grant": staticmethod(boom)}))
+    bridge.post_compute_guard("windy-pro", SHA, "main", True)
+    assert [p["state"] for p in f.posted] == ["success"]

@@ -220,3 +220,12 @@ def test_scoped_allow_in_a_real_diff():
 """
     fs = cg.parse_added("windy-pro", diff, ALLOW)
     assert [(f.line, f.match) for f in fs] == [(3, "openrouter.ai")]
+
+
+def test_block_mode_never_blocks_grant_owned(monkeypatch):
+    monkeypatch.setattr(cg, "MODE", "block")
+    g = cg.Finding("src/client/desktop/x.js", 9, "provider host", "api.openai.com")
+    state, desc, f = cg.status_for([], whole_tree=True, grant=[g])
+    assert state == "success" and desc.startswith("⚠ WARN (Grant-owned, not blocking): 1") and f is g
+    lane = cg.Finding("a.py", 3, "provider host", "x")
+    assert cg.status_for([lane], whole_tree=True, grant=[g])[0] == "failure"

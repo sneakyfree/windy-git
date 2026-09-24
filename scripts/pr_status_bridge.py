@@ -395,7 +395,14 @@ def _post_guard(modname: str, ctx: str, repo: str, sha: str, default_branch: str
         return
     if findings is None:
         return
-    state, desc, first = g.status_for(findings, whole_tree=is_default_head)
+    try:  # Grant-owned code never blocks (orchestrator 09-23); lazy like the guards
+        import importlib
+
+        lane, grant = importlib.import_module("guards_report").split_grant(repo, sha, findings)
+    except Exception as e:  # noqa: BLE001 — can't tell whose code: warn, never block
+        print(f"  {repo}@{sha[:7]} {ctx}: Grant-owned split failed ({type(e).__name__}); WARN only")
+        lane, grant = [], list(findings)
+    state, desc, first = g.status_for(lane, whole_tree=is_default_head, grant=grant)
     st, existing = github("GET", f"/repos/{GH_OWNER}/{repo}/commits/{sha}/statuses?per_page=100")
     for s in existing or []:  # newest first: compare the latest guard status only
         if s["context"] == ctx:
