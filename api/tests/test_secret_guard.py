@@ -104,3 +104,16 @@ def test_block_and_warn(monkeypatch):
     monkeypatch.setattr(sg, "MODE", "warn")
     state, desc, _ = sg.status_for([f], True)
     assert state == "success" and desc.startswith("⚠ WARN (not blocking): 1 secret-shaped string in tree")
+
+
+def test_public_scan_excuses_by_hash_and_by_path():
+    spec = importlib.util.spec_from_file_location("public_secret_scan", ROOT / "scripts" / "public_secret_scan.py")
+    ps = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ps)
+    allow = {"windy-agent": {"hashes": {"aaaa1111"}, "paths": [("tests/keys/*", {"private key block"})]}}
+    assert ps.excused("windy-agent", "openai key", "aaaa1111", ["tests/x.py"], allow)
+    assert not ps.excused("windy-agent", "telegram bot token", "1354fc9b", ["tests/test_log_redaction.py"], allow)
+    assert ps.excused("windy-agent", "private key block", "ffff0000", ["tests/keys/a.pem"], allow)
+    # a PEM header anywhere outside the allowed paths still counts
+    assert not ps.excused("windy-agent", "private key block", "ffff0000", ["tests/keys/a.pem", "deploy/k.pem"], allow)
+    assert not ps.excused("other", "openai key", "aaaa1111", ["x"], allow)
