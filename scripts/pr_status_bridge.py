@@ -74,7 +74,9 @@ MIRROR_TAG = "[GH#"
 # Posting them would put a permanent red X on every commit, and a signal that is
 # always red trains everyone to ignore red. Not posted until a rootless builder
 # exists; that is a decision, recorded in docs/CUTOVER.md, not a failure.
-NO_DAEMON_JOB = re.compile(r"docker", re.IGNORECASE)
+# ...but NOT the no-Docker smoke jobs that replaced them (option A, 09-23):
+# windy-search's "Boot smoke (no Docker)" matched plain `docker` and was hidden.
+NO_DAEMON_JOB = re.compile(r"(?<!no )(?<!no-)(?<!without )docker", re.IGNORECASE)
 # Image-build jobs whose NAME doesn't say docker (orchestrator 09-23, option A:
 # each lane converts the job to a no-Docker smoke test; until then it is not
 # posted). Format: "repo:workflow/job,...;repo2:...".

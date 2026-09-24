@@ -451,3 +451,13 @@ def test_failed_grant_split_warns_instead_of_blocking(fake, monkeypatch):
     monkeypatch.setitem(sys.modules, "guards_report", type("GR", (), {"split_grant": staticmethod(boom)}))
     bridge.post_compute_guard("windy-pro", SHA, "main", True)
     assert [p["state"] for p in f.posted] == ["success"]
+
+
+@pytest.mark.parametrize("name, hidden", [
+    ("Docker Build", True), ("docker-build", True), ("Docker build", True), ("docker", True),
+    ("Boot smoke (no Docker)", False), ("smoke (no-docker)", False), ("boot without Docker", False),
+    ("smoke", False),
+])
+def test_no_docker_smoke_jobs_are_posted(name, hidden):
+    """windy-search #96: its replacement job says "no Docker" and was hidden."""
+    assert bridge.needs_daemon("windy-search", "ci", name) is hidden
