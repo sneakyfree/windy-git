@@ -1,0 +1,14 @@
+[Unit]
+Description=Windy Git nightly STATE backup (Postgres + Gitea config + repos -> encrypted restic in R2)
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/srv/windygit/src
+# R2 credentials come from the .env; the restic password from /etc/windygit/restic.pass
+# (root 600; the same value lives in the lockbox as RESTIC_WINDYGIT_PASSWORD).
+EnvironmentFile=/srv/windygit/src/.env
+ExecStart=/bin/bash /srv/windygit/src/scripts/backup_state.sh
+Nice=10
+IOSchedulingClass=idle
+TimeoutStartSec=3h

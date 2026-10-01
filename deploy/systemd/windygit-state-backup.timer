@@ -1,0 +1,11 @@
+[Unit]
+Description=Nightly Windy Git state backup
+
+[Timer]
+# 03:07 local, clear of the git-bundle backup at 04:17.
+OnCalendar=*-*-* 03:07:00
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target
