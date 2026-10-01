@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # Cross-host restore drill on Windy 0: ONLY lockbox + R2, nothing from Veron. Values never printed.
-# Usage: R2_ACCOUNT_ID=<id> R2_KEY_NAME=<lockbox key> R2_SECRET_NAME=<lockbox key> bash drill_cross_host.sh
+# Usage: bash drill_cross_host.sh   (needs lockbox keys RESTIC_WINDYGIT_PASSWORD, WINDYGIT_R2_ACCESS_KEY_ID, WINDYGIT_R2_SECRET_ACCESS_KEY, WINDYGIT_R2_ENDPOINT)
 set -euo pipefail
 umask 077; W=$(mktemp -d ~/.cache/wg-xdrill.XXXXXX)
 trap 'docker rm -f wg-xdrill-pg >/dev/null 2>&1 || true; rm -rf "$W"' EXIT
 lockbox-get RESTIC_WINDYGIT_PASSWORD "$W/pw" >/dev/null
-lockbox-get "$R2_KEY_NAME" "$W/ak" >/dev/null; lockbox-get "$R2_SECRET_NAME" "$W/sk" >/dev/null
+lockbox-get WINDYGIT_R2_ACCESS_KEY_ID "$W/ak" >/dev/null; lockbox-get WINDYGIT_R2_SECRET_ACCESS_KEY "$W/sk" >/dev/null; lockbox-get WINDYGIT_R2_ENDPOINT "$W/ep" >/dev/null
 export RESTIC_PASSWORD_FILE="$W/pw" AWS_ACCESS_KEY_ID="$(cat "$W/ak")" AWS_SECRET_ACCESS_KEY="$(cat "$W/sk")"
-export RESTIC_REPOSITORY="s3:https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com/windy-git-backups/restic"
+export RESTIC_REPOSITORY="s3:$(cat "$W/ep")/windy-git-backups/restic"
 restic snapshots --tag windygit-state --compact | tail -3
 restic restore latest --tag windygit-state --target "$W/r" --include /var/backups/windygit-state --include /srv/windygit/git/gitea/conf --quiet
 ls -l "$W/r/var/backups/windygit-state" | awk 'NR>1{print $5, $NF}'
