@@ -1,0 +1,7 @@
+[Unit]
+Description=Nightly runner-guard sweep of every PUBLIC repo's workflows (Windy Git lane)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/windy-job windy-runner-guard-sweep 26h --expect "runner-guard sweep: 0 hit" --owner 13 -- %h/bin/nightly-runner-guard-sweep.sh
+TimeoutStartSec=1200
