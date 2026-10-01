@@ -27,6 +27,8 @@ import secret_shapes as ss  # noqa: E402
 ROOT = Path(__file__).resolve().parents[1]
 ALLOW_FILE = Path(os.environ.get("SECRET_GUARD_ALLOW", ROOT / "ci" / "secret-guard-allow.yml"))
 MODE = os.environ.get("SECRET_GUARD_MODE", "warn")
+# Kinds that only WARN (rolled out warn-first); empty = every kind blocks in block mode.
+WARN_KINDS = {k for k in os.environ.get("SECRET_GUARD_WARN_KINDS", "").split(",") if k}
 NEVER = re.compile(r"(^|/)(node_modules|vendor|third_party)/")
 
 
@@ -94,8 +96,11 @@ def status_for(findings, whole_tree: bool, grant=()):
     if not findings:
         return "success", f"OK: no secret-shaped strings {scope}", None
     f, n = findings[0], len(findings)
-    state = "failure" if MODE == "block" else "success"
-    lead = "BLOCKED" if MODE == "block" else "⚠ WARN (not blocking)"
+    soft = MODE != "block" or all(x.kind in WARN_KINDS for x in findings)
+    state = "success" if soft else "failure"
+    lead = "⚠ WARN (not blocking)" if soft else "BLOCKED"
+    if not soft:
+        f = next(x for x in findings if x.kind not in WARN_KINDS)
     return state, f"{lead}: {n} secret-shaped string{'s' if n > 1 else ''} {scope}, e.g. {f.path}:{f.line} {f.match}"[:140], f
 
 

@@ -117,3 +117,32 @@ def test_public_scan_excuses_by_hash_and_by_path():
     # a PEM header anywhere outside the allowed paths still counts
     assert not ps.excused("windy-agent", "private key block", "ffff0000", ["tests/keys/a.pem", "deploy/k.pem"], allow)
     assert not ps.excused("other", "openai key", "aaaa1111", ["x"], allow)
+
+
+HEX32 = "0123456789abcdef" * 2  # synthetic
+
+
+def test_twilio_shapes_hash_only_and_no_md5_noise():
+    kinds = lambda t: [k for k, _ in ss.find(t)]  # noqa: E731
+    assert kinds(f'TWILIO_AUTH_TOKEN = "{HEX32}"') == ["32-hex secret assignment"]
+    assert kinds(f"auth_token: {HEX32}") == ["32-hex secret assignment"]
+    assert kinds("AC" + HEX32) == ["twilio sid/api key"]
+    assert kinds("SK" + HEX32) == ["twilio sid/api key"]
+    # plain md5 / uuid-without-dashes / a 64-hex sha256 are NOT secrets by shape
+    assert kinds(f"md5 = {HEX32}") == []
+    assert kinds(f"checksum_key = {HEX32}{HEX32}") == []
+    assert kinds(f"name = 'x{HEX32}'") == []
+    # the hash is of the value alone, so renaming the variable keeps the same allow hash
+    a = ss.find(f"A_TOKEN={HEX32}")[0][1]
+    b = ss.find(f"OTHER_SECRET: '{HEX32}'")[0][1]
+    assert a == b == ss.h8(HEX32)
+    assert HEX32 not in repr(ss.find(f"A_TOKEN={HEX32}"))
+
+
+def test_warn_kinds_do_not_block(monkeypatch):
+    f = sg.cg.Finding("a.py", 1, "32-hex secret assignment", "32-hex secret assignment #abcd1234")
+    monkeypatch.setattr(sg, "MODE", "block")
+    monkeypatch.setattr(sg, "WARN_KINDS", {"32-hex secret assignment"})
+    assert sg.status_for([f], True)[0] == "success"
+    monkeypatch.setattr(sg, "WARN_KINDS", set())
+    assert sg.status_for([f], True)[0] == "failure"
