@@ -94,6 +94,11 @@ if ! python3 "$(dirname "$0")/pr_status_bridge.py"; then
   log "FAILED pr status bridge"; FAILED=1
 fi
 
+# Runner guard (Boss 10-01): PUBLIC sneakyfree repos have self-hosted GitHub runners on Veron.
+# A PR that changes a workflow so a stranger's code could reach one gets a red
+# windy-git/runner-guard status. Each status is posted once; never fails the sync.
+timeout -k 10 120 python3 "$(dirname "$0")/runner_guard.py" pr --post || log "runner-guard failed or timed out (non-fatal)"
+
 # CI telemetry -> admin.windyword.ai (shapes declared with Windy Telemetry 40).
 # Sends nothing until WINDYGIT_TELEMETRY_TOKEN is set; never fails the sync.
 timeout -k 10 180 python3 "$(dirname "$0")/telemetry_emit.py" || log "telemetry emit failed or timed out (non-fatal)"
