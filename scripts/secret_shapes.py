@@ -23,13 +23,14 @@ PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("twilio sid/api key", re.compile(r"\b(?:AC|SK)[0-9a-f]{32}\b")),
     ("32-hex secret assignment", re.compile(
         r"(?i)\b[a-z0-9_.-]*(?:token|secret|key|password)[a-z0-9_.-]*[\"']?\s*[:=]\s*[\"']?(?P<v>(?<![0-9a-f])[0-9a-f]{32}(?![0-9a-f]))")),
+    ("pypi token", re.compile(r"\bpypi-AgE[A-Za-z0-9_-]{50,}")),
     ("private key block", re.compile(r"-----BEGIN (?:RSA |EC |DSA |OPENSSH |ENCRYPTED )?PRIVATE KEY-----")),
 ]
 
 # git grep -E (POSIX ERE) prefilter: cheap superset of PATTERNS.
 PREFILTER = ("[0-9]{8,10}:[A-Za-z0-9_-]{35}|gh[pousr]_[A-Za-z0-9]{36}|github_pat_|(AKIA|ASIA)[0-9A-Z]{16}"
              "|xox[abprs]-|sk-ant-|sk-[A-Za-z0-9_-]{32}|sk-proj-|[rs]k_live_|AIza[0-9A-Za-z_-]{35}"
-             "|-----BEGIN [A-Z ]*PRIVATE KEY-----|(AC|SK)[0-9a-f]{32}|[0-9a-fA-F]{32}")
+             "|-----BEGIN [A-Z ]*PRIVATE KEY-----|(AC|SK)[0-9a-f]{32}|[0-9a-fA-F]{32}|pypi-AgE")
 
 
 def h8(value: str | bytes) -> str:

@@ -146,3 +146,11 @@ def test_warn_kinds_do_not_block(monkeypatch):
     assert sg.status_for([f], True)[0] == "success"
     monkeypatch.setattr(sg, "WARN_KINDS", set())
     assert sg.status_for([f], True)[0] == "failure"
+
+
+def test_pypi_token_shape_hash_only():
+    tok = "pypi-AgE" + "Ab1_-" * 20  # synthetic
+    got = ss.find(f"password = {tok}")
+    assert [k for k, _ in got] == ["pypi token"] and got[0][1] == ss.h8(tok)
+    assert tok not in repr(got)
+    assert ss.find("pypi-AgE-too-short") == []
