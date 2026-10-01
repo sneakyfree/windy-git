@@ -229,3 +229,24 @@ def test_block_mode_never_blocks_grant_owned(monkeypatch):
     assert state == "success" and desc.startswith("⚠ WARN (Grant-owned, not blocking): 1") and f is g
     lane = cg.Finding("a.py", 3, "provider host", "x")
     assert cg.status_for([lane], whole_tree=True, grant=[g])[0] == "failure"
+
+
+def test_veron_ollama_warns_on_added_lines_and_never_blocks(monkeypatch):
+    hits = cg.scan_line("app/llm.py", 'OLLAMA = "http://192.168.1.73:11434/api/generate"')
+    assert [k for k, _ in hits] == ["veron ollama"]
+    assert cg.scan_line("app/llm.py", 'port = 114345') == []                # not the port
+    assert cg.scan_line("app/llm.py", "# was http://x:11434 (removed)") == []  # a comment is not a call
+    f = cg.Finding("app/llm.py", 7, "veron ollama", ":11434")
+    monkeypatch.setattr(cg, "MODE", "block")
+    state, desc, _ = cg.status_for([f], whole_tree=False)
+    assert state == "success" and desc.startswith("⚠ WARN: new Veron Ollama ref app/llm.py:7")
+    assert "Windy Mind" in desc and len(desc) <= 140
+    hard = cg.Finding("app/llm.py", 1, "provider host", "api.openai.com")
+    assert cg.status_for([f, hard], whole_tree=False)[0] == "failure"       # a real violation still blocks
+
+
+def test_ollama_in_added_pr_lines_only():
+    diff = ("+++ b/svc/client.py\n@@ -0,0 +1,2 @@\n+import httpx\n"
+            "+URL = 'http://veron:11434/api/chat'\n")
+    got = cg.parse_added("some-repo", diff, [])
+    assert [(f.kind, f.line) for f in got] == [("veron ollama", 2)]

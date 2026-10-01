@@ -45,3 +45,8 @@ allow:
   - repo: windy-git
     paths: ["scripts/compute_guard.py", "ci/compute-guard-allow.yml"]
     reason: "The guard's own pattern list and this file."
+
+  - repo: windy-mind
+    paths: ["*"]
+    matches: [':11434']
+    reason: "Windy Mind IS the compute door (endpoint + key); it may call Ollama. Only the Ollama port is allowed here, any provider host/SDK in Mind still flags."
