@@ -63,6 +63,9 @@ JS_SDKS = (r"@anthropic-ai/sdk|openai|groq-sdk|@google/generative-ai|@google/gen
 
 RULES: list[tuple[str, re.Pattern]] = [
     ("provider host", re.compile("|".join(re.escape(h) for h in HOSTS))),
+    # Grant via Boss 10-01: compute = Windy Mind. A NEW reference to an Ollama port (Veron's :11434) is a
+    # direct call around Mind's metering/caps. WARN-only, never red, and only for lines a PR ADDS.
+    ("veron ollama", re.compile(r"(?::|%3[aA])11434(?![0-9])")),
     ("provider key", re.compile(r"\b(?:" + "|".join(KEYS) + r")\b")),
     ("provider SDK", re.compile(rf"^\s*(?:from|import)\s+(?:{PY_SDKS})(?:\s|\.|$|,)")),
     ("provider SDK", re.compile(rf"""(?:from\s+|require\(\s*|import\(\s*)['"](?:{JS_SDKS})(?:/[^'"]*)?['"]""")),
@@ -70,6 +73,9 @@ RULES: list[tuple[str, re.Pattern]] = [
     ("provider SDK dep", re.compile(rf'''^\s*"(?:{JS_SDKS})"\s*:''')),
     ("provider SDK dep", re.compile(rf'''^\s*["']?(?:{PY_SDKS.replace(chr(92) + ".", "-")})(?:\[[^\]]*\])?\s*(?:[<>=~!]=?|["',]|$)''')),
 ]
+# Kinds that never block (even in MODE=block) and are only judged on ADDED lines, never the baseline tree.
+WARN_ONLY_KINDS = {"veron ollama"}
+OLLAMA_MSG = "compute = Windy Mind (endpoint + key); do not call Veron's Ollama directly"
 DEP_FILES = re.compile(r"(^|/)(package\.json|requirements[^/]*\.txt|pyproject\.toml|setup\.cfg|Pipfile)$")
 
 # Never scanned: tests, docs, lockfiles, vendored/built code, CI config.
@@ -253,7 +259,8 @@ def check(repo: str, sha: str, default_branch: str, is_default_head: bool) -> li
     allow = load_allow()
     fp = _fingerprint(allow)
     if is_default_head:
-        return cached_scan(f"tree:{repo}:{sha}:{fp}", lambda: scan_tree(repo, bare, sha, allow))
+        return cached_scan(f"tree:{repo}:{sha}:{fp}",
+                           lambda: [f for f in scan_tree(repo, bare, sha, allow) if f.kind not in WARN_ONLY_KINDS])
     return cached_scan(
         f"pr:{repo}:{sha}:{fp}",
         lambda: scan_added(repo, bare, f"refs/heads/{default_branch}", sha, allow),
@@ -268,6 +275,11 @@ def status_for(findings: list[Finding], whole_tree: bool,
     Grant-owned code (ci/grant-owned.yml): always WARN, never red (orchestrator
     09-23: his desktop work is never blocked by us)."""
     scope = "in tree" if whole_tree else "added"
+    soft = [f for f in findings if f.kind in WARN_ONLY_KINDS]
+    findings = [f for f in findings if f.kind not in WARN_ONLY_KINDS]
+    if not findings and not grant and soft:
+        f = soft[0]
+        return "success", f"⚠ WARN: new Veron Ollama ref {f.path}:{f.line}. {OLLAMA_MSG}"[:140], f
     if not findings and grant:
         g, n = grant[0], len(grant)
         desc = (f"⚠ WARN (Grant-owned, not blocking): {n} direct AI-provider use{'s' if n > 1 else ''} "
