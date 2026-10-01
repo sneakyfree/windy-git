@@ -22,7 +22,16 @@ GIT_ROOT="${GIT_DATA_ROOT:-/srv/windygit/git}"
 umask 077
 mkdir -p "$STAGE"; chmod 700 "$STAGE"; rm -f "$STAGE"/*.dump "$STAGE"/globals.sql
 
-restic cat config >/dev/null 2>&1 || { log "initialising restic repo"; restic init >/dev/null; }
+# systemd gives units no $HOME, and restic wants a cache dir: pin one.
+export RESTIC_CACHE_DIR="${RESTIC_CACHE_DIR:-/var/cache/windygit-restic}"; mkdir -p "$RESTIC_CACHE_DIR"
+if ! err=$(restic cat config 2>&1 >/dev/null); then
+  # only a MISSING repo may be initialised; any other error (auth, network, wrong password) must stop here
+  if grep -qiE "does not exist|is there a repository|unable to open config file" <<<"$err"; then
+    log "initialising restic repo"; restic init >/dev/null
+  else
+    log "FATAL: restic cannot open the repository: $(head -c 300 <<<"$err" | tr '\n' ' ')"; exit 1
+  fi
+fi
 
 PGU=$(timeout 30 docker exec "$DB" printenv POSTGRES_USER)
 [[ -n "$PGU" ]] || { log "FATAL: no POSTGRES_USER in $DB"; exit 1; }
