@@ -31,6 +31,7 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass
+from datetime import date, timedelta
 from pathlib import Path
 
 import yaml
@@ -49,6 +50,17 @@ HOSTS = [
     "api.cohere.com", "api.fireworks.ai", "api.replicate.com",
     "api-inference.huggingface.co",
 ]
+# Mind's 10-02 gatekeeper list (speech / voice / avatar / vision / cloud ML): own kinds, so a rollout
+# can be WARN-first (COMPUTE_GUARD_WARN_KINDS) without softening the original provider rules.
+VOICE_HOSTS = [
+    "api.deepgram.com", "api.elevenlabs.io", "api.cartesia.ai", "api.play.ht", "api.playht.com",
+    "app.resemble.ai", "f.cluster.resemble.ai", "api.heygen.com",
+    "vision.googleapis.com", "speech.googleapis.com", "texttospeech.googleapis.com",
+]
+VOICE_KEYS = [
+    "DEEPGRAM_API_KEY", "ELEVENLABS_API_KEY", "ELEVEN_API_KEY", "CARTESIA_API_KEY", "PLAYHT_API_KEY",
+    "PLAY_HT_API_KEY", "PLAYHT_USER_ID", "RESEMBLE_API_KEY", "HEYGEN_API_KEY",
+]
 KEYS = [
     "ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_AUTH_TOKEN",
     "OPENAI_API_KEY", "GROQ_API_KEY", "GEMINI_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY",
@@ -61,11 +73,23 @@ PY_SDKS = r"anthropic|openai|groq|mistralai|cohere|google\.generativeai|google\.
 JS_SDKS = (r"@anthropic-ai/sdk|openai|groq-sdk|@google/generative-ai|@google/genai|@mistralai/mistralai"
            r"|cohere-ai|together-ai|@ai-sdk/(?:anthropic|openai|groq|google|mistral)")
 
+# The engine-port rule is about CODE/CONFIG that calls the engine, not API contracts, schemas or specs.
+PORT_SKIP = re.compile(r"(^|/)(contracts?|schemas?|specs?|openapi)/|\.json$", re.I)
+WRANGLER = re.compile(r"(^|/)wrangler\.(toml|jsonc?)$")
+WRANGLER_AI = re.compile(r'^\s*\[ai\]\s*$|^\s*"ai"\s*:\s*\{')
+
 RULES: list[tuple[str, re.Pattern]] = [
     ("provider host", re.compile("|".join(re.escape(h) for h in HOSTS))),
     # Grant via Boss 10-01: compute = Windy Mind. A NEW reference to an Ollama port (Veron's :11434) is a
     # direct call around Mind's metering/caps. WARN-only, never red, and only for lines a PR ADDS.
     ("veron ollama", re.compile(r"(?::|%3[aA])11434(?![0-9])")),
+    ("voice-ai host", re.compile("|".join(re.escape(h) for h in VOICE_HOSTS))),
+    ("voice-ai key", re.compile(r"\b(?:" + "|".join(VOICE_KEYS) + r")\b")),
+    ("voice-ai host", re.compile(r"(?:transcribe|polly)\.[a-z0-9-]+\.amazonaws\.com")),
+    ("provider host", re.compile(r"(?:bedrock-runtime|bedrock)\.[a-z0-9-]+\.amazonaws\.com")),
+    ("cloudflare workers ai", re.compile(r"api\.cloudflare\.com/client/v4/accounts/[^\s'\"/]+/ai/")),
+    ("talk engine port", re.compile(r"(?::|%3[aA])(?:8791|8788|8794|8099)(?![0-9])")),
+    ("workers ai binding", WRANGLER_AI),
     ("provider key", re.compile(r"\b(?:" + "|".join(KEYS) + r")\b")),
     ("provider SDK", re.compile(rf"^\s*(?:from|import)\s+(?:{PY_SDKS})(?:\s|\.|$|,)")),
     ("provider SDK", re.compile(rf"""(?:from\s+|require\(\s*|import\(\s*)['"](?:{JS_SDKS})(?:/[^'"]*)?['"]""")),
@@ -75,6 +99,9 @@ RULES: list[tuple[str, re.Pattern]] = [
 ]
 # Kinds that never block (even in MODE=block) and are only judged on ADDED lines, never the baseline tree.
 WARN_ONLY_KINDS = {"veron ollama"}
+# Rolled out WARN-first: these kinds still show (tree + PRs) but never block, until the env var
+# (a systemd drop-in on the sync, like SECRET_GUARD_WARN_KINDS) is removed.
+SOFT_KINDS = {k for k in os.environ.get("COMPUTE_GUARD_WARN_KINDS", "").split(",") if k}
 OLLAMA_MSG = "compute = Windy Mind (endpoint + key); do not call Veron's Ollama directly"
 DEP_FILES = re.compile(r"(^|/)(package\.json|requirements[^/]*\.txt|pyproject\.toml|setup\.cfg|Pipfile)$")
 
@@ -95,13 +122,47 @@ class Finding:
     match: str
 
 
-def load_allow(path: Path = ALLOW_FILE) -> list[dict]:
+EXEMPTIONS = {"local-user-hardware", "owner-approved", "compute-door", "guard-self"}
+STRUCTURAL = {"compute-door", "guard-self"}   # the door itself and the guard's own files: yearly review
+APPROVERS = {"windy-hub", "windy-mind"}       # a lane never approves its own exemption (Hub 10-02)
+MAX_DAYS = 90                                 # every other exemption: 90 days max, then re-approve
+EXPIRED: list[dict] = []  # entries dropped as expired on the last load_allow (reported, never silent)
+OVERCAP: list[dict] = []  # entries dropped because their expiry is further out than MAX_DAYS
+
+
+def load_allow(path: Path = ALLOW_FILE, today: date | None = None, strict: bool = True) -> list[dict]:
+    """Active entries only. Every entry needs repo, paths, a reason, a NAMED exemption and an expiry
+    date (Mind 10-02: nothing gets permanent amnesty). An expired entry stops excusing code at once.
+    `strict=False` is for OTHER guards reusing this loader (ci-hygiene) with their own file format."""
+    today = today or date.today()
     data = yaml.safe_load(path.read_text()) or {}
     entries = data.get("allow") or []
-    for e in entries:  # a reason per entry is the whole point of the file
+    active = []
+    EXPIRED.clear()
+    OVERCAP.clear()
+    for e in entries:
         if not (e.get("repo") and e.get("paths") and str(e.get("reason", "")).strip()):
             raise ValueError(f"allow entry needs repo, paths and a reason: {e}")
-    return entries
+        if not strict:
+            active.append(e)
+            continue
+        if e.get("exemption") not in EXEMPTIONS:
+            raise ValueError(f"allow entry needs exemption in {sorted(EXEMPTIONS)}: {e.get('repo')} {e.get('paths')}")
+        try:
+            exp = e["expires"] if isinstance(e.get("expires"), date) else date.fromisoformat(str(e.get("expires")))
+        except ValueError as err:
+            raise ValueError(f"allow entry needs expires: YYYY-MM-DD: {e.get('repo')} {e.get('paths')}") from err
+        if e["exemption"] not in STRUCTURAL:
+            if e.get("approved_by") not in APPROVERS:
+                raise ValueError(f"allow entry needs approved_by in {sorted(APPROVERS)}: {e.get('repo')} {e.get('paths')}")
+            if exp > today + timedelta(days=MAX_DAYS):
+                OVERCAP.append({**e, "expires": exp.isoformat()})  # a longer amnesty simply does not apply
+                continue
+        if exp < today:
+            EXPIRED.append({**e, "expires": exp.isoformat()})
+        else:
+            active.append(e)
+    return active
 
 
 def allowed(repo: str, path: str, allow: list[dict], text: str | None = None) -> bool:
@@ -132,6 +193,10 @@ def scan_line(path: str, text: str) -> list[tuple[str, str]]:
     for kind, rx in RULES:
         if kind == "provider SDK dep" and not DEP_FILES.search(path):
             continue
+        if kind == "workers ai binding" and not WRANGLER.search(path):
+            continue
+        if kind == "talk engine port" and PORT_SKIP.search(path):
+            continue
         m = rx.search(text)
         if m:
             hits.append((kind, m.group(0).strip()[:60]))
@@ -156,9 +221,11 @@ def scan_tree(repo: str, bare: Path, sha: str, allow: list[dict], *, line_fn=Non
     # Other guards (ci_hygiene) reuse this walker with their own line rules.
     line_fn = line_fn or scan_line
     path_ok = path_ok or _default_path_ok
-    pre = prefilter or "|".join([re.escape(h) for h in HOSTS] + KEYS + [
+    pre = prefilter or "|".join([re.escape(h) for h in HOSTS + VOICE_HOSTS] + KEYS + VOICE_KEYS + [
         "anthropic", "openai", "groq", "mistral", "generativeai", "genai", "cohere",
-        "together", "cerebras", "litellm"])
+        "together", "cerebras", "litellm", "deepgram", "elevenlabs", "cartesia", "play\\.ht", "resemble",
+        "heygen", "googleapis\\.com", "amazonaws\\.com", "api\\.cloudflare\\.com", ":8791", ":8788",
+        ":8794", ":8099", "%3[aA]87", "%3[aA]8099", r"^\s*\[ai\]", '"ai"'])
     try:
         out = _git(bare, "grep", "-nIE", "-e", pre, sha, "--", ".")
     except subprocess.CalledProcessError as e:
@@ -215,7 +282,8 @@ def parse_added(repo: str, diff: str, allow: list[dict], *, line_fn=None, path_o
 # ---- cache: a tree scan runs once per (repo, sha, rules+allow) --------------
 def _fingerprint(allow: list[dict]) -> str:
     return hashlib.sha256(
-        json.dumps([HOSTS, KEYS, PY_SDKS, JS_SDKS, SKIP.pattern, allow], sort_keys=True).encode()
+        json.dumps([HOSTS, KEYS, VOICE_HOSTS, VOICE_KEYS, [r.pattern for _, r in RULES], PY_SDKS, JS_SDKS,
+                    SKIP.pattern, allow], sort_keys=True, default=str).encode()
     ).hexdigest()[:16]
 
 
@@ -280,6 +348,13 @@ def status_for(findings: list[Finding], whole_tree: bool,
     if not findings and not grant and soft:
         f = soft[0]
         return "success", f"⚠ WARN: new Veron Ollama ref {f.path}:{f.line}. {OLLAMA_MSG}"[:140], f
+    rolling = [f for f in findings if f.kind in SOFT_KINDS]
+    if findings and len(rolling) == len(findings) and not grant:
+        f, n = rolling[0], len(rolling)
+        return "success", (f"⚠ WARN (rolling out, not blocking): {n} direct AI-provider use{'s' if n > 1 else ''} "
+                           f"{scope}, e.g. {f.path}:{f.line} {f.match}")[:140], f
+    if rolling:
+        findings = [f for f in findings if f.kind not in SOFT_KINDS]
     if not findings and grant:
         g, n = grant[0], len(grant)
         desc = (f"⚠ WARN (Grant-owned, not blocking): {n} direct AI-provider use{'s' if n > 1 else ''} "
@@ -298,6 +373,12 @@ def status_for(findings: list[Finding], whole_tree: bool,
 
 def report(repos: list[str]) -> int:
     allow = load_allow()
+    for e in OVERCAP:
+        print(f"## OVER-CAP exemption (> {MAX_DAYS} days, NOT applied): {e['repo']} {e['paths']} "
+              f"[{e['exemption']}] expires {e['expires']}")
+    for e in EXPIRED:
+        print(f"## EXPIRED exemption (no longer excuses anything): {e['repo']} {e['paths']} "
+              f"[{e['exemption']}] expired {e['expires']}")
     total = 0
     for repo in repos:
         bare = WORK / f"{repo}.git"

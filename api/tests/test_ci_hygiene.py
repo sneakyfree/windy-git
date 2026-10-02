@@ -86,7 +86,7 @@ def test_warn_mode_never_turns_red(monkeypatch):
 def test_allow_file_is_line_scoped_exceptions_only():
     """Every exception is line-scoped (`matches`), so an allowed file can't hide a
     NEW floating install or docker step. Today: windy-pro's if:false deploy job."""
-    allow = hy.cg.load_allow(hy.ALLOW_FILE)
+    allow = hy.cg.load_allow(hy.ALLOW_FILE, strict=False)
     assert [(e["repo"], e["paths"]) for e in allow] == [("windy-pro", [".github/workflows/ci.yml"])]
     assert all(e.get("matches") for e in allow)
     ok = "        run: docker build -f account-server/Dockerfile -t windy-pro:${{ github.sha }} ."
