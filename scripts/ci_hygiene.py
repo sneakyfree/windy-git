@@ -204,7 +204,7 @@ def _check(repo: str, sha: str, default_branch: str, is_default_head: bool):
     bare = cg.WORK / f"{repo}.git"
     if not bare.is_dir() or not cg.fetched(bare, sha):  # pushed after the fetch: next cycle
         return None
-    allow = cg.load_allow(ALLOW_FILE)
+    allow = cg.load_allow(ALLOW_FILE, strict=False)
     rules = hashlib.sha256((PREFILTER + INCLUDE.pattern + EXACT_PY.pattern + EXACT_NPM.pattern).encode()).hexdigest()[:8]
     fp = cg._fingerprint(allow) + ":" + rules  # hashlib, not hash(): hash() is per-process random
     kw = dict(line_fn=scan_line, path_ok=path_ok)
@@ -232,7 +232,7 @@ def status_for(findings, whole_tree: bool, grant=()):
 
 
 def report(repos: list[str]) -> int:
-    allow = cg.load_allow(ALLOW_FILE)
+    allow = cg.load_allow(ALLOW_FILE, strict=False)
     total = 0
     for repo in repos:
         bare = cg.WORK / f"{repo}.git"

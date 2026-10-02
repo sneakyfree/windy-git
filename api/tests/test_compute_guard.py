@@ -77,6 +77,86 @@ def test_allow_list_needs_a_reason_per_entry(tmp_path):
         cg.load_allow(bad)
 
 
+def _entry(**kw):
+    base = dict(repo="x", paths=["*"], reason="r", exemption="owner-approved", expires="2099-01-01")
+    base.update(kw)
+    lines = ["allow:", "  - repo: x", "    paths: ['*']", "    reason: r"]
+    for k in ("exemption", "expires"):
+        if base.get(k) is not None:
+            lines.append(f"    {k}: {base[k]}")
+    return "\n".join(lines) + "\n"
+
+
+def test_allow_entries_need_a_named_exemption_and_an_expiry(tmp_path):
+    f = tmp_path / "a.yml"
+    f.write_text(_entry(exemption=None))
+    with pytest.raises(ValueError):
+        cg.load_allow(f)
+    f.write_text(_entry(exemption="because-i-said-so"))
+    with pytest.raises(ValueError):
+        cg.load_allow(f)
+    f.write_text(_entry(expires=None))
+    with pytest.raises(ValueError):
+        cg.load_allow(f)
+    f.write_text(_entry(expires="someday"))
+    with pytest.raises(ValueError):
+        cg.load_allow(f)
+    f.write_text(_entry())
+    assert len(cg.load_allow(f)) == 1
+
+
+def test_expired_exemption_stops_excusing_and_is_reported(tmp_path):
+    from datetime import date
+    f = tmp_path / "a.yml"
+    f.write_text(_entry(expires="2026-10-01"))
+    assert cg.load_allow(f, today=date(2026, 10, 1))        # the expiry day is still valid
+    assert cg.load_allow(f, today=date(2026, 10, 2)) == []   # the next day it no longer excuses anything
+    assert cg.EXPIRED and cg.EXPIRED[0]["repo"] == "x" and cg.EXPIRED[0]["expires"] == "2026-10-01"
+
+
+def test_shipped_allow_file_is_valid_today():
+    assert cg.load_allow() and not cg.EXPIRED  # nothing in the repo's own file may already be expired
+
+
+@pytest.mark.parametrize("text, kind", [
+    ('u = "https://api.deepgram.com/v1/listen"', "voice-ai host"),
+    ("fetch(`https://api.elevenlabs.io/v1/tts`)", "voice-ai host"),
+    ('h = "api.cartesia.ai"', "voice-ai host"),
+    ('h = "app.resemble.ai"', "voice-ai host"),
+    ('h = "speech.googleapis.com"', "voice-ai host"),
+    ('h = "transcribe.us-east-1.amazonaws.com"', "voice-ai host"),
+    ('h = "polly.eu-west-1.amazonaws.com"', "voice-ai host"),
+    ("DEEPGRAM_API_KEY=abc", "voice-ai key"),
+    ("ELEVENLABS_API_KEY = x", "voice-ai key"),
+    ('u = f"https://api.cloudflare.com/client/v4/accounts/{a}/ai/run/@cf/m"', "cloudflare workers ai"),
+    ('ENGINE = "http://10.0.0.5:8791/v1"', "talk engine port"),
+    ('ENGINE = "http://h:8788/ws"', "talk engine port"),
+    ('x = "http://h:8099/health"', "talk engine port"),
+])
+def test_gatekeeper_rules_fire(text, kind):
+    assert kind in [k for k, _ in cg.scan_line("app/x.py", text)]
+
+
+def test_workers_ai_binding_only_in_wrangler_and_near_misses_are_quiet():
+    assert [k for k, _ in cg.scan_line("wrangler.toml", "[ai]")] == ["workers ai binding"]
+    assert [k for k, _ in cg.scan_line("apps/x/wrangler.jsonc", '  "ai": {')] == ["workers ai binding"]
+    assert cg.scan_line("other.toml", "[ai]") == []
+    assert cg.scan_line("app/x.py", "port = 87912") == []
+    assert cg.scan_line("app/x.py", "# talk engine was :8791 (removed)") == []
+
+
+def test_rolling_out_kinds_warn_but_dont_block_and_hard_kinds_still_do(monkeypatch):
+    monkeypatch.setattr(cg, "MODE", "block")
+    monkeypatch.setattr(cg, "SOFT_KINDS", {"voice-ai host", "voice-ai key"})
+    soft = cg.Finding("a.py", 1, "voice-ai host", "api.deepgram.com")
+    hard = cg.Finding("a.py", 2, "provider host", "api.openai.com")
+    state, desc, _ = cg.status_for([soft], whole_tree=True)
+    assert state == "success" and "rolling out" in desc and len(desc) <= 140
+    assert cg.status_for([soft, hard], whole_tree=True)[0] == "failure"
+    monkeypatch.setattr(cg, "SOFT_KINDS", set())
+    assert cg.status_for([soft], whole_tree=True)[0] == "failure"   # rollout over: it blocks
+
+
 @pytest.mark.parametrize(
     "repo, path, ok",
     [
