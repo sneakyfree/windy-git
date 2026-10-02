@@ -83,3 +83,12 @@ allow:
     reason: "Windy Mind IS the compute door (endpoint + key); it may call Ollama. Only the Ollama port is allowed here, any provider host/SDK in Mind still flags."
     exemption: compute-door
     expires: 2027-10-02
+
+  - repo: windy-pro
+    paths: [".env.example"]
+    matches: ['DEEPGRAM_API_KEY']
+    reason: "Template line (name only, no value) for the existing user-own-key Deepgram feature in Word's Settings. Mind's migration removes the feature and then this line (Hub classification 10-02)."
+    exemption: owner-approved
+    approved_by: windy-hub
+    approved_on: 2026-10-02
+    expires: 2026-12-31

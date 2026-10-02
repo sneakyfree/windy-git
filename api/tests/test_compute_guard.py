@@ -133,7 +133,7 @@ def test_shipped_allow_file_is_valid_today():
     ('u = f"https://api.cloudflare.com/client/v4/accounts/{a}/ai/run/@cf/m"', "cloudflare workers ai"),
     ('ENGINE = "http://10.0.0.5:8791/v1"', "talk engine port"),
     ('ENGINE = "http://h:8788/ws"', "talk engine port"),
-    ('x = "http://h:8099/health"', "talk engine port"),
+    ('x = "http://h:8794/health"', "talk engine port"),
 ])
 def test_gatekeeper_rules_fire(text, kind):
     assert kind in [k for k, _ in cg.scan_line("app/x.py", text)]
@@ -365,6 +365,8 @@ def test_findings_carry_kind_and_name_never_the_value_and_ports_skip_contracts()
         hits = cg.scan_line("app/x.py", line)
         assert [k for k, _ in hits] == [kind]
         assert all("SUPERSECRET" not in m and "VALUE" not in m for _, m in hits)
-    assert cg.scan_line("engine/contracts/ops.mcp.v1.json", '"url": "http://h:8099/x"') == []
-    assert cg.scan_line("services/api/openapi/spec.json", '"url": "http://h:8099/x"') == []
-    assert [k for k, _ in cg.scan_line("deploy/docker-compose.yml", "    - 8099:8099 # :8099")] == ["talk engine port"]
+    assert cg.scan_line("engine/contracts/ops.mcp.v1.json", '"url": "http://h:8791/x"') == []
+    assert cg.scan_line("services/api/openapi/spec.json", '"url": "http://h:8791/x"') == []
+    assert [k for k, _ in cg.scan_line("deploy/docker-compose.yml", "    - 8791:8791 # :8791")] == ["talk engine port"]
+    # :8099 is windy-pro's OLD translate-api / cloud-storage service, NOT the Talk engine (Hub 10-02): not flagged
+    assert cg.scan_line("deploy/docker-compose.yml", "    - 8099:8099 # translate-api:8099") == []

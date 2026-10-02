@@ -88,7 +88,7 @@ RULES: list[tuple[str, re.Pattern]] = [
     ("voice-ai host", re.compile(r"(?:transcribe|polly)\.[a-z0-9-]+\.amazonaws\.com")),
     ("provider host", re.compile(r"(?:bedrock-runtime|bedrock)\.[a-z0-9-]+\.amazonaws\.com")),
     ("cloudflare workers ai", re.compile(r"api\.cloudflare\.com/client/v4/accounts/[^\s'\"/]+/ai/")),
-    ("talk engine port", re.compile(r"(?::|%3[aA])(?:8791|8788|8794|8099)(?![0-9])")),
+    ("talk engine port", re.compile(r"(?::|%3[aA])(?:8791|8788|8794)(?![0-9])")),
     ("workers ai binding", WRANGLER_AI),
     ("provider key", re.compile(r"\b(?:" + "|".join(KEYS) + r")\b")),
     ("provider SDK", re.compile(rf"^\s*(?:from|import)\s+(?:{PY_SDKS})(?:\s|\.|$|,)")),
@@ -225,7 +225,7 @@ def scan_tree(repo: str, bare: Path, sha: str, allow: list[dict], *, line_fn=Non
         "anthropic", "openai", "groq", "mistral", "generativeai", "genai", "cohere",
         "together", "cerebras", "litellm", "deepgram", "elevenlabs", "cartesia", "play\\.ht", "resemble",
         "heygen", "googleapis\\.com", "amazonaws\\.com", "api\\.cloudflare\\.com", ":8791", ":8788",
-        ":8794", ":8099", "%3[aA]87", "%3[aA]8099", r"^\s*\[ai\]", '"ai"'])
+        ":8794", "%3[aA]87", r"^\s*\[ai\]", '"ai"'])
     try:
         out = _git(bare, "grep", "-nIE", "-e", pre, sha, "--", ".")
     except subprocess.CalledProcessError as e:
