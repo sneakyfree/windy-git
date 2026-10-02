@@ -110,3 +110,21 @@ allow:
     approved_by: windy-hub
     approved_on: 2026-10-02
     expires: 2026-12-31
+
+  - repo: windytalk
+    paths: ["scripts/run-client.sh"]
+    matches: [':(8791|8788|8794)']
+    reason: "Dev client launcher: 127.0.0.1:8788 is an ssh -L tunnel to the dev engine ON VERON (not the user's machine), so engine-side; dev-only, not shipped. To be placed behind Mind per Mind's audit plan (Windy Talk, Hub 10-02)."
+    exemption: owner-approved
+    approved_by: windy-hub
+    approved_on: 2026-10-02
+    expires: 2026-12-31
+
+  - repo: windytalk
+    paths: ["apps/desktop/renderer/index.html"]
+    matches: [':(8791|8788|8794)']
+    reason: "Display-only fallback label in the settings panel (cfg.engineUrl || default); connects to nothing. The shipped client defaults to the public engine on Veron, never local inference (Windy Talk, Hub 10-02)."
+    exemption: owner-approved
+    approved_by: windy-hub
+    approved_on: 2026-10-02
+    expires: 2026-12-31
