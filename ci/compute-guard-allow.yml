@@ -92,3 +92,21 @@ allow:
     approved_by: windy-hub
     approved_on: 2026-10-02
     expires: 2026-12-31
+
+  - repo: windy-registry
+    paths: ["tools/r2-provision.sh"]
+    matches: ['http://localhost:8788']
+    reason: "Dev origin in an R2 bucket CORS rule, not a call to the Talk engine (Hub 10-02)."
+    exemption: owner-approved
+    approved_by: windy-hub
+    approved_on: 2026-10-02
+    expires: 2026-12-31
+
+  - repo: windytalk
+    paths: ["engine/*", "scripts/stress/*", "scripts/veron/*"]
+    matches: [':(8791|8788|8794)']
+    reason: "Talk's own voice engines (server, systemd unit, stress scripts); to be placed behind Mind per Mind's audit plan. NOT compute-door: a real bypass being fixed (Hub 10-02)."
+    exemption: owner-approved
+    approved_by: windy-hub
+    approved_on: 2026-10-02
+    expires: 2026-12-31
