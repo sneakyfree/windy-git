@@ -78,16 +78,18 @@ def test_allow_list_needs_a_reason_per_entry(tmp_path):
 
 
 def _entry(**kw):
-    base = dict(repo="x", paths=["*"], reason="r", exemption="owner-approved", expires="2099-01-01")
+    base = dict(repo="x", paths=["*"], reason="r", exemption="owner-approved", expires="2099-01-01",
+                approved_by="windy-hub")
     base.update(kw)
     lines = ["allow:", "  - repo: x", "    paths: ['*']", "    reason: r"]
-    for k in ("exemption", "expires"):
+    for k in ("exemption", "expires", "approved_by"):
         if base.get(k) is not None:
             lines.append(f"    {k}: {base[k]}")
     return "\n".join(lines) + "\n"
 
 
 def test_allow_entries_need_a_named_exemption_and_an_expiry(tmp_path):
+    from datetime import date
     f = tmp_path / "a.yml"
     f.write_text(_entry(exemption=None))
     with pytest.raises(ValueError):
@@ -101,8 +103,8 @@ def test_allow_entries_need_a_named_exemption_and_an_expiry(tmp_path):
     f.write_text(_entry(expires="someday"))
     with pytest.raises(ValueError):
         cg.load_allow(f)
-    f.write_text(_entry())
-    assert len(cg.load_allow(f)) == 1
+    f.write_text(_entry(expires="2026-12-01"))
+    assert len(cg.load_allow(f, today=date(2026, 10, 2))) == 1
 
 
 def test_expired_exemption_stops_excusing_and_is_reported(tmp_path):
@@ -330,3 +332,39 @@ def test_ollama_in_added_pr_lines_only():
             "+URL = 'http://veron:11434/api/chat'\n")
     got = cg.parse_added("some-repo", diff, [])
     assert [(f.kind, f.line) for f in got] == [("veron ollama", 2)]
+
+
+def test_non_structural_exemptions_need_an_independent_approver_and_a_90_day_cap(tmp_path):
+    from datetime import date
+    f = tmp_path / "a.yml"
+    f.write_text(_entry(approved_by=None))
+    with pytest.raises(ValueError):
+        cg.load_allow(f, today=date(2026, 10, 2))
+    f.write_text(_entry(approved_by="windy-chat"))     # a lane may not approve itself/another lane
+    with pytest.raises(ValueError):
+        cg.load_allow(f, today=date(2026, 10, 2))
+    f.write_text(_entry(expires="2026-12-31"))           # exactly 90 days: fine
+    assert len(cg.load_allow(f, today=date(2026, 10, 2))) == 1
+    f.write_text(_entry(expires="2027-01-01"))           # 91 days: does NOT apply, and is reported
+    assert cg.load_allow(f, today=date(2026, 10, 2)) == [] and cg.OVERCAP
+    f.write_text(_entry(exemption="compute-door", approved_by=None, expires="2027-10-02"))
+    assert len(cg.load_allow(f, today=date(2026, 10, 2))) == 1   # structural: yearly, no approver field
+
+
+def test_shipped_allow_file_obeys_its_own_rules():
+    allow = cg.load_allow()
+    assert allow and not cg.EXPIRED and not cg.OVERCAP
+    for e in allow:
+        if e["exemption"] not in cg.STRUCTURAL:
+            assert e["approved_by"] in cg.APPROVERS
+
+
+def test_findings_carry_kind_and_name_never_the_value_and_ports_skip_contracts():
+    for line, kind in [("ELEVENLABS_API_KEY=sk_live_SUPERSECRET123456789", "voice-ai key"),
+                       ('DEEPGRAM_API_KEY = "dg-VALUE-0123456789abcdef"', "voice-ai key")]:
+        hits = cg.scan_line("app/x.py", line)
+        assert [k for k, _ in hits] == [kind]
+        assert all("SUPERSECRET" not in m and "VALUE" not in m for _, m in hits)
+    assert cg.scan_line("engine/contracts/ops.mcp.v1.json", '"url": "http://h:8099/x"') == []
+    assert cg.scan_line("services/api/openapi/spec.json", '"url": "http://h:8099/x"') == []
+    assert [k for k, _ in cg.scan_line("deploy/docker-compose.yml", "    - 8099:8099 # :8099")] == ["talk engine port"]

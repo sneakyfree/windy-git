@@ -1,0 +1,7 @@
+# Changes to the guard allow-lists / exemptions need review by the account owner on GitHub, AND an
+# approved_by (windy-hub | windy-mind) on every non-structural entry, which the guard enforces itself
+# (scripts/compute_guard.py: load_allow). A lane never approves its own exemption (Hub 10-02).
+/ci/compute-guard-allow.yml   @sneakyfree
+/ci/secret-guard-allow.yml    @sneakyfree
+/ci/ci-hygiene-allow.yml      @sneakyfree
+/scripts/compute_guard.py     @sneakyfree

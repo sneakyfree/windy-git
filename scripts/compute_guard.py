@@ -31,7 +31,7 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 import yaml
@@ -73,6 +73,8 @@ PY_SDKS = r"anthropic|openai|groq|mistralai|cohere|google\.generativeai|google\.
 JS_SDKS = (r"@anthropic-ai/sdk|openai|groq-sdk|@google/generative-ai|@google/genai|@mistralai/mistralai"
            r"|cohere-ai|together-ai|@ai-sdk/(?:anthropic|openai|groq|google|mistral)")
 
+# The engine-port rule is about CODE/CONFIG that calls the engine, not API contracts, schemas or specs.
+PORT_SKIP = re.compile(r"(^|/)(contracts?|schemas?|specs?|openapi)/|\.json$", re.I)
 WRANGLER = re.compile(r"(^|/)wrangler\.(toml|jsonc?)$")
 WRANGLER_AI = re.compile(r'^\s*\[ai\]\s*$|^\s*"ai"\s*:\s*\{')
 
@@ -121,7 +123,11 @@ class Finding:
 
 
 EXEMPTIONS = {"local-user-hardware", "owner-approved", "compute-door", "guard-self"}
+STRUCTURAL = {"compute-door", "guard-self"}   # the door itself and the guard's own files: yearly review
+APPROVERS = {"windy-hub", "windy-mind"}       # a lane never approves its own exemption (Hub 10-02)
+MAX_DAYS = 90                                 # every other exemption: 90 days max, then re-approve
 EXPIRED: list[dict] = []  # entries dropped as expired on the last load_allow (reported, never silent)
+OVERCAP: list[dict] = []  # entries dropped because their expiry is further out than MAX_DAYS
 
 
 def load_allow(path: Path = ALLOW_FILE, today: date | None = None, strict: bool = True) -> list[dict]:
@@ -133,6 +139,7 @@ def load_allow(path: Path = ALLOW_FILE, today: date | None = None, strict: bool 
     entries = data.get("allow") or []
     active = []
     EXPIRED.clear()
+    OVERCAP.clear()
     for e in entries:
         if not (e.get("repo") and e.get("paths") and str(e.get("reason", "")).strip()):
             raise ValueError(f"allow entry needs repo, paths and a reason: {e}")
@@ -145,6 +152,12 @@ def load_allow(path: Path = ALLOW_FILE, today: date | None = None, strict: bool 
             exp = e["expires"] if isinstance(e.get("expires"), date) else date.fromisoformat(str(e.get("expires")))
         except ValueError as err:
             raise ValueError(f"allow entry needs expires: YYYY-MM-DD: {e.get('repo')} {e.get('paths')}") from err
+        if e["exemption"] not in STRUCTURAL:
+            if e.get("approved_by") not in APPROVERS:
+                raise ValueError(f"allow entry needs approved_by in {sorted(APPROVERS)}: {e.get('repo')} {e.get('paths')}")
+            if exp > today + timedelta(days=MAX_DAYS):
+                OVERCAP.append({**e, "expires": exp.isoformat()})  # a longer amnesty simply does not apply
+                continue
         if exp < today:
             EXPIRED.append({**e, "expires": exp.isoformat()})
         else:
@@ -181,6 +194,8 @@ def scan_line(path: str, text: str) -> list[tuple[str, str]]:
         if kind == "provider SDK dep" and not DEP_FILES.search(path):
             continue
         if kind == "workers ai binding" and not WRANGLER.search(path):
+            continue
+        if kind == "talk engine port" and PORT_SKIP.search(path):
             continue
         m = rx.search(text)
         if m:
@@ -358,6 +373,9 @@ def status_for(findings: list[Finding], whole_tree: bool,
 
 def report(repos: list[str]) -> int:
     allow = load_allow()
+    for e in OVERCAP:
+        print(f"## OVER-CAP exemption (> {MAX_DAYS} days, NOT applied): {e['repo']} {e['paths']} "
+              f"[{e['exemption']}] expires {e['expires']}")
     for e in EXPIRED:
         print(f"## EXPIRED exemption (no longer excuses anything): {e['repo']} {e['paths']} "
               f"[{e['exemption']}] expired {e['expires']}")

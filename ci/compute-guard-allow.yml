@@ -4,7 +4,8 @@
 # relative to the repo root. Owner of this file: Windy Git lane (13); changes
 # go through the orchestrator. EVERY entry needs `exemption` (local-user-hardware | owner-approved |
 # compute-door | guard-self) and `expires` (YYYY-MM-DD): nothing gets permanent amnesty (Mind 10-02);
-# an expired entry stops excusing code on that date and shows in the guard report. Source of the first entries: COMPUTE_BYPASS_AUDIT.md.
+# non-structural exemptions also need approved_by (windy-hub | windy-mind; a lane never approves its own)
+# and expire within 90 days; an expired entry stops excusing code on that date and shows in the guard report. Source of the first entries: COMPUTE_BYPASS_AUDIT.md.
 allow:
   - repo: windy-mind
     paths: ["*"]
@@ -19,18 +20,24 @@ allow:
       Mind stays opt-in there, or every self-hosted user's inference lands on
       Grant's bill (no-cloud-cost-liability rule; audit #7).
     exemption: owner-approved
+    approved_by: windy-hub
+    approved_on: 2026-10-02
     expires: 2026-12-31
 
   - repo: windy-code
     paths: ["extensions/windy-ai/*"]
     reason: "User BYOK AI extension: the user's own provider keys; Mind is one opt-in provider (audit #8)."
     exemption: owner-approved
+    approved_by: windy-hub
+    approved_on: 2026-10-02
     expires: 2026-12-31
 
   - repo: windy-connect
     paths: ["*writers/*"]
     reason: "Writes client configs that NAME the user's own provider env vars; makes no provider calls (audit #11)."
     exemption: owner-approved
+    approved_by: windy-hub
+    approved_on: 2026-10-02
     expires: 2026-12-31
 
   - repo: windy-pro
@@ -41,12 +48,16 @@ allow:
       the CSP line allows exactly those user-keyed hosts (audit #10). The
       account-server is NOT covered: server-side calls go through Mind.
     exemption: owner-approved
+    approved_by: windy-hub
+    approved_on: 2026-10-02
     expires: 2026-12-31
 
   - repo: windy-pro
     paths: ["src/client/web/src/pages/panels/MindPanel.jsx"]
     reason: "Validates the USER's own OpenRouter key for BYOK (audit #10); spends no house money."
     exemption: owner-approved
+    approved_by: windy-hub
+    approved_on: 2026-10-02
     expires: 2026-12-31
 
   - repo: windy-pro
@@ -56,6 +67,8 @@ allow:
     matches: ['openrouter\.ai/auth\?', 'openrouter\.ai/api/v1/auth/keys']
     reason: "BYOK key acquisition via OpenRouter OAuth PKCE; no inference; successor of MindPanel allow (ADR-064)."
     exemption: owner-approved
+    approved_by: windy-hub
+    approved_on: 2026-10-02
     expires: 2026-12-31
 
   - repo: windy-git
