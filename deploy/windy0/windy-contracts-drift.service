@@ -1,0 +1,7 @@
+[Unit]
+Description=Nightly windy-contracts drift sweep: which consumers are behind MANIFEST.json (Windy Git lane)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/windy-job windy-contracts-drift 26h --expect "contracts drift sweep: [0-9]+ consumer" --owner 13 -- %h/bin/nightly-contracts-drift.sh
+TimeoutStartSec=700
