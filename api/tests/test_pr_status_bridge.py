@@ -521,3 +521,14 @@ def test_failure_hint_sql_and_redaction(monkeypatch):
     monkeypatch.setattr(bridge.subprocess, "run", fake_run)
     assert bridge.failure_hint(5) == "at step '(unnamed step)'"
     assert "status in (1, 2)" in seen["sql"] and "task_id = 5" in seen["sql"]
+
+
+@pytest.mark.parametrize("name,ok", [
+    ("Install dependencies", True), ("actions/checkout@v4", True), ("Main i18n coverage check (P3)", True),
+    ("Run pytest", True),
+    ("cd src/client/web && npm ci && npm run build", False),   # defaulted from a run: line
+    ("npm ci", False), ("set -euo pipefail", False), ("Run set -euo pipefail and more", False),
+    ("curl -H \"X: y\" https://x", False), ("export A=b", False), ("", False),
+])
+def test_only_human_step_labels_are_exposed(name, ok):
+    assert bridge._is_step_label(name) is ok

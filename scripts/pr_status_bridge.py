@@ -321,6 +321,22 @@ def _repo_runs(repo: str) -> list[dict]:
     return runs
 
 
+_LABEL_CHARS = re.compile(r"^[A-Za-z0-9 ._()@:/-]+$")
+
+
+def _is_step_label(name: str) -> bool:
+    """A human step label, not a shell line. A `run:` step with no `name:` is named after its
+    command, and a command must never reach a public-ish status description (Hub, 10-06). So:
+    only plain label characters (no & | ; $ = quotes), no token-shaped run, and the first
+    character an uppercase letter ("Install dependencies") or a `uses:` ref (contains @).
+    "Run ..." defaults are accepted only when short ("Run pytest")."""
+    if not name or not _LABEL_CHARS.match(name) or re.search(r"[A-Za-z0-9_+/=-]{32,}", name):
+        return False
+    if name.startswith("Run ") and len(name.split()) > 3:
+        return False
+    return name[0].isupper() or "@" in name
+
+
 def failure_hint(task_id: int) -> str | None:
     """Where a failed job died, so a reader can tell infra from a real failure without log access.
 
@@ -347,7 +363,7 @@ def failure_hint(task_id: int) -> str | None:
     # Unnamed `run:` steps are named after their command: first line only, short, and never
     # anything that looks like a token.
     name = re.sub(r"[^\x20-\x7e]", "", name.splitlines()[0] if name else "").strip()[:50]
-    if re.search(r"[A-Za-z0-9_+/=-]{32,}", name):
+    if not _is_step_label(name):
         name = "(unnamed step)"
     if name:
         return f"at step '{name}'"
