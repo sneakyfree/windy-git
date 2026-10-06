@@ -532,3 +532,12 @@ def test_failure_hint_sql_and_redaction(monkeypatch):
 ])
 def test_only_human_step_labels_are_exposed(name, ok):
     assert bridge._is_step_label(name) is ok
+
+
+def test_no_failed_step_means_infra_not_unnamed(monkeypatch):
+    """A job that died before any step ran has NO failed step: say infra, not "(unnamed step)"."""
+    class R:
+        stdout = "|0\n"
+    monkeypatch.undo()
+    monkeypatch.setattr(bridge.subprocess, "run", lambda *a, **k: R())
+    assert bridge.failure_hint(9) == "before any step ran (runner/infra, re-run)"
