@@ -14,6 +14,11 @@ D=(docker exec windy-git-runner-dind-1 docker -H tcp://127.0.0.1:2375)  # dind l
 
 "${D[@]}" container prune -f --filter until=6h >/dev/null
 "${D[@]}" volume prune -af >/dev/null            # job workspaces of finished jobs
+# Idle job networks. A job that dies before its container attaches leaks its network (24 piled up
+# over days, 10-06); dind has only ~31 address pools, so once they fill every new job fails in
+# 0-1 s with "all predefined address pools have been fully subnetted" (looked like load flakes).
+# until=1h: never touch the network of a job that is starting right now.
+"${D[@]}" network prune -f --filter until=1h >/dev/null
 "${D[@]}" image prune -af --filter until=168h >/dev/null
 "${D[@]}" builder prune -af --filter until=168h >/dev/null 2>&1 || true
 
