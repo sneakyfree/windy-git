@@ -363,7 +363,7 @@ def failure_hint(task_id: int) -> str | None:
     # Unnamed `run:` steps are named after their command: first line only, short, and never
     # anything that looks like a token.
     name = re.sub(r"[^\x20-\x7e]", "", name.splitlines()[0] if name else "").strip()[:50]
-    if not _is_step_label(name):
+    if name and not _is_step_label(name):
         name = "(unnamed step)"
     if name:
         return f"at step '{name}'"
