@@ -78,6 +78,12 @@ class Fake:
         raise AssertionError(path)
 
 
+@pytest.fixture(autouse=True)
+def _fresh_cache(monkeypatch):
+    bridge._RUNS_CACHE.clear()
+    monkeypatch.setattr(bridge, "failure_hint", lambda task_id: None)
+
+
 @pytest.fixture
 def fake(monkeypatch):
     def make(queued=(), **kw):
@@ -461,3 +467,68 @@ def test_failed_grant_split_warns_instead_of_blocking(fake, monkeypatch):
 def test_no_docker_smoke_jobs_are_posted(name, hidden):
     """windy-search #96: its replacement job says "no Docker" and was hidden."""
     assert bridge.needs_daemon("windy-search", "ci", name) is hidden
+
+
+def test_failed_status_carries_the_failing_step_not_log_text(fake, monkeypatch):
+    f = fake(runs=[_run(7, "ci.yml", "test", "failure")])
+    monkeypatch.setattr(bridge, "failure_hint", lambda tid: "at step 'npm ci'" if tid == 7 else None)
+    bridge.post_statuses("r", SHA)
+    assert f.posted[0]["description"] == "Windy Git CI on Veron 1: failure at step 'npm ci'"
+
+
+def test_infra_failure_says_no_step_ran(fake, monkeypatch):
+    f = fake(runs=[_run(8, "ci.yml", "test", "failure")])
+    monkeypatch.setattr(bridge, "failure_hint", lambda tid: "before any step ran (runner/infra, re-run)")
+    bridge.post_statuses("r", SHA)
+    assert "before any step ran" in f.posted[0]["description"]
+
+
+def test_success_description_unchanged_and_hint_not_asked(fake, monkeypatch):
+    f = fake(runs=[_run(1, "ci.yml", "test", "success")])
+    monkeypatch.setattr(bridge, "failure_hint", lambda tid: (_ for _ in ()).throw(AssertionError("asked")))
+    bridge.post_statuses("r", SHA)
+    assert f.posted[0]["description"] == "Windy Git CI on Veron 1: success"
+
+
+def test_repo_task_list_is_fetched_once_per_run(fake):
+    f = fake(runs=[_run(1, "ci.yml", "test", "success")])
+    calls = []
+    orig = f.gitea
+    f.gitea = lambda m, p, b=None: (calls.append(p), orig(m, p, b))[1]
+    bridge.gitea = f.gitea
+    bridge.post_statuses("r", SHA)
+    bridge.post_statuses("r", "b" * 40)
+    assert len([c for c in calls if "/actions/tasks" in c]) == 1
+
+
+def test_failure_hint_is_none_for_a_non_integer_id():
+    assert bridge.failure_hint(None) is None
+
+
+def test_failure_hint_sql_and_redaction(monkeypatch):
+    seen = {}
+
+    def fake_run(cmd, input=None, **kw):
+        seen["sql"] = input
+
+        class R:
+            stdout = "run Zq9Xv3TnLm4Bw8KdFh2Yc6RpUe1GsAoJ7iNt|2\n"
+
+        return R()
+
+    monkeypatch.setattr(bridge.subprocess, "run", fake_run)
+    monkeypatch.undo()  # keep the autouse stub off for this test only
+    monkeypatch.setattr(bridge.subprocess, "run", fake_run)
+    assert bridge.failure_hint(5) == "at step '(unnamed step)'"
+    assert "status in (1, 2)" in seen["sql"] and "task_id = 5" in seen["sql"]
+
+
+@pytest.mark.parametrize("name,ok", [
+    ("Install dependencies", True), ("actions/checkout@v4", True), ("Main i18n coverage check (P3)", True),
+    ("Run pytest", True),
+    ("cd src/client/web && npm ci && npm run build", False),   # defaulted from a run: line
+    ("npm ci", False), ("set -euo pipefail", False), ("Run set -euo pipefail and more", False),
+    ("curl -H \"X: y\" https://x", False), ("export A=b", False), ("", False),
+])
+def test_only_human_step_labels_are_exposed(name, ok):
+    assert bridge._is_step_label(name) is ok

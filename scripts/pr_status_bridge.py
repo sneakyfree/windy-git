@@ -298,10 +298,18 @@ def queued_jobs(repo: str, sha: str) -> list[dict]:
         return []
 
 
-def post_statuses(repo: str, sha: str) -> None:
+# A repo's task list, fetched once per bridge run: post_statuses() is called once per
+# sha (default head + every open PR head) and used to re-page the same API each time
+# (100+ requests / 3 min on Gitea, 10-06). The bridge is a short-lived process.
+_RUNS_CACHE: dict[str, list[dict]] = {}
+
+
+def _repo_runs(repo: str) -> list[dict]:
+    if repo in _RUNS_CACHE:
+        return _RUNS_CACHE[repo]
     # Gitea caps a page at 50 (MAX_RESPONSE_ITEMS) whatever `limit` says, and a
     # daily scheduled workflow can push a quiet main's runs off page 1.
-    runs = []
+    runs: list[dict] = []
     for page in range(1, 6):
         st, body = gitea("GET", f"/repos/{WG_OWNER}/{repo}/actions/tasks?limit=50&page={page}")
         if st != 200:
@@ -309,6 +317,61 @@ def post_statuses(repo: str, sha: str) -> None:
         runs += body.get("workflow_runs", [])
         if len(body.get("workflow_runs", [])) < 50:
             break
+    _RUNS_CACHE[repo] = runs
+    return runs
+
+
+_LABEL_CHARS = re.compile(r"^[A-Za-z0-9 ._()@:/-]+$")
+
+
+def _is_step_label(name: str) -> bool:
+    """A human step label, not a shell line. A `run:` step with no `name:` is named after its
+    command, and a command must never reach a public-ish status description (Hub, 10-06). So:
+    only plain label characters (no & | ; $ = quotes), no token-shaped run, and the first
+    character an uppercase letter ("Install dependencies") or a `uses:` ref (contains @).
+    "Run ..." defaults are accepted only when short ("Run pytest")."""
+    if not name or not _LABEL_CHARS.match(name) or re.search(r"[A-Za-z0-9_+/=-]{32,}", name):
+        return False
+    if name.startswith("Run ") and len(name.split()) > 3:
+        return False
+    return name[0].isupper() or "@" in name
+
+
+def failure_hint(task_id: int) -> str | None:
+    """Where a failed job died, so a reader can tell infra from a real failure without log access.
+
+    "at step 'npm ci'" = a step ran and failed (read the code); "before any step ran" = the
+    job container never started (runner/docker infra: re-run). Step NAMES only, never log text.
+    Bounded and non-fatal: None means "unknown", and the description just omits it.
+    """
+    if not isinstance(task_id, int):
+        return None
+    query = (
+        "select coalesce((select name from action_task_step where task_id = "
+        f"{task_id} and status = 2 order by index limit 1), ''), "
+        f"(select count(*) from action_task_step where task_id = {task_id} and status in (1, 2));"
+    )
+    try:
+        out = subprocess.run(
+            ["docker", "exec", "-i", "windy-git-db-1", "sh", "-c",
+             'psql -U "$POSTGRES_USER" -d gitea -At -F "|" -v ON_ERROR_STOP=1'],
+            input=query, capture_output=True, text=True, check=True, timeout=15,
+        ).stdout.strip()
+        name, _, ran = out.partition("|")
+    except (subprocess.SubprocessError, OSError, ValueError):
+        return None
+    # Unnamed `run:` steps are named after their command: first line only, short, and never
+    # anything that looks like a token.
+    name = re.sub(r"[^\x20-\x7e]", "", name.splitlines()[0] if name else "").strip()[:50]
+    if not _is_step_label(name):
+        name = "(unnamed step)"
+    if name:
+        return f"at step '{name}'"
+    return "before any step ran (runner/infra, re-run)" if ran.strip() in ("0", "") else None
+
+
+def post_statuses(repo: str, sha: str) -> None:
+    runs = _repo_runs(repo)
     latest: dict[str, dict] = {}
     for r in runs:
         if r["head_sha"] != sha or needs_daemon(repo, r["workflow_id"].removesuffix(".yml"), r["name"]):
@@ -363,11 +426,20 @@ def post_statuses(repo: str, sha: str) -> None:
             {
                 "state": state,
                 "context": ctx,
-                "description": f"Windy Git CI on Veron 1: {r['status']}"[:140],
+                "description": _verdict_text(r)[:140],
                 "target_url": f"{PUBLIC}/{WG_OWNER}/{repo}/actions/runs/{r['run_number']}",
             },
         )
         print(f"  {repo}@{sha[:7]} {ctx} = {state} -> {st}")
+
+
+def _verdict_text(r: dict) -> str:
+    text = f"Windy Git CI on Veron 1: {r['status']}"
+    if r["status"] == "failure":
+        hint = failure_hint(r.get("id"))
+        if hint:
+            text += f" {hint}"
+    return text
 
 
 GUARD_CTX = "windy-git/compute-guard"
