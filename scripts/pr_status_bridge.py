@@ -237,7 +237,7 @@ def sync_prs(repo: str) -> list[str]:
                 "head": pr["head"]["ref"],
                 "base": pr["base"]["ref"],
                 "title": f"{tag} {pr['title']}"[:250],
-                "body": f"Mirror of {pr['html_url']}",
+                "body": f"Mirror of {pr['html_url']}. GitHub is the source of truth.",
             },
         )
         print(f"  {repo}: opened mirror PR for GH#{pr['number']} -> {st}")
