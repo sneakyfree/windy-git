@@ -134,10 +134,10 @@ def test_pinned_images_and_real_locks_pass(path, text):
     "        run: docker buildx build --load .",
     "      - uses: docker/build-push-action@v6",
 ])
-def test_docker_in_ci_is_flagged_with_the_fix(text):
+def test_docker_in_ci_is_flagged_as_a_fact(text):
     hits = hy.scan_line(WF, text)
     assert [k for k, _ in hits] == ["needs docker"]
-    assert "no-Docker smoke test" in hits[0][1]
+    assert "no Docker daemon on Windy Git" in hits[0][1] and "smoke test" not in hits[0][1]
 
 
 @pytest.mark.parametrize("path, text", [

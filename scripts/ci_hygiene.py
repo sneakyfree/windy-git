@@ -51,7 +51,6 @@ PREFILTER = (r"pip3? install|pip install|uv sync|npm (install|i )|yarn install|p
              r"|docker[ -]compose|docker (build|buildx|run)|docker/build-push-action")
 
 TOOLING = {"pip", "setuptools", "wheel"}
-NO_DOCKER_FIX = "use job services: + a no-Docker smoke test; the image builds at deploy"
 DOCKER_FILE = re.compile(r"(^|/)(Dockerfile[^/]*|[^/]+\.Dockerfile)$")
 LATEST = re.compile(r"(?:^\s*FROM\s+(?:--platform=\S+\s+)?|--from=|image:\s*['\"]?|docker://)([\w./-]+):latest\b", re.I)
 LOCKNAME = re.compile(r"(uv\.lock|poetry\.lock|package-lock\.json|pnpm-lock\.yaml|yarn\.lock|requirements[^ ]*\.(txt|lock))", re.I)
@@ -124,19 +123,19 @@ def scan_line(path: str, text: str) -> list[tuple[str, str]]:
     if DOCKER_FILE.search(path) and re.match(r"^\s*COPY\b", text, re.I):
         globbed = [t for t in text.split() if "*" in t and LOCKNAME.search(t)]
         if globbed:
-            hits.append(("optional lock", f"COPY {globbed[0]} (must fail if the lock is missing)"))
+            hits.append(("optional lock", f"COPY {globbed[0]} (optional lock glob)"))
     # Windy Git jobs get NO Docker daemon (I-5), so a docker build/compose/run
     # step in CI can never pass here (orchestrator 09-23, option A). The real
     # image build is the deploy step on the target host.
     if "/workflows/" in path and re.search(r"uses:\s*['\"]?docker/build-push-action", text):
-        hits.append(("needs docker", "docker/build-push-action in CI (no Docker daemon on Windy Git; " + NO_DOCKER_FIX + ")"))
+        hits.append(("needs docker", "docker/build-push-action in CI (no Docker daemon on Windy Git)"))
     for toks in _commands(text):
         low = [t.lower() for t in toks]
         if "/workflows/" in path and (
             low[:2] in (["docker", "build"], ["docker", "buildx"], ["docker", "run"], ["docker", "compose"])
             or low[:1] == ["docker-compose"]
         ):
-            hits.append(("needs docker", f"{' '.join(low[:2])} in CI (no Docker daemon on Windy Git; " + NO_DOCKER_FIX + ")"))
+            hits.append(("needs docker", f"{' '.join(low[:2])} in CI (no Docker daemon on Windy Git)"))
             continue
         # pip install / python -m pip install / uv pip install
         for i in range(len(low) - 1):
@@ -150,7 +149,7 @@ def scan_line(path: str, text: str) -> list[tuple[str, str]]:
         if low[:1] == ["npm"] and len(low) > 1 and low[1] in ("install", "i", "add"):
             pkgs = [t for t in toks[2:] if not t.startswith("-")]
             if not pkgs or not all(EXACT_NPM.match(p) for p in pkgs):
-                hits.append(("floating install", f"npm {low[1]} {' '.join(pkgs)[:30]}".strip() + " (use npm ci)"))
+                hits.append(("floating install", f"npm {low[1]} {' '.join(pkgs)[:30]}".strip()))
         if low[:2] == ["yarn", "install"] and not ({"--frozen-lockfile", "--immutable"} & set(low)):
             hits.append(("floating install", "yarn install without --frozen-lockfile"))
         if low[:2] == ["pnpm", "install"] and "--frozen-lockfile" not in low:

@@ -237,8 +237,7 @@ def sync_prs(repo: str) -> list[str]:
                 "head": pr["head"]["ref"],
                 "base": pr["base"]["ref"],
                 "title": f"{tag} {pr['title']}"[:250],
-                "body": f"Mirror of {pr['html_url']} so CI runs here. Do not merge in Windy Git — "
-                "GitHub is the source of truth; merge there.",
+                "body": f"Mirror of {pr['html_url']}",
             },
         )
         print(f"  {repo}: opened mirror PR for GH#{pr['number']} -> {st}")
@@ -367,7 +366,7 @@ def failure_hint(task_id: int) -> str | None:
         name = "(unnamed step)"
     if name:
         return f"at step '{name}'"
-    return "before any step ran (runner/infra, re-run)" if ran.strip() in ("0", "") else None
+    return "before any step ran" if ran.strip() in ("0", "") else None
 
 
 def post_statuses(repo: str, sha: str) -> None:

@@ -31,12 +31,12 @@ if [[ -n "$new" ]]; then
   nrepos=$(cut -f1 <<<"$new" | sort -u | grep -c . || true)
   now=$(date -u +%Y-%m-%dT%H:%MZ)
   if (( nrepos > 8 || (first == 1 && nrepos > 0) )); then
-    echo "$now Windy Git: 📐 contract drift: $nrepos consumer repo(s) behind/missing/local-edit vs windy-contracts. Each: re-vendor + re-lock (tools/contracts_lock.py). Full list: ~/windy-orchestra/CONTRACTS_DRIFT.md" >> ~/windy-orchestra/BOARD.md
+    echo "$now Windy Git: 📐 contract drift: $nrepos consumer repo(s) differ from windy-contracts MANIFEST. List: ~/windy-orchestra/CONTRACTS_DRIFT.md" >> ~/windy-orchestra/BOARD.md
   else
     while read -r repo; do
       [[ -z $repo ]] && continue
       what=$(awk -F'\t' -v r="$repo" '$1==r {printf "%s%s %s (MANIFEST %s)", sep, $2, $3, $4; sep="; "}' <<<"$new")
-      echo "$now Windy Git: 📐 contract drift: $repo: $what. Re-vendor + re-lock (tools/contracts_lock.py). See ~/windy-orchestra/CONTRACTS_DRIFT.md" >> ~/windy-orchestra/BOARD.md
+      echo "$now Windy Git: 📐 contract drift: $repo: $what. See ~/windy-orchestra/CONTRACTS_DRIFT.md" >> ~/windy-orchestra/BOARD.md
     done < <(cut -f1 <<<"$new" | sort -u)
   fi
 fi

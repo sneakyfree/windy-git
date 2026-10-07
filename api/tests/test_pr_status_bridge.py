@@ -478,7 +478,7 @@ def test_failed_status_carries_the_failing_step_not_log_text(fake, monkeypatch):
 
 def test_infra_failure_says_no_step_ran(fake, monkeypatch):
     f = fake(runs=[_run(8, "ci.yml", "test", "failure")])
-    monkeypatch.setattr(bridge, "failure_hint", lambda tid: "before any step ran (runner/infra, re-run)")
+    monkeypatch.setattr(bridge, "failure_hint", lambda tid: "before any step ran")
     bridge.post_statuses("r", SHA)
     assert "before any step ran" in f.posted[0]["description"]
 
@@ -540,4 +540,4 @@ def test_no_failed_step_means_infra_not_unnamed(monkeypatch):
         stdout = "|0\n"
     monkeypatch.undo()
     monkeypatch.setattr(bridge.subprocess, "run", lambda *a, **k: R())
-    assert bridge.failure_hint(9) == "before any step ran (runner/infra, re-run)"
+    assert bridge.failure_hint(9) == "before any step ran"
