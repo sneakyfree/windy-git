@@ -1,0 +1,10 @@
+[Unit]
+Description=Re-run CI jobs that died before any step ran (infra flake); never a real failure
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/srv/windygit/src
+ExecStart=/usr/bin/python3 /srv/windygit/src/scripts/autorerun_dead_jobs.py
+TimeoutStartSec=1800
+Nice=10
