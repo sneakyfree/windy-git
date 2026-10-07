@@ -102,7 +102,6 @@ WARN_ONLY_KINDS = {"veron ollama"}
 # Rolled out WARN-first: these kinds still show (tree + PRs) but never block, until the env var
 # (a systemd drop-in on the sync, like SECRET_GUARD_WARN_KINDS) is removed.
 SOFT_KINDS = {k for k in os.environ.get("COMPUTE_GUARD_WARN_KINDS", "").split(",") if k}
-OLLAMA_MSG = "compute = Windy Mind (endpoint + key); do not call Veron's Ollama directly"
 DEP_FILES = re.compile(r"(^|/)(package\.json|requirements[^/]*\.txt|pyproject\.toml|setup\.cfg|Pipfile)$")
 
 # Never scanned: tests, docs, lockfiles, vendored/built code, CI config.
@@ -347,7 +346,7 @@ def status_for(findings: list[Finding], whole_tree: bool,
     findings = [f for f in findings if f.kind not in WARN_ONLY_KINDS]
     if not findings and not grant and soft:
         f = soft[0]
-        return "success", f"⚠ WARN: new Veron Ollama ref {f.path}:{f.line}. {OLLAMA_MSG}"[:140], f
+        return "success", f"⚠ WARN: new Veron Ollama ref {f.path}:{f.line}"[:140], f
     rolling = [f for f in findings if f.kind in SOFT_KINDS]
     if findings and len(rolling) == len(findings) and not grant:
         f, n = rolling[0], len(rolling)
@@ -362,7 +361,7 @@ def status_for(findings: list[Finding], whole_tree: bool,
         return "success", desc[:140], g
     if not findings:
         what = "no direct AI-provider use in tree" if whole_tree else "no direct AI-provider use added"
-        return "success", f"OK: {what} (Windy Mind is the only door)", None
+        return "success", f"OK: {what}", None
     f = findings[0]
     n = len(findings)
     state = "failure" if MODE == "block" else "success"

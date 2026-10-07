@@ -240,7 +240,7 @@ def test_block_mode_fails(monkeypatch):
 
 def test_clean_is_ok():
     assert cg.status_for([], whole_tree=True)[:2] == (
-        "success", "OK: no direct AI-provider use in tree (Windy Mind is the only door)")
+        "success", "OK: no direct AI-provider use in tree")
 
 
 @pytest.mark.parametrize(
@@ -322,7 +322,7 @@ def test_veron_ollama_warns_on_added_lines_and_never_blocks(monkeypatch):
     monkeypatch.setattr(cg, "MODE", "block")
     state, desc, _ = cg.status_for([f], whole_tree=False)
     assert state == "success" and desc.startswith("⚠ WARN: new Veron Ollama ref app/llm.py:7")
-    assert "Windy Mind" in desc and len(desc) <= 140
+    assert "Veron Ollama ref" in desc and "do not" not in desc and len(desc) <= 140
     hard = cg.Finding("app/llm.py", 1, "provider host", "api.openai.com")
     assert cg.status_for([f, hard], whole_tree=False)[0] == "failure"       # a real violation still blocks
 
