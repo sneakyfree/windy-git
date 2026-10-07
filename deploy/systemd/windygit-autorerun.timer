@@ -1,0 +1,9 @@
+[Unit]
+Description=Auto re-run of dead-before-any-step CI jobs, every 10 minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=10min
+
+[Install]
+WantedBy=timers.target
