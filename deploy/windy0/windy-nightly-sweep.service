@@ -1,0 +1,7 @@
+[Unit]
+Description=Windy Git nightly sweep: guards status, runner guard, contract drift, public secret scan (Mondays)
+
+[Service]
+Type=oneshot
+ExecStart=%h/bin/nightly-sweep.sh
+TimeoutStartSec=9000

@@ -7,7 +7,7 @@
 # FLOOD CAP (Hub 10-05): on the first run, or when more than 8 repos are new, ONE summary
 # BOARD line is written instead; the full list is in CONTRACTS_DRIFT.md. BOARD lines say only
 # repo, what is behind, and what to do. Never file content.
-# Install: cp to ~/bin/nightly-contracts-drift.sh (Windy 0); units: windy-contracts-drift.{service,timer}.
+# Install: cp to ~/bin/nightly-contracts-drift.sh (Windy 0); run by nightly-sweep.sh (units: windy-nightly-sweep.{service,timer}).
 set -euo pipefail
 page=~/windy-orchestra/CONTRACTS_DRIFT.md
 state=~/.local/state/contracts-drift.txt
