@@ -5,7 +5,9 @@ After=network-online.target docker.service
 [Service]
 Type=oneshot
 WorkingDirectory=/srv/windygit/src
-EnvironmentFile=/srv/windygit/src/.env
+# Only what the sync uses: GITEA_SYNC_TOKEN (write:repository) + GITHUB_TOKEN, root 0600.
+# NOT the api .env: the sync never sees the admin token, R2 or DB secrets.
+EnvironmentFile=/etc/windygit/sync.env
 # GITHUB_TOKEN is set on the host only (root-only unit file / .env) — NEVER commit it.
 Environment=GITHUB_OWNER=sneakyfree
 ExecStart=/bin/bash /srv/windygit/src/scripts/sync_from_github.sh

@@ -29,7 +29,11 @@
 set -uo pipefail
 
 : "${GITHUB_TOKEN:?GITHUB_TOKEN required}"
-: "${GITEA_ADMIN_TOKEN:?GITEA_ADMIN_TOKEN required}"
+# The narrow token (scope write:repository only, Gitea token "windygit-sync" on
+# windyadmin; /etc/windygit/sync.env). The admin token is for humans: the
+# fallback exists only so a rollback to the old unit keeps working.
+GITEA_TOKEN="${GITEA_SYNC_TOKEN:-${GITEA_ADMIN_TOKEN:-}}"
+: "${GITEA_TOKEN:?GITEA_SYNC_TOKEN required}"
 GH_OWNER="${GITHUB_OWNER:-sneakyfree}"
 WG="${WG_HOST:-app.windygit.com}"
 WG_OWNER="${WINDYGIT_OWNER:-windyadmin}"
@@ -72,7 +76,7 @@ for r in $REPOS; do
   before="$(git --git-dir="$bare" rev-parse HEAD 2>/dev/null || echo none)"
 
   if git --git-dir="$bare" push --quiet --force \
-       "https://${WG_OWNER}:${GITEA_ADMIN_TOKEN}@${WG}/${WG_OWNER}/${r}.git" \
+       "https://${WG_OWNER}:${GITEA_TOKEN}@${WG}/${WG_OWNER}/${r}.git" \
        '+refs/heads/*:refs/heads/*' '^refs/heads/archive/*' $([[ " $NO_TAGS " == *" $r "* ]] || echo '+refs/tags/*:refs/tags/*') 2>/dev/null; then
     log "$r ok (${before:0:7})"
   else
