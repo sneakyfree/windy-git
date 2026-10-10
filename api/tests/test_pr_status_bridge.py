@@ -615,7 +615,7 @@ def test_archive_explanation_is_not_reposted(fake):
     assert f.posted == []
 
 
-def test_rename_out_of_archive_clears_the_error_on_the_same_sha(fake):
+def test_same_sha_reopened_from_another_branch_clears_the_error(fake):
     f = fake(gh_prs=[_pr("cloud/x")], statuses=[{"context": "windy-git/ci", "state": "error"}])
     bridge.sync_prs("WindyCloud")
     assert [o["head"] for o in f.opened] == ["cloud/x"]

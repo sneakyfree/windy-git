@@ -229,7 +229,7 @@ def sync_prs(repo: str) -> list[str]:
             # and the PR sat 40 minutes waiting on CI that could never start.
             _unsynced_status(repo, pr, "error",
                              f"No CI: Windy Git never syncs {ARCHIVE_PREFIX}* branches. "
-                             "Rename the branch to run CI.")
+                             "Push this commit to another branch and open a new PR.")
             print(f"  {repo}: GH#{pr['number']} head {pr['head']['ref']} is {ARCHIVE_PREFIX}*, "
                   "never synced: no mirror PR, no CI (error status posted)")
             continue
@@ -260,7 +260,8 @@ def sync_prs(repo: str) -> list[str]:
                   f"(head {pr['head']['ref']}) -> {st}: no CI will run for it")
             continue
         print(f"  {repo}: opened mirror PR for GH#{pr['number']} -> {st}")
-        # Same head sha after a rename out of archive/*: clear the old error.
+        # Same sha re-opened from a non-archive branch (renaming the head closes a
+        # GitHub PR, so it is a new PR): clear the old error on that commit.
         _unsynced_status(repo, pr, "success", "Branch is synced to Windy Git; CI runs here.",
                          only_if_present=True)
 
