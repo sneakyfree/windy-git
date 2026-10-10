@@ -336,6 +336,31 @@ def _is_step_label(name: str) -> bool:
     return name[0].isupper() or "@" in name
 
 
+def _explicit_step_names(payload_b64: str) -> set[str]:
+    """Step names the workflow author wrote as `name:` (Gitea stores each job's YAML in
+    action_run_job.workflow_payload). An unnamed `run:` step is absent here: Gitea names it
+    after its command."""
+    try:
+        doc = yaml.safe_load(base64.b64decode(payload_b64).decode("utf-8", "replace"))
+    except (ValueError, yaml.YAMLError):
+        return set()
+    names = set()
+    jobs = doc.get("jobs") if isinstance(doc, dict) else None
+    for job in (jobs or {}).values() if isinstance(jobs, dict) else []:
+        for step in (job.get("steps") or []) if isinstance(job, dict) else []:
+            if isinstance(step, dict) and isinstance(step.get("name"), str):
+                names.add(step["name"].strip())
+    return names
+
+
+def _is_named_step(name: str, payload_b64: str) -> bool:
+    """A lowercase label ("change gate") is fine when the author wrote it as `name:`; the
+    label character set and the token-shape check still apply."""
+    if not payload_b64 or not _LABEL_CHARS.match(name) or re.search(r"[A-Za-z0-9_+/=-]{32,}", name):
+        return False
+    return name in _explicit_step_names(payload_b64)
+
+
 def failure_hint(task_id: int) -> str | None:
     """Where a failed job died, so a reader can tell infra from a real failure without log access.
 
@@ -348,7 +373,9 @@ def failure_hint(task_id: int) -> str | None:
     query = (
         "select coalesce((select name from action_task_step where task_id = "
         f"{task_id} and status = 2 order by index limit 1), ''), "
-        f"(select count(*) from action_task_step where task_id = {task_id} and status in (1, 2));"
+        f"(select count(*) from action_task_step where task_id = {task_id} and status in (1, 2)), "
+        "coalesce((select replace(encode(workflow_payload, 'base64'), E'\\n', '') "
+        f"from action_run_job where task_id = {task_id} limit 1), '');"
     )
     try:
         out = subprocess.run(
@@ -356,13 +383,13 @@ def failure_hint(task_id: int) -> str | None:
              'psql -U "$POSTGRES_USER" -d gitea -At -F "|" -v ON_ERROR_STOP=1'],
             input=query, capture_output=True, text=True, check=True, timeout=15,
         ).stdout.strip()
-        name, _, ran = out.partition("|")
+        name, ran, payload = (out.split("|") + ["", ""])[:3]
     except (subprocess.SubprocessError, OSError, ValueError):
         return None
     # Unnamed `run:` steps are named after their command: first line only, short, and never
     # anything that looks like a token.
     name = re.sub(r"[^\x20-\x7e]", "", name.splitlines()[0] if name else "").strip()[:50]
-    if name and not _is_step_label(name):
+    if name and not (_is_step_label(name) or _is_named_step(name, payload)):
         name = "(unnamed step)"
     if name:
         return f"at step '{name}'"

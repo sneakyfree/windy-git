@@ -541,3 +541,54 @@ def test_no_failed_step_means_infra_not_unnamed(monkeypatch):
     monkeypatch.undo()
     monkeypatch.setattr(bridge.subprocess, "run", lambda *a, **k: R())
     assert bridge.failure_hint(9) == "before any step ran"
+
+
+_GATE_YAML = """name: check
+jobs:
+    gate:
+        runs-on: veron-1
+        steps:
+            - uses: actions/checkout@v4
+            - name: change gate
+              run: python3 tools/contracts_manifest.py gate
+            - run: npm ci
+            - name: Zq9Xv3TnLm4Bw8KdFh2Yc6RpUe1GsAoJ7iNt
+              run: true
+"""
+
+
+def _fake_hint_db(monkeypatch, name, payload_yaml):
+    import base64 as b64
+
+    payload = b64.b64encode(payload_yaml.encode()).decode() if payload_yaml else ""
+
+    class R:
+        stdout = f"{name}|3|{payload}\n"
+
+    monkeypatch.undo()
+    monkeypatch.setattr(bridge.subprocess, "run", lambda *a, **k: R())
+
+
+def test_explicit_lowercase_step_name_is_shown(monkeypatch):
+    """contracts 10-10: 'change gate' is the author's `name:`, not a command."""
+    _fake_hint_db(monkeypatch, "change gate", _GATE_YAML)
+    assert bridge.failure_hint(5) == "at step 'change gate'"
+
+
+def test_unnamed_run_step_stays_hidden_even_with_payload(monkeypatch):
+    _fake_hint_db(monkeypatch, "npm ci", _GATE_YAML)
+    assert bridge.failure_hint(5) == "at step '(unnamed step)'"
+
+
+def test_token_shaped_explicit_name_stays_hidden(monkeypatch):
+    _fake_hint_db(monkeypatch, "Zq9Xv3TnLm4Bw8KdFh2Yc6RpUe1GsAoJ7iNt", _GATE_YAML)
+    assert bridge.failure_hint(5) == "at step '(unnamed step)'"
+
+
+def test_bad_payload_falls_back_to_the_label_rule(monkeypatch):
+    class R:
+        stdout = "change gate|3|not-base64!!\n"
+
+    monkeypatch.undo()
+    monkeypatch.setattr(bridge.subprocess, "run", lambda *a, **k: R())
+    assert bridge.failure_hint(5) == "at step '(unnamed step)'"
