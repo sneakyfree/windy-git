@@ -23,6 +23,10 @@ step sync-token-hygiene   /usr/local/bin/windy-job windy-sync-token-hygiene 26h 
                             --expect "sync token hygiene: files=0 remote-creds=0 argv=0" --owner 13 -- \
                             timeout 300 ssh -o BatchMode=yes -o ConnectTimeout=15 ts-veron \
                             'sudo -n timeout 240 bash /srv/windygit/src/scripts/sync_token_hygiene.sh'
+# Merge audit (Hub A2, 10-10): repos GitHub can't protect (windy-vault, windy-contracts).
+step merge-audit          /usr/local/bin/windy-job windy-merge-audit 26h \
+                            --expect "merge audit: [0-9]+ merged, 0 flagged" --owner 13 -- \
+                            timeout 300 python3 "$HOME/bin/merge_audit.py"
 if [[ $(date -u +%u) == 1 ]]; then
   step public-secret-scan "$HOME/bin/weekly-public-secret-scan.sh"
 fi
