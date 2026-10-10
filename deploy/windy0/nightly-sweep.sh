@@ -18,6 +18,11 @@ step runner-guard-sweep   /usr/local/bin/windy-job windy-runner-guard-sweep 26h 
                             --expect "runner-guard sweep: 0 hit" --owner 13 -- "$HOME/bin/nightly-runner-guard-sweep.sh"
 step contracts-drift      /usr/local/bin/windy-job windy-contracts-drift 26h \
                             --expect "contracts drift sweep: [0-9]+ consumer" --owner 13 -- "$HOME/bin/nightly-contracts-drift.sh"
+# Token hygiene by count (10-10, after #18): no sync token in any file, remote URL or argv on Veron.
+step sync-token-hygiene   /usr/local/bin/windy-job windy-sync-token-hygiene 26h \
+                            --expect "sync token hygiene: files=0 remote-creds=0 argv=0" --owner 13 -- \
+                            timeout 300 ssh -o BatchMode=yes -o ConnectTimeout=15 ts-veron \
+                            'sudo -n timeout 240 bash /srv/windygit/src/scripts/sync_token_hygiene.sh'
 if [[ $(date -u +%u) == 1 ]]; then
   step public-secret-scan "$HOME/bin/weekly-public-secret-scan.sh"
 fi

@@ -153,6 +153,18 @@ it is the first external push.** Move the control plane to a dedicated VPS (not
 Kit 0), keep Veron 1 as the runner. It is an rsync, a Postgres dump and three
 DNS record edits.
 
+## Sync token hygiene (by count)
+
+Since #18 the sync's tokens ride only as auth headers in git's env-only config: never in a URL, argv or
+any config file. `scripts/sync_token_hygiene.sh` checks that by count, printing counts only and
+never a value. It runs nightly from Windy 0's sweep (heartbeat `windy-sync-token-hygiene`, 26h). By hand:
+
+    sudo bash /srv/windygit/src/scripts/sync_token_hygiene.sh
+    # sync token hygiene: files=0 remote-creds=0 argv=0 dir=root:root/750 loose-configs=0
+
+Anything but zeros, or a dir other than `root:root/750`, means a regression. Fix it before anything
+else, and never print a token to find it: compare sha256[:10] only.
+
 ## Re-run a PR's CI (Gitea 1.24 has no rerun API)
 
 ```bash
