@@ -10,15 +10,17 @@
 set -euo pipefail
 set -a; . /srv/windygit/src/.env; set +a
 export IMPORT_GITEA_URL=http://localhost:3080
-A=http://localhost:3080/api/v1; H="Authorization: token $GITEA_ADMIN_TOKEN"; r=$1; shift
-info=$(curl -s -H "$H" $A/repos/windyadmin/$r)
+A=http://localhost:3080/api/v1; r=$1; shift
+# The token goes to curl as a header file, never in argv (`ps` shows argv to every user).
+curl() { command curl -H @<(printf 'Authorization: token %s\n' "$GITEA_ADMIN_TOKEN") "$@"; }
+info=$(curl -s $A/repos/windyadmin/$r)
 m=$(echo "$info" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("mirror"))')
 if [ "$m" = True ]; then
-  curl -sf -o /dev/null -X DELETE -H "$H" $A/repos/windyadmin/$r
+  curl -sf -o /dev/null -X DELETE $A/repos/windyadmin/$r
   (cd /srv/windygit/src && python3 scripts/import_from_github.py "$r" | tail -1)
 elif [ "$m" = False ]; then echo "$r already writable"; else echo "$r absent -> importing"; (cd /srv/windygit/src && python3 scripts/import_from_github.py "$r" | tail -1); fi
-db=$(curl -s -H "$H" $A/repos/windyadmin/$r | python3 -c 'import json,sys;print(json.load(sys.stdin).get("default_branch","main"))')
-for i in $(seq 1 120); do curl -sf -o /dev/null -H "$H" $A/repos/windyadmin/$r/branches/$db && break; sleep 5; done
-for w in "$@"; do printf "  disable %s: " "$w"; curl -s -o /dev/null -w '%{http_code}\n' -X PUT -H "$H" $A/repos/windyadmin/$r/actions/workflows/$w/disable; done
-curl -s -H "$H" $A/repos/windyadmin/$r/actions/workflows | python3 -c 'import json,sys,os;print("  "+os.environ.get("R",""),[(w["path"].split("/")[-1],w["state"]) for w in json.load(sys.stdin).get("workflows",[])])'
+db=$(curl -s $A/repos/windyadmin/$r | python3 -c 'import json,sys;print(json.load(sys.stdin).get("default_branch","main"))')
+for i in $(seq 1 120); do curl -sf -o /dev/null $A/repos/windyadmin/$r/branches/$db && break; sleep 5; done
+for w in "$@"; do printf "  disable %s: " "$w"; curl -s -o /dev/null -w '%{http_code}\n' -X PUT $A/repos/windyadmin/$r/actions/workflows/$w/disable; done
+curl -s $A/repos/windyadmin/$r/actions/workflows | python3 -c 'import json,sys,os;print("  "+os.environ.get("R",""),[(w["path"].split("/")[-1],w["state"]) for w in json.load(sys.stdin).get("workflows",[])])'
 echo "  default=$db"
