@@ -21,6 +21,10 @@ WORK="$(mktemp -d /tmp/windygit-backup-XXXXXX)"
 GIT_ROOT="${GIT_DATA_ROOT:-/srv/windygit/git}/git/repositories"
 BUCKET="${R2_BUCKET_BACKUPS:-windy-git-backups}"
 KEEP_DAYS="${BACKUP_KEEP_DAYS:-30}"
+# Every file is age-encrypted to the fleet's backup recipient BEFORE upload (Boss's
+# backup-encryption sweep, 10-10: this bucket was the last one written plain). The
+# recipient is a PUBLIC key; the identity is lockbox BACKUP_AGE_IDENTITY (restores).
+AGE_RECIPIENT_FILE="${BACKUP_AGE_RECIPIENT_FILE:-$(dirname "$0")/../deploy/backup-age-recipient.txt}"
 FAILED=0
 
 # NEVER bundle these to R2 (orchestrator decision 2026-09-23). They carry
@@ -44,6 +48,12 @@ cleanup() { rm -rf "$WORK"; }
 trap cleanup EXIT
 
 log() { printf '[backup %s] %s\n' "$(date -u +%H:%M:%SZ)" "$*"; }
+
+recipient="$(grep -m1 -E '^age1[0-9a-z]+$' "$AGE_RECIPIENT_FILE" 2>/dev/null || true)"
+if ! command -v age >/dev/null 2>&1 || [[ -z "$recipient" ]]; then
+  log "FATAL: age or its recipient ($AGE_RECIPIENT_FILE) missing — refusing to upload anything plain"
+  exit 1
+fi
 
 if [[ -z "${R2_ACCESS_KEY_ID:-}" || -z "${R2_SECRET_ACCESS_KEY:-}" ]]; then
   log "FATAL: R2 credentials unset — refusing to report a backup that did not happen"
@@ -72,7 +82,10 @@ for repo in "$GIT_ROOT"/*/*.git; do
   # during the restore.
   if git --git-dir="$repo" bundle create "$out" --all >/dev/null 2>&1; then
     # Verify before trusting. An unverified bundle is a belief, not a backup.
-    if git bundle verify "$out" >/dev/null 2>&1; then
+    # Verify against the source repo: `git bundle verify` needs a repository, and
+    # outside one it fails ("need a repository to verify a bundle"). The nightly unit
+    # only passed because its cwd happened to be the /srv/windygit/src checkout.
+    if git --git-dir="$repo" bundle verify "$out" >/dev/null 2>&1; then
       count=$((count + 1))
     else
       log "CORRUPT bundle for ${owner}/${name} — not uploading"
@@ -101,14 +114,32 @@ else
   log "FAILED to dump the database"; FAILED=1
 fi
 
-# ---- 3. upload ------------------------------------------------------------
+# ---- 3. encrypt -------------------------------------------------------------
+# SHA256SUMS lists the PLAIN files, so a restore (or a spot check) can prove that
+# decrypt(x.age) is byte-identical to what was bundled. Hashes reveal nothing.
+( cd "$WORK" && sha256sum -- *.bundle *.sql 2>/dev/null ) > "$WORK/SHA256SUMS"
+for f in "$WORK"/*.bundle "$WORK"/*.sql; do
+  if age -r "$recipient" -o "$f.age" "$f" && [[ "$(head -c 21 "$f.age")" == "age-encryption.org/v1" ]]; then
+    rm -f "$f"
+  else
+    log "FATAL: could not encrypt $(basename "$f") — refusing to upload"; exit 1
+  fi
+done
+# Belt and braces: nothing but *.age and the sums list may leave this machine.
+plain="$(find "$WORK" -maxdepth 1 -type f ! -name '*.age' ! -name SHA256SUMS | wc -l)"
+if [[ "$plain" -ne 0 ]]; then
+  log "FATAL: $plain plain file(s) left after encryption — refusing to upload"; exit 1
+fi
+log "encrypted $(find "$WORK" -maxdepth 1 -name '*.age' | wc -l) files to ${recipient:0:12}…"
+
+# ---- 4. upload ------------------------------------------------------------
 if $S3 cp "$WORK" "s3://${BUCKET}/${STAMP}/" --recursive --only-show-errors; then
   log "uploaded to s3://${BUCKET}/${STAMP}/"
 else
   log "FATAL: upload failed"; exit 1
 fi
 
-# ---- 4. retention ---------------------------------------------------------
+# ---- 5. retention ---------------------------------------------------------
 cutoff="$(date -u -d "${KEEP_DAYS} days ago" +%Y-%m-%d 2>/dev/null || true)"
 if [[ -n "$cutoff" ]]; then
   $S3 ls "s3://${BUCKET}/" | awk '{print $2}' | tr -d '/' | while read -r d; do
