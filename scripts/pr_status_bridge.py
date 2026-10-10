@@ -22,7 +22,7 @@ Two jobs, run after every sync:
    hundreds of identical statuses onto one commit.
 
 Runs ON Veron 1 (localhost Gitea; no Cloudflare hairpin). Needs
-GITEA_ADMIN_TOKEN and a GITHUB_TOKEN with `repo` scope. Nothing here executes
+GITEA_SYNC_TOKEN (write:repository) and a GITHUB_TOKEN with `repo` scope. Nothing here executes
 repo code, and no secret is handed to any repo.
 """
 
@@ -42,7 +42,9 @@ import yaml
 
 GITEA = os.environ.get("BRIDGE_GITEA_URL", "http://localhost:3080").rstrip("/")
 PUBLIC = "https://app.windygit.com"
-GITEA_TOKEN = os.environ.get("GITEA_ADMIN_TOKEN", "")
+# Narrow token (write:repository) first; the admin token is for humans and only
+# a rollback fallback.
+GITEA_TOKEN = os.environ.get("GITEA_SYNC_TOKEN") or os.environ.get("GITEA_ADMIN_TOKEN", "")
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 GH_OWNER = os.environ.get("GITHUB_OWNER", "sneakyfree")
 WG_OWNER = os.environ.get("WINDYGIT_OWNER", "windyadmin")
@@ -525,7 +527,7 @@ def _post_guard(modname: str, ctx: str, repo: str, sha: str, default_branch: str
 
 def main() -> int:
     if not (GITEA_TOKEN and GITHUB_TOKEN):
-        sys.exit("GITEA_ADMIN_TOKEN and GITHUB_TOKEN are required")
+        sys.exit("GITEA_SYNC_TOKEN and GITHUB_TOKEN are required")
     failed = 0
     for repo in REPOS:
         try:
