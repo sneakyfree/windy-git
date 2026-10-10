@@ -1,5 +1,5 @@
 [Unit]
-Description=Nightly runner-guard sweep
+Description=Windy Git nightly sweep (09:40 UTC)
 
 [Timer]
 OnCalendar=*-*-* 09:40:00 UTC
