@@ -8,7 +8,7 @@ WorkingDirectory=/srv/windygit/src
 # Only what the sync uses: GITEA_SYNC_TOKEN (write:repository) + GITHUB_TOKEN, root 0600.
 # NOT the api .env: the sync never sees the admin token, R2 or DB secrets.
 EnvironmentFile=/etc/windygit/sync.env
-# GITHUB_TOKEN is set on the host only (root-only unit file / .env) — NEVER commit it.
+# Both tokens live only in that file on the host — NEVER commit them.
 Environment=GITHUB_OWNER=sneakyfree
 ExecStart=/bin/bash /srv/windygit/src/scripts/sync_from_github.sh
 Nice=10

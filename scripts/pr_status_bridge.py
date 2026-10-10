@@ -71,6 +71,10 @@ STATE = {
     "blocked": "pending",
 }
 MIRROR_TAG = "[GH#"
+# sync_from_github.sh never pushes archive/* (one-repo doctrine safety copies),
+# so a PR from such a branch can't be mirrored and no CI can run for it.
+ARCHIVE_PREFIX = "archive/"
+UNSYNCED_CTX = "windy-git/ci"
 
 # Image-build jobs cannot pass here BY DESIGN: job containers get no Docker
 # daemon (I-5 — the host socket would hand every workflow root on Veron 1).
@@ -220,6 +224,15 @@ def sync_prs(repo: str) -> list[str]:
         tag = f"{MIRROR_TAG}{pr['number']}]"
         wanted.add(tag)
         heads.append(pr["head"]["sha"])
+        if pr["head"]["ref"].startswith(ARCHIVE_PREFIX):
+            # WindyCloud #137, 10-10: this used to be a bare "-> 404" every 5 min
+            # and the PR sat 40 minutes waiting on CI that could never start.
+            _unsynced_status(repo, pr, "error",
+                             f"No CI: Windy Git never syncs {ARCHIVE_PREFIX}* branches. "
+                             "Push this commit to another branch and open a new PR.")
+            print(f"  {repo}: GH#{pr['number']} head {pr['head']['ref']} is {ARCHIVE_PREFIX}*, "
+                  "never synced: no mirror PR, no CI (error status posted)")
+            continue
         if tag in ours:
             cur = (ours[tag].get("base") or {}).get("ref")
             if cur is None or cur == pr["base"]["ref"]:  # unknown base: never guess, leave it
@@ -242,13 +255,33 @@ def sync_prs(repo: str) -> list[str]:
                 "body": f"Mirror of {pr['html_url']}. GitHub is the source of truth.",
             },
         )
+        if st not in (200, 201):
+            print(f"  {repo}: FAILED to open mirror PR for GH#{pr['number']} "
+                  f"(head {pr['head']['ref']}) -> {st}: no CI will run for it")
+            continue
         print(f"  {repo}: opened mirror PR for GH#{pr['number']} -> {st}")
+        # Same sha re-opened from a non-archive branch (renaming the head closes a
+        # GitHub PR, so it is a new PR): clear the old error on that commit.
+        _unsynced_status(repo, pr, "success", "Branch is synced to Windy Git; CI runs here.",
+                         only_if_present=True)
 
     for tag, p in ours.items():
         if tag not in wanted:
             gitea("PATCH", f"/repos/{WG_OWNER}/{repo}/pulls/{p['number']}", {"state": "closed"})
             print(f"  {repo}: closed mirror PR {tag} (closed on GitHub)")
     return heads
+
+
+def _unsynced_status(repo: str, pr: dict, state: str, desc: str,
+                     only_if_present: bool = False) -> None:
+    sha = pr["head"]["sha"]
+    st, existing = github("GET", f"/repos/{GH_OWNER}/{repo}/commits/{sha}/statuses?per_page=100")
+    cur = next((x["state"] for x in existing or [] if x["context"] == UNSYNCED_CTX), None)
+    if cur == state or (only_if_present and cur is None):
+        return
+    st, _ = github("POST", f"/repos/{GH_OWNER}/{repo}/statuses/{sha}",
+                   {"state": state, "context": UNSYNCED_CTX, "description": desc[:140]})
+    print(f"  {repo}@{sha[:7]} {UNSYNCED_CTX} = {state} -> {st}")
 
 
 SAFE_NAME = re.compile(r"^[A-Za-z0-9._-]+$")
