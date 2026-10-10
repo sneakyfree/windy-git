@@ -65,6 +65,13 @@ jobs:
       - name: tests
         run: .venv/bin/pytest -q
 
+      # act_runner 0.6.1 starts steps without waiting for the service's health
+      # check, so a fast job can reach postgres before it listens: "Connection
+      # refused", or the name not yet on the job network (WindyCloud runs 203 and
+      # 258, 10-10). TCP only accepts once the real server is up.
+      - name: wait for postgres
+        run: for i in $(seq 1 60); do (exec 3<>/dev/tcp/postgres/5432) 2>/dev/null && exit 0; sleep 1; done; echo "postgres never came up"; exit 1
+
       # G0.4 — a migration nobody has run is a migration nobody can trust. This
       # is the step that caught two bugs review did not: SQLAlchemy Enum
       # persisting .name instead of .value, and create_table re-emitting
