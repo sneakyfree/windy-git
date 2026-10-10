@@ -592,3 +592,47 @@ def test_bad_payload_falls_back_to_the_label_rule(monkeypatch):
     monkeypatch.undo()
     monkeypatch.setattr(bridge.subprocess, "run", lambda *a, **k: R())
     assert bridge.failure_hint(5) == "at step '(unnamed step)'"
+
+
+def _pr(ref, n=137):
+    return {"number": n, "title": "t", "html_url": "u",
+            "head": {"ref": ref, "sha": SHA, "repo": {"full_name": f"{bridge.GH_OWNER}/WindyCloud"}},
+            "base": {"ref": "main"}}
+
+
+def test_archive_branch_pr_gets_an_explaining_error_not_a_mirror(fake):
+    # WindyCloud #137, 10-10: archive/* is never synced, so the mirror 404'd silently.
+    f = fake(gh_prs=[_pr("archive/a2.2-contract-kit")])
+    assert bridge.sync_prs("WindyCloud") == [SHA]
+    assert f.opened == []
+    assert [(p["context"], p["state"]) for p in f.posted] == [("windy-git/ci", "error")]
+    assert "archive/" in f.posted[0]["description"]
+
+
+def test_archive_explanation_is_not_reposted(fake):
+    f = fake(gh_prs=[_pr("archive/x")], statuses=[{"context": "windy-git/ci", "state": "error"}])
+    bridge.sync_prs("WindyCloud")
+    assert f.posted == []
+
+
+def test_rename_out_of_archive_clears_the_error_on_the_same_sha(fake):
+    f = fake(gh_prs=[_pr("cloud/x")], statuses=[{"context": "windy-git/ci", "state": "error"}])
+    bridge.sync_prs("WindyCloud")
+    assert [o["head"] for o in f.opened] == ["cloud/x"]
+    assert [(p["context"], p["state"]) for p in f.posted] == [("windy-git/ci", "success")]
+
+
+def test_ordinary_new_mirror_posts_no_extra_status(fake):
+    f = fake(gh_prs=[_pr("cloud/x")])
+    bridge.sync_prs("WindyCloud")
+    assert f.opened and f.posted == []
+
+
+def test_failed_mirror_open_is_reported_loudly(fake, monkeypatch, capsys):
+    f = fake(gh_prs=[_pr("cloud/x")])
+    real = f.gitea
+    monkeypatch.setattr(bridge, "gitea",
+                        lambda m, p, b=None: (404, None) if m == "POST" else real(m, p, b))
+    bridge.sync_prs("WindyCloud")
+    assert "FAILED to open mirror PR for GH#137" in capsys.readouterr().out
+    assert f.posted == []
