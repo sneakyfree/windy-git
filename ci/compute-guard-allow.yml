@@ -128,3 +128,34 @@ allow:
     approved_by: windy-hub
     approved_on: 2026-10-02
     expires: 2026-12-31
+
+  - repo: windy-pro
+    paths: ["services/windy-stt/*"]
+    # talk-engine-port lines only (the kind regex), so a provider call added here still flags
+    matches: ['(?::|%3[aA])(?:8791|8788|8794)(?![0-9])']
+    reason: "Our own Talk/STT engine's deploy, install, smoke and loadtest code naming its own port; not a provider (D8 dry run 10-14)."
+    exemption: owner-approved
+    approved_by: windy-hub
+    approved_on: 2026-10-14
+    expires: 2027-01-12
+
+  - repo: Windy-Clone
+    paths:
+      - ".env.example"
+      - ".env.production.example"
+      - "api/app/providers/elevenlabs.py"
+      - "api/app/providers/heygen.py"
+      - "api/app/providers/resembleai.py"
+      - "api/app/services/connect.py"
+      - "api/ops-hook/deploy/ops-hook.env.example"
+      - "docker-compose.yml"
+      - "scripts/smoke-test.sh"
+    # voice-ai host + voice-ai key lines only, in today's 9 files; any other kind or file still flags
+    matches:
+      - 'api\.deepgram\.com|api\.elevenlabs\.io|api\.cartesia\.ai|api\.play\.?ht(\.com)?|resemble\.ai|api\.heygen\.com|vision\.googleapis\.com|speech\.googleapis\.com|texttospeech\.googleapis\.com'
+      - '\b(?:DEEPGRAM|ELEVENLABS|ELEVEN|CARTESIA|PLAYHT|PLAY_HT|RESEMBLE|HEYGEN)_API_KEY\b|\bPLAYHT_USER_ID\b'
+    reason: "ElevenLabs integration live and paid; Hub route ruling pending. Dated: lapses on its own (D8 dry run 10-14)."
+    exemption: owner-approved
+    approved_by: windy-hub
+    approved_on: 2026-10-14
+    expires: 2026-10-28
