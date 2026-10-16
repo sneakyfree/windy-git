@@ -81,6 +81,7 @@ class Fake:
 @pytest.fixture(autouse=True)
 def _fresh_cache(monkeypatch):
     bridge._RUNS_CACHE.clear()
+    bridge._STATUSES_CACHE.clear()
     monkeypatch.setattr(bridge, "failure_hint", lambda task_id: None)
 
 
@@ -636,3 +637,96 @@ def test_failed_mirror_open_is_reported_loudly(fake, monkeypatch, capsys):
     bridge.sync_prs("WindyCloud")
     assert "FAILED to open mirror PR for GH#137" in capsys.readouterr().out
     assert f.posted == []
+
+
+class _CountingFake(Fake):
+    def __init__(self, fail_first_get=False, **kw):
+        super().__init__(**kw)
+        self.status_gets, self.fail_first_get = 0, fail_first_get
+
+    def github(self, method, path, body=None):
+        if "/statuses" in path and method == "GET":
+            self.status_gets += 1
+            if self.fail_first_get and self.status_gets == 1:
+                return 502, None
+        return super().github(method, path, body)
+
+
+_STATUSES_NOW = [  # newest first, as GitHub returns them
+    {"context": "windy-git/ci/test", "state": "pending", "description": ""},
+    {"context": "windy-git/compute-guard", "state": "failure", "description": "BLOCK 1"},
+    {"context": "windy-git/secret-guard", "state": "success", "description": "OK: clean"},
+    {"context": "windy-git/ci-hygiene", "state": "failure", "description": "BLOCK 2"},
+]
+_RUNS_NOW = [_run(1, "ci.yml", "test", "success"), _run(2, "ci.yml", "lint", "failure")]
+
+
+def _one_head(f, monkeypatch, share):
+    """What main() does for one head: post_statuses, then the three guards."""
+    monkeypatch.setattr(bridge, "gitea", f.gitea)
+    monkeypatch.setattr(bridge, "github", f.github)
+    monkeypatch.setattr(bridge, "queued_jobs", lambda repo, sha: [])
+    monkeypatch.setitem(sys.modules, "guards_report",  # all lane-owned: the guards can block
+                        type("GR", (), {"split_grant": staticmethod(lambda r, s, fs: (list(fs), []))}))
+    monkeypatch.setitem(sys.modules, "compute_guard", _Guard([_F()]))     # unchanged: BLOCK 1
+    monkeypatch.setitem(sys.modules, "secret_guard", _Guard([_F()]))      # changed: was clean
+    monkeypatch.setitem(sys.modules, "ci_hygiene", _Guard([_F(), _F()]))  # unchanged: BLOCK 2
+    steps = [lambda: bridge.post_statuses("windy-chat", SHA)] + [
+        (lambda fn=fn: fn("windy-chat", SHA, "main", False))
+        for fn in (bridge.post_compute_guard, bridge.post_ci_hygiene, bridge.post_secret_guard)]
+    for step in steps:
+        if not share:
+            bridge._STATUSES_CACHE.clear()  # the old behaviour: every caller fetched its own
+        bridge._RUNS_CACHE.clear()
+        step()
+    return [(p["context"], p["state"], p.get("description")) for p in f.posted]
+
+
+def test_shared_statuses_post_exactly_what_separate_gets_did(monkeypatch):
+    old = _CountingFake(runs=_RUNS_NOW, statuses=_STATUSES_NOW)
+    new = _CountingFake(runs=_RUNS_NOW, statuses=_STATUSES_NOW)
+    before = _one_head(old, monkeypatch, share=False)
+    bridge._STATUSES_CACHE.clear()
+    after = _one_head(new, monkeypatch, share=True)
+    assert after == before
+    # and the scenario is not vacuous: one CI job and one guard changed, two guards did not
+    assert {c for c, _, _ in after} == {"windy-git/ci/test", "windy-git/ci/lint", "windy-git/secret-guard"}
+    assert (old.status_gets, new.status_gets) == (4, 1)
+
+
+def test_failed_statuses_get_is_not_shared(monkeypatch):
+    f = _CountingFake(fail_first_get=True, runs=_RUNS_NOW, statuses=_STATUSES_NOW)
+    posted = _one_head(f, monkeypatch, share=True)
+    # the CI post saw no statuses (as before a failed GET), the guards fetched again and
+    # saw the real list, so the unchanged guards are still not reposted
+    assert f.status_gets == 2
+    assert [c for c, _, _ in posted if "guard" in c or "hygiene" in c] == ["windy-git/secret-guard"]
+
+
+def test_each_head_and_each_sync_gets_its_own_statuses(fake, monkeypatch):
+    f = fake(statuses=_STATUSES_NOW)
+    calls = []
+    real = f.github
+
+    def counting(method, path, body=None):
+        calls.append(path)
+        return real(method, path, body)
+
+    monkeypatch.setattr(bridge, "github", counting)
+    bridge.commit_statuses("r", SHA)
+    bridge.commit_statuses("r", SHA)
+    bridge.commit_statuses("r", "b" * 40)
+    bridge.commit_statuses("other", SHA)
+    assert len(calls) == 3
+    bridge._STATUSES_CACHE.clear()  # main() does this at the start of every sync
+    bridge.commit_statuses("r", SHA)
+    assert len(calls) == 4
+
+
+def test_every_sync_starts_with_no_shared_statuses(monkeypatch):
+    bridge._STATUSES_CACHE[("r", SHA)] = [{"context": "windy-git/ci/test", "state": "success"}]
+    monkeypatch.setattr(bridge, "GITEA_TOKEN", "t")
+    monkeypatch.setattr(bridge, "GITHUB_TOKEN", "t")
+    monkeypatch.setattr(bridge, "REPOS", [])
+    assert bridge.main() == 0
+    assert bridge._STATUSES_CACHE == {}

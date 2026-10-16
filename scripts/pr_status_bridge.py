@@ -207,6 +207,25 @@ def github(method, path, body=None):
     return _call("https://api.github.com", f"Bearer {GITHUB_TOKEN}", method, path, body)
 
 
+# One GET of a head's statuses per sync, shared by post_statuses and the three
+# guards. Each used to fetch the same list itself: 4 GETs x ~85 heads a tick was
+# most of the ~400 calls/tick that ran the shared GitHub quota dry every hour
+# (10-16). Safe to share: each of them reads and posts only its own contexts, so
+# nothing one posts this tick changes what another decides. Failed GETs are not
+# kept, so the next caller asks again, as before.
+_STATUSES_CACHE: dict[tuple[str, str], list] = {}
+
+
+def commit_statuses(repo: str, sha: str) -> list:
+    key = (repo, sha)
+    if key not in _STATUSES_CACHE:
+        st, existing = github("GET", f"/repos/{GH_OWNER}/{repo}/commits/{sha}/statuses?per_page=100")
+        if st != 200:
+            return existing or []
+        _STATUSES_CACHE[key] = existing or []
+    return _STATUSES_CACHE[key]
+
+
 def sync_prs(repo: str) -> list[str]:
     """Mirror open same-repo GitHub PRs into Windy Git. Returns their head shas."""
     st, gh_prs = github("GET", f"/repos/{GH_OWNER}/{repo}/pulls?state=open&per_page=100")
@@ -457,9 +476,8 @@ def post_statuses(repo: str, sha: str) -> None:
     if not (latest or bad):
         return
 
-    st, existing = github("GET", f"/repos/{GH_OWNER}/{repo}/commits/{sha}/statuses?per_page=100")
     current: dict[str, str] = {}
-    for s in existing or []:  # newest first
+    for s in commit_statuses(repo, sha):  # newest first
         current.setdefault(s["context"], s["state"])
 
     for ctx, (path, problem) in sorted(bad.items()):
@@ -545,8 +563,7 @@ def _post_guard(modname: str, ctx: str, repo: str, sha: str, default_branch: str
         print(f"  {repo}@{sha[:7]} {ctx}: Grant-owned split failed ({type(e).__name__}); WARN only")
         lane, grant = [], list(findings)
     state, desc, first = g.status_for(lane, whole_tree=is_default_head, grant=grant)
-    st, existing = github("GET", f"/repos/{GH_OWNER}/{repo}/commits/{sha}/statuses?per_page=100")
-    for s in existing or []:  # newest first: compare the latest guard status only
+    for s in commit_statuses(repo, sha):  # newest first: compare the latest guard status only
         if s["context"] == ctx:
             if (s["state"], s.get("description")) == (state, desc):
                 return
@@ -562,6 +579,7 @@ def main() -> int:
     if not (GITEA_TOKEN and GITHUB_TOKEN):
         sys.exit("GITEA_SYNC_TOKEN and GITHUB_TOKEN are required")
     failed = 0
+    _STATUSES_CACHE.clear()
     for repo in REPOS:
         try:
             shas = sync_prs(repo)
