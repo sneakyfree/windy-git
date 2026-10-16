@@ -13,7 +13,19 @@ CAP_GB="${CI_STORAGE_CAP_GB:-60}"
 D=(docker exec windy-git-runner-dind-1 docker -H tcp://127.0.0.1:2375)  # dind listens on TCP only
 
 "${D[@]}" container prune -f --filter until=6h >/dev/null
-"${D[@]}" volume prune -af >/dev/null            # job workspaces of finished jobs
+# Job workspaces of finished jobs. NOT `volume prune -a`: that also took act-toolcache
+# (/opt/hostedtoolcache, shared by every job), so each prune left it empty and the
+# next parallel batch all ran setup-node/python into the same path at once; one
+# job deleted the node another was running ("No such file" / "Text file busy",
+# windy-chat #377 runs 1107 + 1112, 10-16). Keep it, but cap it: over the cap it
+# goes too (one racy batch, then warm again).
+TOOLCACHE_CAP_GB="${CI_TOOLCACHE_CAP_GB:-8}"
+TC=/var/lib/docker/volumes/windy-git-runner_dind-storage/_data/volumes/act-toolcache
+tc_gb=$(du -s --block-size=1G "$TC" 2>/dev/null | cut -f1 || true)
+keep=act-toolcache; (( ${tc_gb:-0} > TOOLCACHE_CAP_GB )) && keep=
+# An empty $keep matches no volume name, so then nothing is kept.
+"${D[@]}" volume ls -q --filter dangling=true | { grep -vxF "$keep" || true; } \
+  | xargs -r "${D[@]}" volume rm >/dev/null 2>&1 || true   # in use since listing: skipped
 # Idle job networks. A job that dies before its container attaches leaks its network (24 piled up
 # over days, 10-06); dind has only ~31 address pools, so once they fill every new job fails in
 # 0-1 s with "all predefined address pools have been fully subnetted" (looked like load flakes).
