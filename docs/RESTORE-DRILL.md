@@ -12,16 +12,16 @@ NOT in it: the restic password itself (lockbox `RESTIC_WINDYGIT_PASSWORD`) and t
     export AWS_ACCESS_KEY_ID=… AWS_SECRET_ACCESS_KEY=…            # from lockbox-get, into env, not echoed
     export RESTIC_REPOSITORY=s3:https://<R2 account>.r2.cloudflarestorage.com/windy-git-backups/restic
     restic snapshots --tag windygit-state
-    restic restore latest --tag windygit-state --target /var/tmp/wg-drill
+    restic restore latest --tag windygit-state --target /dev/shm/wg-drill
     docker run -d --name wg-drill-pg -e POSTGRES_PASSWORD=<random> -e POSTGRES_USER=drill postgres:16-alpine
     for db in gitea windygit; do
       docker exec wg-drill-pg psql -U drill -d postgres -c "create database $db"
       docker exec -i wg-drill-pg pg_restore -U drill -d $db --no-owner --no-privileges \
-        < /var/tmp/wg-drill/var/backups/windygit-state/$db.dump
+        < /dev/shm/wg-drill/var/backups/windygit-state/$db.dump
     done
     # compare row counts with live (or with the last known): repository, issue, pull_request, "user",
     # external_login_user, access_token, action_run, action_run_job
-    docker rm -f wg-drill-pg; rm -rf /var/tmp/wg-drill
+    docker rm -f wg-drill-pg; rm -rf /dev/shm/wg-drill
 
 ## Real disaster (Veron lost)
 1. New Linux host with Docker, a Cloudflare tunnel connector, the repo (`git clone` from GitHub: windy-git).

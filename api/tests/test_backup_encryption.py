@@ -94,11 +94,13 @@ def world(tmp_path):
     bin_dir.mkdir()
     _exe(bin_dir / "docker", "#!/bin/sh\necho 'CREATE TABLE windgit.tokens (id int);'\n")
     up = tmp_path / "uploaded"
+    ram = tmp_path / "ram"
+    ram.mkdir()
     # `aws s3 --endpoint-url X cp SRC s3://bucket/STAMP/ --recursive ...` -> copy SRC into $UP; `ls` -> nothing
     _exe(bin_dir / "aws", f"""#!/bin/bash
 args=("$@")
 for ((i=0;i<${{#args[@]}};i++)); do
-  if [[ ${{args[$i]}} == cp ]]; then mkdir -p {up}; cp -r "${{args[$((i+1))]}}"/. {up}/; exit 0; fi
+  if [[ ${{args[$i]}} == cp ]]; then mkdir -p {up}; echo "${{args[$((i+1))]}}" > {tmp_path}/staged-in; cp -r "${{args[$((i+1))]}}"/. {up}/; exit 0; fi
 done
 exit 0
 """)
@@ -107,7 +109,9 @@ exit 0
            "GIT_DATA_ROOT": str(tmp_path / "data"),
            "R2_ACCESS_KEY_ID": "fake", "R2_SECRET_ACCESS_KEY": "fake", "R2_ACCOUNT_ID": "fake",
            "BACKUP_AGE_RECIPIENT_FILE": str(tmp_path / "recipient.txt"),
-           "GIT_CONFIG_GLOBAL": "/dev/null"}
+           "GIT_CONFIG_GLOBAL": "/dev/null",
+           # plaintext is staged on a tmpfs in production; any dir will do for the test
+           "WG_BACKUP_TMPFS": str(ram), "WG_TMPFS_ANY": "1"}
     return tmp_path, env, key, up
 
 
@@ -123,6 +127,9 @@ def test_only_encrypted_files_leave_and_they_decrypt_to_the_logged_sums(world):
     assert "ok — 1 repos + database" in r.stdout
     names = sorted(p.name for p in up.iterdir())
     assert names == ["SHA256SUMS", "windgit.sql.age", "windyadmin__demo.bundle.age"]
+    # staged under the tmpfs dir, and cleaned up after
+    assert Path((tmp / "staged-in").read_text().strip()).parent == tmp / "ram"
+    assert list((tmp / "ram").iterdir()) == []
     sums = dict(reversed(line.split("  ", 1)) for line in (up / "SHA256SUMS").read_text().splitlines())
     for enc in up.glob("*.age"):
         plain = subprocess.run(["age", "-d", "-i", str(key), str(enc)], capture_output=True, check=True).stdout
