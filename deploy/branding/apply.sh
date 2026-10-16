@@ -11,7 +11,11 @@ sudo chown -R 1000:1000 "$CUSTOM"/templates "$CUSTOM"/public
 
 # APP_NAME must sit at the TOP LEVEL. See README trap #1.
 INI="$CUSTOM/conf/app.ini"
-sudo cp "$INI" "$INI.bak-brand-$(date +%s)"
+# app.ini holds secrets: never a plaintext .bak (Boss standing rule 10-16). One encrypted
+# snapshot instead; getting it back is predeploy-restore, on Grant's or Boss's OK only.
+command -v predeploy-snapshot >/dev/null \
+  || { echo "predeploy-snapshot not installed: refusing to edit app.ini without a snapshot"; exit 1; }
+sudo WINDY_LANE=windy-git predeploy-snapshot windy-git gitea-app-ini "$INI"
 sudo python3 - "$INI" <<'PY'
 import sys
 p = sys.argv[1]

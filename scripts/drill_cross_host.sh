@@ -2,7 +2,8 @@
 # Cross-host restore drill on Windy 0: ONLY lockbox + R2, nothing from Veron. Values never printed.
 # Usage: bash drill_cross_host.sh   (needs lockbox keys RESTIC_WINDYGIT_PASSWORD, WINDYGIT_R2_ACCESS_KEY_ID, WINDYGIT_R2_SECRET_ACCESS_KEY, WINDYGIT_R2_ENDPOINT)
 set -euo pipefail
-umask 077; W=$(mktemp -d ~/.cache/wg-xdrill.XXXXXX)
+# The restored dumps and app.ini are plaintext: RAM only (Boss standing rule 10-16).
+umask 077; W=$(mktemp -d /dev/shm/wg-xdrill.XXXXXX)
 trap 'docker rm -f wg-xdrill-pg >/dev/null 2>&1 || true; rm -rf "$W"' EXIT
 lockbox-get RESTIC_WINDYGIT_PASSWORD "$W/pw" >/dev/null
 lockbox-get WINDYGIT_R2_ACCESS_KEY_ID "$W/ak" >/dev/null; lockbox-get WINDYGIT_R2_SECRET_ACCESS_KEY "$W/sk" >/dev/null; lockbox-get WINDYGIT_R2_ENDPOINT "$W/ep" >/dev/null

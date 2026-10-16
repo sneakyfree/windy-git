@@ -21,6 +21,13 @@ STAGE="${WG_STAGE:-/var/backups/windygit-state}"
 GIT_ROOT="${GIT_DATA_ROOT:-/srv/windygit/git}"
 umask 077
 mkdir -p "$STAGE"; chmod 700 "$STAGE"; rm -f "$STAGE"/*.dump "$STAGE"/globals.sql
+# The dumps are plaintext until restic encrypts them, so $STAGE must be RAM (Boss standing
+# rule 10-16). The unit mounts a private tmpfs there (windygit-state-backup.service.d/
+# stage-tmpfs.conf): only this unit sees it, it is gone when the unit exits, and the path
+# restic records stays the same, so restores and the drill are unchanged.
+if [[ -z "${WG_TMPFS_ANY:-}" && "$(stat -f -c %T "$STAGE" 2>/dev/null)" != tmpfs ]]; then
+  log "FATAL: $STAGE is not a tmpfs: plaintext dumps must stay in RAM (run via the unit)"; exit 1
+fi
 
 # systemd gives units no $HOME, and restic wants a cache dir: pin one.
 export RESTIC_CACHE_DIR="${RESTIC_CACHE_DIR:-/var/cache/windygit-restic}"; mkdir -p "$RESTIC_CACHE_DIR"

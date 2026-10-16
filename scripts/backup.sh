@@ -17,7 +17,15 @@
 set -uo pipefail
 
 STAMP="$(date -u +%Y-%m-%d)"
-WORK="$(mktemp -d /tmp/windygit-backup-XXXXXX)"
+# The bundles and the dump are plaintext until step 3 encrypts them, so they are staged in
+# RAM, never on disk (Boss standing rule 10-16: no plaintext copies of data on any host).
+# ~2.7 GB of repos on 10-16; Veron's /dev/shm is 126 GB. Tests set WG_TMPFS_ANY=1.
+TMPFS="${WG_BACKUP_TMPFS:-/dev/shm}"
+if [[ -z "${WG_TMPFS_ANY:-}" && "$(stat -f -c %T "$TMPFS" 2>/dev/null)" != tmpfs ]]; then
+  printf '[backup %s] FATAL: %s is not a tmpfs: plaintext must stay in RAM\n' "$(date -u +%H:%M:%SZ)" "$TMPFS"
+  exit 1
+fi
+WORK="$(mktemp -d "$TMPFS/windygit-backup-XXXXXX")"
 GIT_ROOT="${GIT_DATA_ROOT:-/srv/windygit/git}/git/repositories"
 BUCKET="${R2_BUCKET_BACKUPS:-windy-git-backups}"
 KEEP_DAYS="${BACKUP_KEEP_DAYS:-30}"
