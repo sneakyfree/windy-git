@@ -730,3 +730,11 @@ def test_every_sync_starts_with_no_shared_statuses(monkeypatch):
     monkeypatch.setattr(bridge, "REPOS", [])
     assert bridge.main() == 0
     assert bridge._STATUSES_CACHE == {}
+
+
+def test_failed_statuses_get_returns_an_empty_list_not_the_error_body(monkeypatch):
+    # GitHub's error body is a dict; iterating it would hand callers its keys as "statuses"
+    monkeypatch.setattr(bridge, "github", lambda method, path, body=None: (403, {"message": "API rate limit exceeded"}))
+    bridge._STATUSES_CACHE.clear()
+    assert bridge.commit_statuses("r", SHA) == []
+    assert ("r", SHA) not in bridge._STATUSES_CACHE  # a failure is never shared with later callers
