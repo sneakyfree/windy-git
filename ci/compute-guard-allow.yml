@@ -159,3 +159,20 @@ allow:
     approved_by: windy-hub
     approved_on: 2026-10-14
     expires: 2026-10-28
+
+  - repo: windy-pro
+    paths:
+      - "account-server/src/legal/*"
+      - "docs/legal/*"
+      - "src/client/desktop/renderer/*.html"
+      - "src/client/web/src/pages/legal-generated.js"
+    # Legal prose that NAMES the user's own env vars (privacy policy v24: "OPENAI_API_KEY, GROQ_API_KEY or
+    # DEEPGRAM_API_KEY"). Only a line naming one of those three, with no env read and no provider host
+    # on it, is excused; any other kind, or a real call in these paths, still flags.
+    matches:
+      - '^(?!.*(?:process\.env|os\.environ|getenv|import\.meta\.env|api\.openai\.com|api\.groq\.com|api\.deepgram\.com)).*\b(?:OPENAI|GROQ|DEEPGRAM)_API_KEY\b'
+    reason: "Generated legal pages (privacy v24, Grant-approved 10-17) list the user-own-key env var NAMES in prose; no call. Rewording moves the privacy/agreement hashes (Hub 10-17, windy-pro #1367)."
+    exemption: owner-approved
+    approved_by: windy-hub
+    approved_on: 2026-10-17
+    expires: 2027-01-14
