@@ -370,3 +370,48 @@ def test_findings_carry_kind_and_name_never_the_value_and_ports_skip_contracts()
     assert [k for k, _ in cg.scan_line("deploy/docker-compose.yml", "    - 8791:8791 # :8791")] == ["talk engine port"]
     # :8099 is windy-pro's OLD translate-api / cloud-storage service, NOT the Talk engine (Hub 10-02): not flagged
     assert cg.scan_line("deploy/docker-compose.yml", "    - 8099:8099 # translate-api:8099") == []
+
+
+# windy-pro legal pages (Hub 10-17, #1367): prose naming the env vars is excused, a real call is not.
+LEGAL_PROSE = ("<p><strong>Your own AI keys.</strong> ... one set in your computer's environment "
+               "(OPENAI_API_KEY, GROQ_API_KEY or DEEPGRAM_API_KEY).</p>")
+
+
+@pytest.mark.parametrize("path", [
+    "account-server/src/legal/wording-manifest.json",
+    "docs/legal/20-PRIVACY-POLICY.md",
+    "src/client/desktop/renderer/privacy.html",
+    "src/client/web/src/pages/legal-generated.js",
+])
+def test_legal_prose_naming_env_vars_is_allowed(path):
+    assert cg.allowed("windy-pro", path, ALLOW, LEGAL_PROSE)
+
+
+@pytest.mark.parametrize("path, line", [
+    # code right next to the legal pages still flags
+    ("account-server/src/legal/render.ts", "const key = process.env.OPENAI_API_KEY"),
+    ("account-server/src/legal/render.ts", "await fetch('https://api.openai.com/v1/chat/completions')"),
+    ("account-server/src/legal/render.ts", "import Anthropic from '@anthropic-ai/sdk'"),
+    ("src/client/web/src/pages/legal-generated.js", "fetch('https://api.groq.com/openai/v1/chat', {headers: {k: OPENAI_API_KEY}})"),
+    ("docs/legal/run.py", "key = os.environ['DEEPGRAM_API_KEY']"),
+    ("account-server/src/legal/keys.ts", "const k = ANTHROPIC_API_KEY"),  # only the three named keys
+    # same prose outside the exempt paths still flags
+    ("src/client/web/src/pages/settings.js", LEGAL_PROSE),
+    ("account-server/src/routes/privacy.ts", LEGAL_PROSE),
+])
+def test_real_provider_use_beside_legal_pages_still_flags(path, line):
+    assert not cg.allowed("windy-pro", path, ALLOW, line)
+
+
+def test_legal_prose_exemption_in_a_real_diff():
+    diff = f"""--- a/account-server/src/legal/wording-manifest.json
++++ b/account-server/src/legal/wording-manifest.json
+@@ -1,0 +2,1 @@
++      "html": "{LEGAL_PROSE}",
+--- /dev/null
++++ b/account-server/src/legal/render.ts
+@@ -0,0 +1,1 @@
++const key = process.env.OPENAI_API_KEY
+"""
+    fs = cg.parse_added("windy-pro", diff, ALLOW)
+    assert {f.path for f in fs} == {"account-server/src/legal/render.ts"}
