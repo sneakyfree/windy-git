@@ -57,8 +57,9 @@ class Fake:
         if "/actions/tasks" in path:
             page = int(path.rsplit("page=", 1)[1])
             return 200, {"workflow_runs": self.runs[(page - 1) * 50 : page * 50]}
-        if method == "GET" and path.endswith("/pulls?state=open&limit=50"):
-            return 200, self.wg_prs
+        if method == "GET" and "/pulls?state=open&limit=50&page=" in path:
+            page = int(path.rsplit("page=", 1)[1])
+            return 200, self.wg_prs[(page - 1) * 50 : page * 50]
         if method == "POST" and path.endswith("/pulls"):
             self.opened.append(body)
             return 201, {}
@@ -738,3 +739,35 @@ def test_failed_statuses_get_returns_an_empty_list_not_the_error_body(monkeypatc
     bridge._STATUSES_CACHE.clear()
     assert bridge.commit_statuses("r", SHA) == []
     assert ("r", SHA) not in bridge._STATUSES_CACHE  # a failure is never shared with later callers
+
+
+
+def test_open_mirror_prs_past_the_first_gitea_page_are_seen(fake, monkeypatch):
+    # windy-pro 10-17: 59 open mirror PRs; Gitea returns at most 50 per page
+    n = 59
+    gh = [{"number": i, "title": f"t{i}", "head": {"sha": f"{i:040d}", "ref": f"b{i}",
+           "repo": {"full_name": f"{bridge.GH_OWNER}/r"}}, "base": {"ref": "main"}} for i in range(1, n + 1)]
+    wg = [{"number": i, "title": f"{bridge.MIRROR_TAG}{i}] t{i}", "base": {"ref": "main"}} for i in range(1, n + 1)]
+    f = fake(gh_prs=gh, wg_prs=wg)
+    heads = bridge.sync_prs("r")
+    assert len(heads) == n
+    assert f.opened == []   # nothing re-opened: every existing mirror PR was found
+    assert f.closed == []   # and none closed as stale
+
+
+def test_gitea_pull_list_stops_on_a_short_page_and_refuses_a_runaway(monkeypatch):
+    calls = []
+
+    def g(method, path, body=None):
+        calls.append(path)
+        page = int(path.rsplit("page=", 1)[1])
+        return 200, [{"title": "x"}] * (50 if page < 3 else 7)
+
+    monkeypatch.setattr(bridge, "gitea", g)
+    assert len(bridge.gitea_open_pulls("r")) == 107 and len(calls) == 3
+    monkeypatch.setattr(bridge, "gitea", lambda m, p, b=None: (200, [{"title": "x"}] * 50))
+    with pytest.raises(RuntimeError, match="longer than"):
+        bridge.gitea_open_pulls("r")
+    monkeypatch.setattr(bridge, "gitea", lambda m, p, b=None: (500, None))
+    with pytest.raises(RuntimeError, match="page 1 -> 500"):
+        bridge.gitea_open_pulls("r")

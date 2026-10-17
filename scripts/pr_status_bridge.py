@@ -226,14 +226,31 @@ def commit_statuses(repo: str, sha: str) -> list:
     return _STATUSES_CACHE[key]
 
 
+
+# Gitea caps a page at 50 (MAX_RESPONSE_ITEMS), so one page is not the whole list.
+# windy-pro passed 50 open mirror PRs on 10-17: the 9 past the first page looked
+# missing, every sync tried to re-open them (409 each), and they got no statuses.
+GITEA_PAGE = 50
+GITEA_MAX_PAGES = 20
+
+
+def gitea_open_pulls(repo: str) -> list:
+    out: list = []
+    for page in range(1, GITEA_MAX_PAGES + 1):
+        st, body = gitea("GET", f"/repos/{WG_OWNER}/{repo}/pulls?state=open&limit={GITEA_PAGE}&page={page}")
+        if st != 200:
+            raise RuntimeError(f"{repo}: Windy Git PR list page {page} -> {st}")
+        out += body or []
+        if len(body or []) < GITEA_PAGE:
+            return out
+    raise RuntimeError(f"{repo}: Windy Git PR list longer than {GITEA_MAX_PAGES} pages")
+
 def sync_prs(repo: str) -> list[str]:
     """Mirror open same-repo GitHub PRs into Windy Git. Returns their head shas."""
     st, gh_prs = github("GET", f"/repos/{GH_OWNER}/{repo}/pulls?state=open&per_page=100")
     if st != 200:
         raise RuntimeError(f"{repo}: GitHub PR list -> {st}")
-    st, wg_prs = gitea("GET", f"/repos/{WG_OWNER}/{repo}/pulls?state=open&limit=50")
-    if st != 200:
-        raise RuntimeError(f"{repo}: Windy Git PR list -> {st}")
+    wg_prs = gitea_open_pulls(repo)
     ours = {p["title"].split("]")[0] + "]": p for p in wg_prs if p["title"].startswith(MIRROR_TAG)}
 
     heads, wanted = [], set()
