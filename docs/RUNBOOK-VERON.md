@@ -29,7 +29,7 @@ boot in production if it finds itself on `72.60.118.54`.
 |---|---|
 | `127.0.0.1:3080` | Gitea (host 3000 is a resident node dev server; 3300 is nginx — **do not fight them for a port**) |
 | `127.0.0.1:8600` | windy-git API |
-| `127.0.0.1:2001` | cloudflared metrics (`metrics:` in `/etc/cloudflared/config.yml`) — **not 2000**, see Troubleshooting |
+| `127.0.0.1:2021` | cloudflared metrics (`metrics:` in `/etc/cloudflared/config.yml`, which lives ON THE HOST ONLY, not in this repo) — **not 2000/2001**, see Troubleshooting |
 
 **No inbound port is opened.** cloudflared dials out, so the dynamic residential
 IP is irrelevant and there is no firewall hole to maintain.
@@ -127,7 +127,14 @@ port** — cloudflared exits if it cannot bind `metrics:`, taking ingress with i
 Until 2026-09-23 this unit restarted ~91,000 times because another project's
 `cornercall-tunnel` held 127.0.0.1:2000; ingress only survived because a stray
 generic `cloudflared.service` ran the same config (now disabled). Windy Git's
-metrics port is **2001**. `sudo ss -ltnp | grep :2001` names any squatter.
+metrics port is **2021**. `sudo ss -ltnp | grep :2021` names any squatter.
+**It recurred on 10-17:** after a desktop Software Updater reboot at 18:56Z,
+`cornercall-tunnel` started first and took **2001** (its port floats to the first
+free one in the 2000s), so `windygit-tunnel` crash-looped, `app.`/`api.` returned
+530, and every runner crash-looped too (they reach Gitea via `app.windygit.com`).
+Fixed by moving ours to 2021, outside that range and outside cloudflared's own
+default (20241-20245). Take a `predeploy-snapshot` of `/etc/cloudflared/config.yml`
+before editing it. Never edit `cornercall-tunnel`: it is not ours.
 Keep exactly ONE unit running `/etc/cloudflared/config.yml`: `windygit-tunnel`.
 
 **TLS handshake fails with `curl` exit 35 and no HTTP status at all** — someone
