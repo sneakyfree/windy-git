@@ -22,7 +22,7 @@ boot guard in `api/app/main.py` that refuses to start there in production.
 | 8600 | `windy-git-api` — our plane |
 | **3080** | Gitea — host 3000 and 3300 are taken by resident projects on Veron 1 |
 | 5432 | Postgres |
-| 2001 | cloudflared metrics — NOT 2000: `cornercall-tunnel` (another project) takes 2000, and a metrics bind failure kills the whole tunnel |
+| 2021 | cloudflared metrics (host-only setting: `metrics:` in `/etc/cloudflared/config.yml`, not in this repo). NOT 2000 or 2001: `cornercall-tunnel` (another project) takes the first free port in that low range at boot (2000 until 10-17, then 2001 after the 10-17 reboot), and a metrics bind failure kills the whole tunnel. 2021 is outside that range and outside cloudflared's own default range (20241-20245). |
 
 ## Ingress — Cloudflare Tunnel `windy-git`
 
