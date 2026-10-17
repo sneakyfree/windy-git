@@ -221,7 +221,7 @@ def commit_statuses(repo: str, sha: str) -> list:
     if key not in _STATUSES_CACHE:
         st, existing = github("GET", f"/repos/{GH_OWNER}/{repo}/commits/{sha}/statuses?per_page=100")
         if st != 200:
-            return existing or []
+            return []  # never the error body, never cached
         _STATUSES_CACHE[key] = existing or []
     return _STATUSES_CACHE[key]
 
