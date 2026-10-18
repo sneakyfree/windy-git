@@ -571,6 +571,52 @@ def _fake_hint_db(monkeypatch, name, payload_yaml):
     monkeypatch.setattr(bridge.subprocess, "run", lambda *a, **k: R())
 
 
+def _fake_hint_row(monkeypatch, row):
+    class R:
+        stdout = row + "\n"
+
+    monkeypatch.undo()
+    monkeypatch.setattr(bridge.subprocess, "run", lambda *a, **k: R())
+
+
+def test_runner_lost_mid_step_says_so_with_the_step_number(monkeypatch):
+    """windy-pro run 3326 (10-17): the 18:56Z host restart killed `npm test` at step 6 of 7."""
+    _fake_hint_row(monkeypatch, "cd account-server && npm test|6||6|7|1")
+    assert bridge.failure_hint(5) == (
+        "runner lost during step 6/7 '(unnamed step)' (runner stopped reporting: re-run)")
+
+
+def test_real_failure_names_the_step_number_not_runner_lost(monkeypatch):
+    """Error-code ratchet failed for real; the runner skipped the later steps (status 4)."""
+    _fake_hint_row(monkeypatch, "Error-code ratchet|6||6|9|0")
+    assert bridge.failure_hint(5) == "at step 6/9 'Error-code ratchet'"
+
+
+def test_runner_lost_query_keys_on_gitea_stop_marks(monkeypatch):
+    seen = {}
+
+    def fake_run(*a, **k):
+        seen["sql"] = k["input"]
+
+        class R:
+            stdout = "|0||0|0|0\n"
+
+        return R()
+
+    monkeypatch.undo()
+    monkeypatch.setattr(bridge.subprocess, "run", fake_run)
+    assert bridge.failure_hint(5) == "before any step ran"
+    assert "s.log_length = 0" in seen["sql"] and "s.stopped = t.stopped" in seen["sql"]
+    assert "s.index > (select min(index)" in seen["sql"]
+
+
+def test_verdict_text_with_runner_lost_fits_a_github_description(monkeypatch):
+    _fake_hint_row(monkeypatch, "Zq9Xv3TnLm4Bw8KdFh2Yc6RpUe1GsAoJ7iNt|12||12|12|3")
+    text = bridge._verdict_text({"status": "failure", "id": 5})
+    assert "runner lost during step 12/12 '(unnamed step)'" in text and len(text) <= 140
+    assert "Zq9X" not in text
+
+
 def test_explicit_lowercase_step_name_is_shown(monkeypatch):
     """contracts 10-10: 'change gate' is the author's `name:`, not a command."""
     _fake_hint_db(monkeypatch, "change gate", _GATE_YAML)

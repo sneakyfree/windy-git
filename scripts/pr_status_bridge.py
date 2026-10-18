@@ -436,8 +436,12 @@ def failure_hint(task_id: int) -> str | None:
     """Where a failed job died, so a reader can tell infra from a real failure without log access.
 
     "at step 'npm ci'" = a step ran and failed (read the code); "before any step ran" = the
-    job container never started (runner/docker infra: re-run). Step NAMES only, never log text.
-    Bounded and non-fatal: None means "unknown", and the description just omits it.
+    job container never started (runner/docker infra: re-run); "runner lost" = the runner
+    vanished mid-step (host restart, 10-17 18:56Z) and Gitea stopped the task itself. Gitea's
+    own stop marks every unfinished step failed with no log, at the task's stop time; a runner
+    that reports a real failure marks the later steps skipped. Step NAMES and numbers only,
+    never log text. Bounded and non-fatal: None means "unknown", and the description just
+    omits it.
     """
     if not isinstance(task_id, int):
         return None
@@ -446,7 +450,14 @@ def failure_hint(task_id: int) -> str | None:
         f"{task_id} and status = 2 order by index limit 1), ''), "
         f"(select count(*) from action_task_step where task_id = {task_id} and status in (1, 2)), "
         "coalesce((select replace(encode(workflow_payload, 'base64'), E'\\n', '') "
-        f"from action_run_job where task_id = {task_id} limit 1), '');"
+        f"from action_run_job where task_id = {task_id} limit 1), ''), "
+        "coalesce((select index + 1 from action_task_step where task_id = "
+        f"{task_id} and status = 2 order by index limit 1), 0), "
+        f"(select count(*) from action_task_step where task_id = {task_id}), "
+        "(select count(*) from action_task_step s join action_task t on t.id = s.task_id "
+        f"where s.task_id = {task_id} and s.status = 2 and s.log_length = 0 "
+        "and s.stopped = t.stopped and s.index > (select min(index) from action_task_step "
+        f"where task_id = {task_id} and status = 2));"
     )
     try:
         out = subprocess.run(
@@ -454,7 +465,7 @@ def failure_hint(task_id: int) -> str | None:
              'psql -U "$POSTGRES_USER" -d gitea -At -F "|" -v ON_ERROR_STOP=1'],
             input=query, capture_output=True, text=True, check=True, timeout=15,
         ).stdout.strip()
-        name, ran, payload = (out.split("|") + ["", ""])[:3]
+        name, ran, payload, idx, total, lost = (out.split("|") + [""] * 5)[:6]
     except (subprocess.SubprocessError, OSError, ValueError):
         return None
     # Unnamed `run:` steps are named after their command: first line only, short, and never
@@ -462,8 +473,12 @@ def failure_hint(task_id: int) -> str | None:
     name = re.sub(r"[^\x20-\x7e]", "", name.splitlines()[0] if name else "").strip()[:50]
     if name and not (_is_step_label(name) or _is_named_step(name, payload)):
         name = "(unnamed step)"
+    where = f"step {idx.strip()}/{total.strip()}" if idx.strip().isdigit() and idx.strip() != "0" \
+        and total.strip().isdigit() else ""
+    if name and lost.strip().isdigit() and int(lost) > 0:
+        return f"runner lost during {where or 'a step'} '{name}' (runner stopped reporting: re-run)"
     if name:
-        return f"at step '{name}'"
+        return f"at {where} '{name}'" if where else f"at step '{name}'"
     return "before any step ran" if ran.strip() in ("0", "") else None
 
 
