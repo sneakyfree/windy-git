@@ -59,3 +59,64 @@ def test_state_is_pruned_and_survives_garbage(tmp_path, monkeypatch):
     assert ar.load_state() == {}
     ar.save_state({"old@x": {"at": 1}, "new@y": {"at": 4_000_000_000}})
     assert list(ar.load_state()) == ["new@y"]
+
+
+def test_runner_lost_sql_keys_on_gitea_stop_marks_and_never_a_real_red():
+    sql = ar.CANDIDATES
+    assert sql.count("union all") == 1 and "'dead-before-step'" in sql and "'runner-lost'" in sql
+    lost = sql.split("union all")[1]
+    assert "s.status = 2 and s.log_length = 0" in lost
+    assert "t.stopped > 0 and s.stopped = t.stopped" in lost
+    assert "s.index > (select min(s2.index)" in lost
+    # a real failure (a step ran, no lost marks) anywhere in the latest run of each workflow
+    # at this commit blocks the re-queue: a re-run repeats every workflow
+    assert "r3.commit_sha = r.commit_sha" in lost and "r4.workflow_id = r3.workflow_id" in lost
+    assert "s3.status in (1, 2)" in lost and "and not exists (select 1 from action_task_step s join" in lost
+    assert lost.count("r2.index > r.index") == 1
+
+
+def test_pick_carries_kind_and_job_and_old_rows_default_to_dead():
+    rows = [["5", "windy-pro", SHA, "refs/heads/main", "10", "runner-lost", "41574"],
+            ["5", "windy-pro", "b" * 40, "refs/heads/main", "11"],
+            ["5", "windy-pro", "c" * 40, "refs/heads/main", "12", "bogus", "x; drop"]]
+    got = ar.pick(rows, {}, 0)
+    assert [(g["kind"], g["job"]) for g in got] == [
+        ("runner-lost", "41574"), ("dead-before-step", ""), ("dead-before-step", "")]
+
+
+def test_one_retry_per_commit_across_both_kinds():
+    rows = [["5", "r", SHA, "refs/heads/m", "1", "dead-before-step", "1"],
+            ["5", "r", SHA, "refs/heads/m", "1", "runner-lost", "2"]]
+    assert len(ar.pick(rows, {}, 0)) == 1
+    assert ar.pick(rows, {f"r@{SHA}": {"at": 1, "kind": "dead-before-step"}}, 0) == []
+
+
+def test_counts_accumulate_per_kind_and_survive_garbage(tmp_path, monkeypatch):
+    p = tmp_path / "c.json"
+    monkeypatch.setattr(ar, "COUNTS", p)
+    ar.bump_count("runner-lost")
+    assert ar.bump_count("runner-lost") == {"runner-lost": 2}
+    p.write_text("[1, 2]")
+    assert ar.bump_count("dead-before-step") == {"dead-before-step": 1}
+    p.write_text('{"runner-lost": "x"}')
+    assert ar.bump_count("runner-lost") == {"runner-lost": 1}
+
+
+def test_main_records_kind_and_job_before_acting(tmp_path, monkeypatch):
+    monkeypatch.setattr(ar, "STATE", tmp_path / "s.json")
+    monkeypatch.setattr(ar, "COUNTS", tmp_path / "c.json")
+    monkeypatch.setattr(ar, "psql", lambda sql: [["5", "r", SHA, "refs/heads/m", "1", "runner-lost", "41574"]])
+    seen = {}
+
+    def fake_run(cmd, **k):
+        seen["state"] = ar.load_state()   # already written when rerun_ci.sh starts
+
+        class R:
+            returncode, stdout = 0, "ok\n"
+        return R()
+
+    monkeypatch.setattr(ar.subprocess, "run", fake_run)
+    assert ar.main() == 0
+    e = seen["state"][f"r@{SHA}"]
+    assert (e["kind"], e["job"]) == ("runner-lost", "41574")
+    assert ar.bump_count("runner-lost") == {"runner-lost": 2}
