@@ -457,7 +457,8 @@ def failure_hint(task_id: int) -> str | None:
         "(select count(*) from action_task_step s join action_task t on t.id = s.task_id "
         f"where s.task_id = {task_id} and s.status = 2 and s.log_length = 0 "
         "and s.stopped = t.stopped and s.index > (select min(index) from action_task_step "
-        f"where task_id = {task_id} and status = 2));"
+        f"where task_id = {task_id} and status = 2)), "
+        f"coalesce((select id from action_run_job where task_id = {task_id} limit 1), 0);"
     )
     try:
         out = subprocess.run(
@@ -465,7 +466,7 @@ def failure_hint(task_id: int) -> str | None:
              'psql -U "$POSTGRES_USER" -d gitea -At -F "|" -v ON_ERROR_STOP=1'],
             input=query, capture_output=True, text=True, check=True, timeout=15,
         ).stdout.strip()
-        name, ran, payload, idx, total, lost = (out.split("|") + [""] * 5)[:6]
+        name, ran, payload, idx, total, lost, job = (out.split("|") + [""] * 6)[:7]
     except (subprocess.SubprocessError, OSError, ValueError):
         return None
     # Unnamed `run:` steps are named after their command: first line only, short, and never
@@ -475,11 +476,16 @@ def failure_hint(task_id: int) -> str | None:
         name = "(unnamed step)"
     where = f"step {idx.strip()}/{total.strip()}" if idx.strip().isdigit() and idx.strip() != "0" \
         and total.strip().isdigit() else ""
+    # The job id goes first so a 140-char cut never drops it: lanes fetch the step log by job id
+    # with WINDYGIT_CI_READ_TOKEN (docs/RUNBOOK-VERON.md, "Reading a CI job log").
+    job_tag = f"(job {job.strip()}) " if job.strip().isdigit() and job.strip() != "0" else ""
     if name and lost.strip().isdigit() and int(lost) > 0:
-        return f"runner lost during {where or 'a step'} '{name}' (runner stopped reporting: re-run)"
+        return f"{job_tag}runner lost during {where or 'a step'} '{name}' (runner stopped reporting: re-run)"
     if name:
-        return f"at {where} '{name}'" if where else f"at step '{name}'"
-    return "before any step ran" if ran.strip() in ("0", "") else None
+        return job_tag + (f"at {where} '{name}'" if where else f"at step '{name}'")
+    if ran.strip() in ("0", ""):
+        return f"{job_tag}before any step ran"
+    return job_tag.strip() or None
 
 
 def post_statuses(repo: str, sha: str) -> None:

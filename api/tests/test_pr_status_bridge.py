@@ -617,6 +617,21 @@ def test_verdict_text_with_runner_lost_fits_a_github_description(monkeypatch):
     assert "Zq9X" not in text
 
 
+def test_failure_hint_leads_with_the_job_id_for_the_log_fetch(monkeypatch):
+    _fake_hint_row(monkeypatch, "cd account-server && npm test|6||6|7|1|41574")
+    assert bridge.failure_hint(5) == (
+        "(job 41574) runner lost during step 6/7 '(unnamed step)' (runner stopped reporting: re-run)")
+    _fake_hint_row(monkeypatch, "|0||0|0|0|41922")
+    assert bridge.failure_hint(5) == "(job 41922) before any step ran"
+
+
+def test_job_id_survives_the_140_char_cut(monkeypatch):
+    long_label = "Install dependencies and build every package in the tree"
+    _fake_hint_row(monkeypatch, f"{long_label}|6||12|12|1|41574")
+    text = bridge._verdict_text({"status": "failure", "id": 5})[:140]
+    assert "(job 41574)" in text
+
+
 def test_explicit_lowercase_step_name_is_shown(monkeypatch):
     """contracts 10-10: 'change gate' is the author's `name:`, not a command."""
     _fake_hint_db(monkeypatch, "change gate", _GATE_YAML)
