@@ -37,6 +37,7 @@ class DB:
         create table action_task_step (task_id int, "index" int, status int, log_length int, stopped int);
         create table issue (id int, repo_id int, "index" int);
         create table pull_request (id int, issue_id int, head_branch text, head_repo_id int);
+        create table branch (repo_id int, name text, commit_id text, is_deleted int);
         insert into repository values (5, 'windy-pro', 1), (6, 'r', 1), (7, 'WindyCloud', 1);
         """)
         self.n = 0
@@ -47,7 +48,13 @@ class DB:
     def run(self, repo=5, wf="ci.yml", ev="push", idx=1, sha=SHA, ref="refs/heads/main"):
         self.n += 1
         self.c.execute("insert into action_run values (?,?,?,?,?,?,?)", (self.n, repo, sha, ref, idx, wf, ev))
+        if ref.startswith("refs/heads/"):  # the pushed commit is the branch head unless a test moves it
+            self.head(repo, ref[len("refs/heads/"):], sha)
         return self.n
+
+    def head(self, repo, name, sha, deleted=0):
+        self.c.execute("delete from branch where repo_id = ? and name = ?", (repo, name))
+        self.c.execute("insert into branch values (?,?,?,?)", (repo, name, sha, deleted))
 
     def job(self, run, status, steps=(), stopped=NOW - 60, task_stop=None, secs=900):
         """steps: (status, log_length, stopped) per step, in order. No steps + status 2 = dead."""
@@ -187,7 +194,7 @@ def test_plan_counts_refusals_and_caps_at_one_per_pass():
     db = DB()
     db.job(db.run(sha="e" * 40), 2, real_steps(NOW - 120), stopped=NOW - 120)   # judged first
     for c in "abc":
-        db.job(db.run(sha=c * 40), 2, [])
+        db.job(db.run(sha=c * 40, ref=f"refs/heads/b{c}"), 2, [])   # each its own branch head
     todo, why = ar.plan({}, ALLOW, NOW, query=db.q)
     assert len(todo) == ar.MAX_PER_PASS == 1 and why == {"a real red at the commit": 1}
 
@@ -387,3 +394,55 @@ def test_max_index_is_the_newest_run_at_the_commit():
     db.job(db.run(idx=3), 2, [])
     db.job(db.run(wf="lint.yml", idx=7), 1, [(1, 5, NOW - 50)])
     assert ar.max_index(db.q(ar.commit_sql(5, SHA))) == 7 and ar.max_index([]) == 0
+
+
+
+def test_a_superseded_commit_is_skipped_and_keeps_its_try():
+    """windy-chat d6a0a98 (10-18 09:14Z): picked after its branch moved on; rerun_ci.sh refused."""
+    db = DB()
+    db.job(db.run(), 2, [])
+    db.head(5, "main", "f" * 40)                       # a newer push moved main
+    todo, why = ar.plan({}, ALLOW, NOW, query=db.q)
+    assert todo == [] and why == {"branch moved on": 1}
+    db.head(5, "main", SHA)                            # back at the sha: eligible again (try kept)
+    assert [t["kind"] for t in ar.plan({}, ALLOW, NOW, query=db.q)[0]] == ["dead-before-step"]
+
+
+def test_deleted_or_unsafe_branch_is_never_at_head():
+    db = DB()
+    db.job(db.run(), 2, [])
+    db.head(5, "main", SHA, deleted=1)
+    assert ar.at_head(5, "main", SHA, db.q) is False
+    for bad in ("x'; drop table branch; --", "a..b", "", "a b"):
+        assert ar.at_head(5, bad, SHA, db.q) is False
+
+
+def test_head_moving_between_pick_and_act_uses_no_try(wired, monkeypatch):
+    db, tmp, calls = wired
+    db.job(db.run(), 2, [])
+    real_plan = ar.plan
+
+    def plan_then_push(*a, **k):
+        out = real_plan(*a, **k)
+        db.head(5, "main", "f" * 40)                   # pushed after the pick
+        return out
+
+    monkeypatch.setattr(ar, "plan", plan_then_push)
+    assert ar.main() == 0 and calls == []
+    assert not (tmp / "s.json").exists()               # no ledger entry: the try is kept
+
+
+def test_a_failed_attempt_on_the_current_head_still_uses_the_try(wired, monkeypatch):
+    db, tmp, calls = wired
+    db.job(db.run(), 2, [])
+
+    def failing_run(cmd, **k):
+        class R:
+            returncode, stdout = 1, "refusing: something\n"
+        return R()
+
+    monkeypatch.setattr(ar.subprocess, "run", failing_run)
+    assert ar.main() == 0
+    assert json.loads((tmp / "s.json").read_text())[f"windy-pro@{SHA}"]["exit"] == 1
+    monkeypatch.setattr(ar.subprocess, "run", lambda *a, **k: calls.append(a))
+    assert ar.main() == 0 and calls == []              # once, ever

@@ -23,7 +23,8 @@ pull_request_sync; scheduled runs never count):
     or a cancel), so a newer dead run never hides an older real red; no pull_request_target run;
   - a runner-lost task ran under 3 h (Gitea's endless-task cleanup leaves the same marks);
   - at least one job is dead-before-step or runner-lost.
-The commit is judged again from fresh rows right before rerun_ci.sh.
+The commit must still be its branch's head (else it is skipped and keeps its one try); both
+the judgement and the head are checked again from fresh rows right before rerun_ci.sh.
 
 Guard rails, in code: ONE automatic re-run per (repo, sha) EVER across both kinds (the
 ledger is never pruned; a second failure stays red for a human), ONE per pass, an flock so a
@@ -57,6 +58,7 @@ TERMINAL = {1, 2, 3, 4}  # success, failure, cancelled, skipped
 ENDLESS_S = 3 * 3600   # Gitea's endless-task cleanup leaves the same marks as a lost runner
 KINDS = ("dead-before-step", "runner-lost")
 _SHA = re.compile(r"^[0-9a-f]{40}$")
+_BRANCH = re.compile(r"^[A-Za-z0-9._/+-]{1,200}$")
 
 
 def candidates_sql(since: int) -> str:
@@ -116,6 +118,22 @@ def branch_for(repo_id: str, ref: str, query=psql) -> str | None:
             f"where i.repo_id = {int(repo_id)} and i.\"index\" = {int(parts[2])} and pr.head_repo_id = i.repo_id;")
         return rows[0][0] if rows else None
     return None
+
+
+def head_sql(repo_id: int, branch: str) -> str:
+    """Facts only: the Windy Git branch's current head (Gitea's branch table)."""
+    return (f"select b.commit_id from branch b where b.repo_id = {int(repo_id)} "
+            f"and b.name = '{branch}' and not b.is_deleted;")
+
+
+def at_head(repo_id: int, branch: str, sha: str, query=psql) -> bool:
+    """True only if the branch still points at `sha`. A superseded commit is skipped BEFORE the
+    ledger is written, so it never burns the one try (Hub, 10-18; windy-chat d6a0a98 at 09:14Z
+    was picked after its branch moved on, and rerun_ci.sh refused it)."""
+    if not _BRANCH.match(branch) or ".." in branch:
+        return False
+    rows = query(head_sql(repo_id, branch))
+    return len(rows) == 1 and rows[0][0] == sha
 
 
 def judge(repo: str, rows: list[list[str]], allow: dict) -> tuple[str | None, str, str]:
@@ -246,6 +264,9 @@ def plan(state: dict, allow: dict, now: float, query=psql) -> tuple[list[dict], 
         if not branch:
             why["branch not resolvable"] = why.get("branch not resolvable", 0) + 1
             continue
+        if not at_head(int(repo_id), branch, sha, query):
+            why["branch moved on"] = why.get("branch moved on", 0) + 1
+            continue
         out.append({"repo": repo, "repo_id": int(repo_id), "sha": sha, "branch": branch,
                     "key": key, "kind": kind, "job": job})
         if len(out) >= MAX_PER_PASS:
@@ -279,6 +300,9 @@ def _pass() -> int:
         kind, _job, reason = judge(t["repo"], fresh, allow)
         if kind != t["kind"]:  # fresh rows right before acting: the commit moved on
             print(f"  {t['repo']}@{t['sha'][:7]}: re-check refused ({reason}); not re-run")
+            continue
+        if not at_head(t["repo_id"], t["branch"], t["sha"], psql):  # and the head, too
+            print(f"  {t['repo']}@{t['sha'][:7]}: branch {t['branch']} moved on; not re-run, no try used")
             continue
         state[t["key"]] = {"at": time.time(), "branch": t["branch"], "kind": t["kind"], "job": t["job"],
                            "runs_before": max_index(fresh)}
