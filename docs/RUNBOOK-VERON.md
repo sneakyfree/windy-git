@@ -191,14 +191,16 @@ which is Grant's identity.
 A failed `windy-git/...` status on GitHub starts with `(job N)`. Any lane can read that job's
 step log with the read-only token `WINDYGIT_CI_READ_TOKEN` (lockbox). It belongs to the restricted Gitea
 user `windy-ci-reader`: read collaborator on the private CI repos, scope `read:repository`,
-no write, no admin. One line (Linux or macOS; the token never reaches argv or the screen):
+no write, no admin. One line for bash or zsh with curl 7.55+ (`-H @file`), on Linux or macOS;
+the token never reaches argv or the screen, and the temp file is shredded (`rm -P` is the macOS fallback):
 
 ```bash
 t=$(mktemp) && lockbox-get WINDYGIT_CI_READ_TOKEN "$t" && curl -s -H @<(printf 'Authorization: token %s\n' "$(cat "$t")") https://app.windygit.com/api/v1/repos/windyadmin/<repo>/actions/jobs/<job>/logs | tail -40; { shred -u "$t" 2>/dev/null || rm -P "$t"; }
 ```
 
-`runner lost during step N/M` means Gitea stopped the task because its runner went away
-(host restart, runner crash). That is not a test failure: re-run it at the same head.
+`runner lost, re-run it: step N/M` means Gitea stopped the task because its runner went away
+(host restart, runner crash). That is not a test failure: re-run it at the same head
+(see "Re-run a PR's CI" above, `scripts/rerun_ci.sh`).
 Quote only error lines from the log on the BOARD, never env or token-shaped strings.
 A new repo that is promoted to CI needs `windy-ci-reader` added as a read collaborator
 (`PUT /repos/windyadmin/<repo>/collaborators/windy-ci-reader` with `{"permission":"read"}`).

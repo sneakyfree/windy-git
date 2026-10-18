@@ -514,7 +514,7 @@ def test_failure_hint_sql_and_redaction(monkeypatch):
         seen["sql"] = input
 
         class R:
-            stdout = "run Zq9Xv3TnLm4Bw8KdFh2Yc6RpUe1GsAoJ7iNt|2\n"
+            stdout = "2||||||run Zq9Xv3TnLm4Bw8KdFh2Yc6RpUe1GsAoJ7iNt\n"
 
         return R()
 
@@ -539,7 +539,7 @@ def test_only_human_step_labels_are_exposed(name, ok):
 def test_no_failed_step_means_infra_not_unnamed(monkeypatch):
     """A job that died before any step ran has NO failed step: say infra, not "(unnamed step)"."""
     class R:
-        stdout = "|0\n"
+        stdout = "0||||||\n"
     monkeypatch.undo()
     monkeypatch.setattr(bridge.subprocess, "run", lambda *a, **k: R())
     assert bridge.failure_hint(9) == "before any step ran"
@@ -565,7 +565,7 @@ def _fake_hint_db(monkeypatch, name, payload_yaml):
     payload = b64.b64encode(payload_yaml.encode()).decode() if payload_yaml else ""
 
     class R:
-        stdout = f"{name}|3|{payload}\n"
+        stdout = f"3|{payload}|||||{name}\n"
 
     monkeypatch.undo()
     monkeypatch.setattr(bridge.subprocess, "run", lambda *a, **k: R())
@@ -581,14 +581,14 @@ def _fake_hint_row(monkeypatch, row):
 
 def test_runner_lost_mid_step_says_so_with_the_step_number(monkeypatch):
     """windy-pro run 3326 (10-17): the 18:56Z host restart killed `npm test` at step 6 of 7."""
-    _fake_hint_row(monkeypatch, "cd account-server && npm test|6||6|7|1")
+    _fake_hint_row(monkeypatch, "6||6|7|1||cd account-server && npm test")
     assert bridge.failure_hint(5) == (
-        "runner lost during step 6/7 '(unnamed step)' (runner stopped reporting: re-run)")
+        "runner lost, re-run it: step 6/7 '(unnamed step)'")
 
 
 def test_real_failure_names_the_step_number_not_runner_lost(monkeypatch):
     """Error-code ratchet failed for real; the runner skipped the later steps (status 4)."""
-    _fake_hint_row(monkeypatch, "Error-code ratchet|6||6|9|0")
+    _fake_hint_row(monkeypatch, "6||6|9|0||Error-code ratchet")
     assert bridge.failure_hint(5) == "at step 6/9 'Error-code ratchet'"
 
 
@@ -599,7 +599,7 @@ def test_runner_lost_query_keys_on_gitea_stop_marks(monkeypatch):
         seen["sql"] = k["input"]
 
         class R:
-            stdout = "|0||0|0|0\n"
+            stdout = "0||0|0|0|0|\n"
 
         return R()
 
@@ -611,25 +611,54 @@ def test_runner_lost_query_keys_on_gitea_stop_marks(monkeypatch):
 
 
 def test_verdict_text_with_runner_lost_fits_a_github_description(monkeypatch):
-    _fake_hint_row(monkeypatch, "Zq9Xv3TnLm4Bw8KdFh2Yc6RpUe1GsAoJ7iNt|12||12|12|3")
+    _fake_hint_row(monkeypatch, "12||12|12|3||Zq9Xv3TnLm4Bw8KdFh2Yc6RpUe1GsAoJ7iNt")
     text = bridge._verdict_text({"status": "failure", "id": 5})
-    assert "runner lost during step 12/12 '(unnamed step)'" in text and len(text) <= 140
+    assert "runner lost, re-run it: step 12/12 '(unnamed step)'" in text and len(text) <= 140
     assert "Zq9X" not in text
 
 
 def test_failure_hint_leads_with_the_job_id_for_the_log_fetch(monkeypatch):
-    _fake_hint_row(monkeypatch, "cd account-server && npm test|6||6|7|1|41574")
+    _fake_hint_row(monkeypatch, "6||6|7|1|41574|cd account-server && npm test")
     assert bridge.failure_hint(5) == (
-        "(job 41574) runner lost during step 6/7 '(unnamed step)' (runner stopped reporting: re-run)")
-    _fake_hint_row(monkeypatch, "|0||0|0|0|41922")
+        "(job 41574) runner lost, re-run it: step 6/7 '(unnamed step)'")
+    _fake_hint_row(monkeypatch, "0||0|0|0|41922|")
     assert bridge.failure_hint(5) == "(job 41922) before any step ran"
 
 
 def test_job_id_survives_the_140_char_cut(monkeypatch):
     long_label = "Install dependencies and build every package in the tree"
-    _fake_hint_row(monkeypatch, f"{long_label}|6||12|12|1|41574")
+    _fake_hint_row(monkeypatch, f"6||12|12|1|41574|{long_label}")
     text = bridge._verdict_text({"status": "failure", "id": 5})[:140]
     assert "(job 41574)" in text
+
+
+def test_a_pipe_in_the_step_name_cannot_shift_fields(monkeypatch):
+    """Hub 10-18: 'cat x | grep y' as the FIRST field made a real failure read runner lost."""
+    _fake_hint_row(monkeypatch, "6||6|9|0|41579|cat x | grep y | 7 | 1 | 99999")
+    assert bridge.failure_hint(5) == "(job 41579) at step 6/9 '(unnamed step)'"
+    _fake_hint_row(monkeypatch, "6||6|9|0|41579|Lint | Format")
+    hint = bridge.failure_hint(5)
+    assert hint.startswith("(job 41579) at step 6/9 ") and "runner lost" not in hint
+
+
+def test_long_label_keeps_job_and_advice_inside_140(monkeypatch):
+    label = "Install Everything Needed For The Account Server X"  # 50 chars, a valid label
+    assert len(label) == 50 and bridge._is_step_label(label)
+    _fake_hint_row(monkeypatch, f"6||12|12|1|412345|{label}")
+    text = bridge._verdict_text({"status": "failure", "id": 5})
+    assert len(text) <= 140 and "(job 412345) runner lost, re-run it: step 12/12" in text
+
+
+def test_hint_sql_pins_status_index_and_stop_marks():
+    """Hand-built rows can't catch SQL mutations: pin the clauses that decide the verdict."""
+    sql = bridge.hint_sql(7)
+    assert sql.count("status = 2 order by index limit 1") == 2           # failed step: number + name
+    assert "select index + 1 from action_task_step" in sql               # 0-based index -> "step N"
+    assert "s.status = 2 and s.log_length = 0" in sql
+    assert "t.stopped > 0 and s.stopped = t.stopped" in sql
+    assert "s.index > (select min(index) from action_task_step where task_id = 7 and status = 2)" in sql
+    assert "status in (1, 2)" in sql and "task_id = 7" in sql
+    assert sql.rstrip(";").rstrip().endswith("order by index limit 1), '')")  # name is the LAST field
 
 
 def test_explicit_lowercase_step_name_is_shown(monkeypatch):
@@ -650,7 +679,7 @@ def test_token_shaped_explicit_name_stays_hidden(monkeypatch):
 
 def test_bad_payload_falls_back_to_the_label_rule(monkeypatch):
     class R:
-        stdout = "change gate|3|not-base64!!\n"
+        stdout = "3|not-base64!!|||||change gate\n"
 
     monkeypatch.undo()
     monkeypatch.setattr(bridge.subprocess, "run", lambda *a, **k: R())

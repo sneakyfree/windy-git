@@ -432,23 +432,13 @@ def _is_named_step(name: str, payload_b64: str) -> bool:
     return name in _explicit_step_names(payload_b64)
 
 
-def failure_hint(task_id: int) -> str | None:
-    """Where a failed job died, so a reader can tell infra from a real failure without log access.
-
-    "at step 'npm ci'" = a step ran and failed (read the code); "before any step ran" = the
-    job container never started (runner/docker infra: re-run); "runner lost" = the runner
-    vanished mid-step (host restart, 10-17 18:56Z) and Gitea stopped the task itself. Gitea's
-    own stop marks every unfinished step failed with no log, at the task's stop time; a runner
-    that reports a real failure marks the later steps skipped. Step NAMES and numbers only,
-    never log text. Bounded and non-fatal: None means "unknown", and the description just
-    omits it.
-    """
-    if not isinstance(task_id, int):
-        return None
-    query = (
-        "select coalesce((select name from action_task_step where task_id = "
-        f"{task_id} and status = 2 order by index limit 1), ''), "
-        f"(select count(*) from action_task_step where task_id = {task_id} and status in (1, 2)), "
+def hint_sql(task_id: int) -> str:
+    """One row: ran | payload | failed-step number | step count | lost marks | job id | name.
+    The NAME IS LAST: a `run:` step is named after its command, which may contain '|', and the
+    reader splits with maxsplit so a '|' in the name can never shift another field (Hub, 10-18).
+    `index` is 0-based (windy-pro task 33941: index 5 of 7 rows = "step 6/7")."""
+    return (
+        f"select (select count(*) from action_task_step where task_id = {task_id} and status in (1, 2)), "
         "coalesce((select replace(encode(workflow_payload, 'base64'), E'\\n', '') "
         f"from action_run_job where task_id = {task_id} limit 1), ''), "
         "coalesce((select index + 1 from action_task_step where task_id = "
@@ -456,17 +446,35 @@ def failure_hint(task_id: int) -> str | None:
         f"(select count(*) from action_task_step where task_id = {task_id}), "
         "(select count(*) from action_task_step s join action_task t on t.id = s.task_id "
         f"where s.task_id = {task_id} and s.status = 2 and s.log_length = 0 "
-        "and s.stopped = t.stopped and s.index > (select min(index) from action_task_step "
+        "and t.stopped > 0 and s.stopped = t.stopped and s.index > (select min(index) from action_task_step "
         f"where task_id = {task_id} and status = 2)), "
-        f"coalesce((select id from action_run_job where task_id = {task_id} limit 1), 0);"
+        f"coalesce((select id from action_run_job where task_id = {task_id} limit 1), 0), "
+        "coalesce((select name from action_task_step where task_id = "
+        f"{task_id} and status = 2 order by index limit 1), '');"
     )
+
+
+def failure_hint(task_id: int) -> str | None:
+    """Where a failed job died, so a reader can tell infra from a real failure without log access.
+
+    "at step 6/9 'npm ci'" = a step ran and failed (read the code); "before any step ran" = the
+    job container never started (runner/docker infra: re-run); "runner lost" = the runner
+    vanished mid-step (host restart, 10-17 18:56Z) and Gitea stopped the task itself. Gitea's
+    own stop marks every unfinished step failed with no log, at the task's stop time; a runner
+    that reports a real failure marks the later steps skipped. Known rare false positive,
+    accepted: a real failure whose later `if: always()` step also fails with an empty log in the
+    same second as the task stop reads "runner lost". Step NAMES and numbers only, never log
+    text. Bounded and non-fatal: None means "unknown", and the description just omits it.
+    """
+    if not isinstance(task_id, int):
+        return None
     try:
         out = subprocess.run(
             ["docker", "exec", "-i", "windy-git-db-1", "sh", "-c",
              'psql -U "$POSTGRES_USER" -d gitea -At -F "|" -v ON_ERROR_STOP=1'],
-            input=query, capture_output=True, text=True, check=True, timeout=15,
+            input=hint_sql(task_id), capture_output=True, text=True, check=True, timeout=15,
         ).stdout.strip()
-        name, ran, payload, idx, total, lost, job = (out.split("|") + [""] * 6)[:7]
+        ran, payload, idx, total, lost, job, name = (out.split("|", 6) + [""] * 6)[:7]
     except (subprocess.SubprocessError, OSError, ValueError):
         return None
     # Unnamed `run:` steps are named after their command: first line only, short, and never
@@ -474,13 +482,14 @@ def failure_hint(task_id: int) -> str | None:
     name = re.sub(r"[^\x20-\x7e]", "", name.splitlines()[0] if name else "").strip()[:50]
     if name and not (_is_step_label(name) or _is_named_step(name, payload)):
         name = "(unnamed step)"
-    where = f"step {idx.strip()}/{total.strip()}" if idx.strip().isdigit() and idx.strip() != "0" \
-        and total.strip().isdigit() else ""
-    # The job id goes first so a 140-char cut never drops it: lanes fetch the step log by job id
-    # with WINDYGIT_CI_READ_TOKEN (docs/RUNBOOK-VERON.md, "Reading a CI job log").
-    job_tag = f"(job {job.strip()}) " if job.strip().isdigit() and job.strip() != "0" else ""
-    if name and lost.strip().isdigit() and int(lost) > 0:
-        return f"{job_tag}runner lost during {where or 'a step'} '{name}' (runner stopped reporting: re-run)"
+    idx, total, lost, job = idx.strip(), total.strip(), lost.strip(), job.strip()
+    where = f"step {idx}/{total}" if idx.isdigit() and idx != "0" and total.isdigit() else ""
+    # The job id and the advice go BEFORE the label, so a 140-char cut only ever trims the
+    # label: lanes fetch the step log by job id with WINDYGIT_CI_READ_TOKEN
+    # (docs/RUNBOOK-VERON.md, "Reading a CI job log").
+    job_tag = f"(job {job}) " if job.isdigit() and job != "0" else ""
+    if name and lost.isdigit() and int(lost) > 0:
+        return f"{job_tag}runner lost, re-run it: {where or 'a step'} '{name}'"
     if name:
         return job_tag + (f"at {where} '{name}'" if where else f"at step '{name}'")
     if ran.strip() in ("0", ""):
