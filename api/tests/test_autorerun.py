@@ -19,7 +19,7 @@ _spec.loader.exec_module(ar)
 
 SHA = "a" * 40
 NOW = 2_000_000_000
-ALLOW = {"windy-pro": {"ci.yml", "lint.yml"}, "r": {"ci.yml"}}
+ALLOW = {"windy-pro": {"ci.yml", "lint.yml"}, "r": {"ci.yml"}, "windycloud": {"ci.yml"}}
 
 
 class DB:
@@ -33,11 +33,11 @@ class DB:
         create table action_run (id int, repo_id int, commit_sha text, ref text, "index" int,
                                  workflow_id text, event text);
         create table action_run_job (id int, run_id int, status int, task_id int, stopped int);
-        create table action_task (id int, stopped int);
+        create table action_task (id int, started int, stopped int);
         create table action_task_step (task_id int, "index" int, status int, log_length int, stopped int);
         create table issue (id int, repo_id int, "index" int);
         create table pull_request (id int, issue_id int, head_branch text, head_repo_id int);
-        insert into repository values (5, 'windy-pro', 1), (6, 'r', 1);
+        insert into repository values (5, 'windy-pro', 1), (6, 'r', 1), (7, 'WindyCloud', 1);
         """)
         self.n = 0
 
@@ -49,12 +49,13 @@ class DB:
         self.c.execute("insert into action_run values (?,?,?,?,?,?,?)", (self.n, repo, sha, ref, idx, wf, ev))
         return self.n
 
-    def job(self, run, status, steps=(), stopped=NOW - 60, task_stop=None):
+    def job(self, run, status, steps=(), stopped=NOW - 60, task_stop=None, secs=900):
         """steps: (status, log_length, stopped) per step, in order. No steps + status 2 = dead."""
         self.n += 1
         jid = task = self.n
         self.c.execute("insert into action_run_job values (?,?,?,?,?)", (jid, run, status, task, stopped))
-        self.c.execute("insert into action_task values (?,?)", (task, task_stop if task_stop is not None else stopped))
+        ts = task_stop if task_stop is not None else stopped
+        self.c.execute("insert into action_task values (?,?,?)", (task, ts - secs, ts))
         for i, (st, ln, sp) in enumerate(steps):
             self.c.execute("insert into action_task_step values (?,?,?,?,?)", (task, i, st, ln, sp))
         return jid
@@ -268,7 +269,8 @@ def test_main_writes_ledger_before_and_exit_after(wired):
     assert len(calls) == 1 and calls[0]["cmd"][-1] == SHA[:8]
     before = calls[0]["state"][f"windy-pro@{SHA}"]
     assert (before["kind"], before["job"]) == ("runner-lost", str(j)) and "exit" not in before
-    assert json.loads((tmp / "s.json").read_text())[f"windy-pro@{SHA}"]["exit"] == 0
+    after = json.loads((tmp / "s.json").read_text())[f"windy-pro@{SHA}"]
+    assert after["exit"] == 0 and after["runs_before"] == 1
     assert json.loads((tmp / "c.json").read_text()) == {"runner-lost": 1}
     assert ar.main() == 0 and len(calls) == 1          # once, ever
 
@@ -323,3 +325,65 @@ def test_first_step_real_failure_is_a_real_red_not_dead():
     db = DB()
     db.job(db.run(), 2, [(2, 14, NOW - 60), (4, 0, NOW - 60)])
     assert judge(db) == (None, "", "a real red at the commit")
+
+
+
+def test_repo_name_case_matches_the_lowercase_allowlist():
+    """Gitea keeps 'WindyCloud' / 'Windy-Clone'; without lowercasing they could never re-run."""
+    db = DB()
+    j = db.job(db.run(repo=7), 2, [])
+    assert ar.judge("WindyCloud", db.q(ar.commit_sql(7, SHA)), ALLOW) == ("dead-before-step", str(j), "ok")
+    assert "windycloud" in ar.load_allow() and "windy-clone" in ar.load_allow()
+
+
+def test_instance_wide_secrets_count():
+    db = DB()
+    db.job(db.run(), 2, [])
+    db.c.execute("insert into secret values (1, 0, 0)")
+    assert judge(db) == (None, "", "repo holds Actions secrets")
+
+
+def test_runner_lost_marks_on_a_3h_task_are_the_endless_cleanup_not_a_lost_runner():
+    db = DB()
+    db.job(db.run(), 2, lost_steps(NOW - 60), secs=ar.ENDLESS_S)
+    assert judge(db) == (None, "", "a real red at the commit")
+    db2 = DB()
+    j = db2.job(db2.run(), 2, lost_steps(NOW - 60), secs=ar.ENDLESS_S - 1)
+    assert judge(db2) == ("runner-lost", str(j), "ok")
+
+
+def test_dead_before_step_with_green_siblings_from_the_same_push():
+    """windy-mind ed3a4c27 (10-17 05:10Z): lint dead at index 2266, its siblings 2267-2269 green.
+    The old 'any newer run at the sha' rule never re-ran it."""
+    db = DB()
+    j = db.job(db.run(wf="lint.yml", idx=2266), 2, [])
+    db.job(db.run(wf="ci.yml", idx=2267), 1, [(1, 5, NOW - 50)])
+    assert judge(db) == ("dead-before-step", str(j), "ok")
+
+
+def test_cancelled_sibling_counts_as_red():
+    db = DB()
+    db.job(db.run(), 2, [])
+    db.job(db.run(wf="lint.yml"), 3, [(1, 5, NOW - 50)])
+    assert judge(db) == (None, "", "a real red at the commit")
+
+
+def test_newer_dead_run_cannot_hide_an_older_real_red():
+    db = DB()
+    db.job(db.run(idx=1), 2, real_steps(NOW - 600), stopped=NOW - 600)
+    db.job(db.run(idx=2), 2, [])
+    assert judge(db) == (None, "", "a real red at the commit")
+
+
+def test_pull_request_target_run_refuses_the_commit():
+    db = DB()
+    db.job(db.run(), 2, [])
+    db.job(db.run(wf="ci.yml", ev="pull_request_target", idx=2), 1, [(1, 5, NOW - 50)])
+    assert judge(db) == (None, "", "a pull_request_target run")
+
+
+def test_max_index_is_the_newest_run_at_the_commit():
+    db = DB()
+    db.job(db.run(idx=3), 2, [])
+    db.job(db.run(wf="lint.yml", idx=7), 1, [(1, 5, NOW - 50)])
+    assert ar.max_index(db.q(ar.commit_sql(5, SHA))) == 7 and ar.max_index([]) == 0

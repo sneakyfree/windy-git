@@ -637,6 +637,14 @@ def autorerun_note(repo: str, sha: str) -> str | None:
         return None
     if not isinstance(entry, dict) or entry.get("exit") != 0:
         return None  # only a re-run that rerun_ci.sh confirmed (exit 0) is announced
+    before = entry.get("runs_before")
+    if not isinstance(before, int) or isinstance(before, bool):
+        return None
+    try:  # ...and only once Gitea shows a run at this commit newer than the ones before it
+        if not any(r.get("head_sha") == sha and int(r.get("run_number") or 0) > before for r in _repo_runs(repo)):
+            return None
+    except (RuntimeError, OSError, ValueError, TypeError):
+        return None
     kind = entry.get("kind") if entry.get("kind") in ("dead-before-step", "runner-lost") else "dead-before-step"
     job = str(entry.get("job") or "")
     why = "runner lost mid-step" if kind == "runner-lost" else "job died before any step ran"
