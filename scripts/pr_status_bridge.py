@@ -622,6 +622,53 @@ def _post_guard(modname: str, ctx: str, repo: str, sha: str, default_branch: str
     print(f"  {repo}@{sha[:7]} {ctx} = {state} ({len(findings)} finding(s)) -> {st}")
 
 
+AUTORERUN_CTX = "windy-git/autorerun"
+AUTORERUN_STATE = os.environ.get("AUTORERUN_STATE", "/var/lib/windygit/autorerun.json")
+
+
+def autorerun_note(repo: str, sha: str) -> str | None:
+    """The description for a commit the autorerun timer re-queued, or None. Kind and job id
+    only (both written by autorerun_dead_jobs.py, re-checked here); only when the recorded
+    rerun_ci.sh exit code is 0."""
+    try:
+        with open(AUTORERUN_STATE) as f:
+            entry = json.load(f).get(f"{repo}@{sha}")
+    except (OSError, ValueError, AttributeError):
+        return None
+    if not isinstance(entry, dict) or entry.get("exit") != 0:
+        return None  # only a re-run that rerun_ci.sh confirmed (exit 0) is announced
+    before = entry.get("runs_before")
+    if not isinstance(before, int) or isinstance(before, bool):
+        return None
+    try:  # ...and only once Gitea shows a run at this commit newer than the ones before it
+        if not any(r.get("head_sha") == sha and int(r.get("run_number") or 0) > before for r in _repo_runs(repo)):
+            return None
+    except (RuntimeError, OSError, ValueError, TypeError):
+        return None
+    kind = entry.get("kind") if entry.get("kind") in ("dead-before-step", "runner-lost") else "dead-before-step"
+    job = str(entry.get("job") or "")
+    why = "runner lost mid-step" if kind == "runner-lost" else "job died before any step ran"
+    jtag = f" (job {job})" if job.isdigit() else ""
+    return f"Re-queued once automatically: {why}{jtag}. A second failure stays red."[:140]
+
+
+def post_autorerun_note(repo: str, sha: str) -> None:
+    """So a green re-run is never read as "no flake happened" (Hub, 10-18). Informational:
+    state success, never posted twice with the same text."""
+    desc = autorerun_note(repo, sha)
+    if not desc:
+        return
+    for s in commit_statuses(repo, sha):  # newest first
+        if s["context"] == AUTORERUN_CTX:
+            if s.get("description") == desc:
+                return
+            break
+    st, _ = github("POST", f"/repos/{GH_OWNER}/{repo}/statuses/{sha}",
+                   {"state": "success", "context": AUTORERUN_CTX, "description": desc,
+                    "target_url": f"{PUBLIC}/{WG_OWNER}/{repo}/actions"})
+    print(f"  {repo}@{sha[:7]} {AUTORERUN_CTX} noted -> {st}")
+
+
 def main() -> int:
     if not (GITEA_TOKEN and GITHUB_TOKEN):
         sys.exit("GITEA_SYNC_TOKEN and GITHUB_TOKEN are required")
@@ -640,6 +687,7 @@ def main() -> int:
                     shas.append(default_head)
             for sha in dict.fromkeys(shas):
                 post_statuses(repo, sha)
+                post_autorerun_note(repo, sha)
                 post_compute_guard(repo, sha, default_branch, sha == default_head)
                 post_ci_hygiene(repo, sha, default_branch, sha == default_head)
                 post_secret_guard(repo, sha, default_branch, sha == default_head)

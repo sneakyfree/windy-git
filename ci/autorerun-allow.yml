@@ -1,0 +1,43 @@
+# Auto re-run allowlist (scripts/autorerun_dead_jobs.py). Owner: Windy Git lane; changes go
+# through Hub. A commit is auto re-run ONLY if every workflow in its latest CI-event runs is
+# listed for its repo. rerun_ci.sh re-fires EVERY enabled workflow at the commit, so list CI
+# TESTS only: never a workflow that deploys, releases, publishes, mirrors, or probes production.
+# Built 10-18 from the push / pull_request runs of the last 30 days on Veron, each file read.
+# Left out on purpose: canary.yml (scheduled health probe), substrate-drift.yml (uses deploy SSH
+# secrets when present), prod-drift.yml and drift-check.yml (probe production), every
+# deploy/release/build-image workflow (also disabled in Gitea). windy-pro ci.yml IS listed: its
+# `deploy` job is `if: false` and its release/publish steps run on v* tags only, which a branch
+# rewind never fires. A repo or workflow not listed here is never auto re-run.
+repos:
+  eternitas: [adr-046-lint.yml, canonical-domains-lint.yml, ci.yml]
+  windy-agent: [adr-046-lint.yml, canonical-domains-lint.yml, ci.yml]
+  windy-calendar: [ci.yml]
+  windy-call: [adr-046-lint.yml, canonical-domains-lint.yml, ci.yml]
+  windy-chat: [actionlint.yml, adr-046-lint.yml, canonical-domains-lint.yml, ci.yml]
+  windy-clone: [adr-046-lint.yml, canonical-domains-lint.yml, ci.yml]
+  windy-cloud-domains: [ci.yml]
+  windy-cloud-sites: [ci.yml]
+  windy-cloud-vps: [ci.yml]
+  windy-code: [canonical-domains-lint.yml]
+  windy-code-web: [ci.yml]
+  windy-connect: [ci.yml]
+  windy-contracts: [check.yml]
+  windy-drops: [canonical-domains-lint.yml, ci.yml]
+  windy-hand: [ci.yml]
+  windy-inbox: [canonical-domains-lint.yml, ci.yml]
+  windy-mail: [canonical-domains-lint.yml, ci.yml, web.yml]
+  windy-mind: [adr-046-lint.yml, canonical-domains-lint.yml, migrations.yml, tests.yml]
+  windy-pro: [adr-046-lint.yml, canonical-domains-lint.yml, ci.yml]
+  windy-pro-mobile: [canonical-domains-lint.yml, test.yml]
+  windy-registry: [canonical-domains-lint.yml, ci.yml]
+  windy-search: [adr-046-lint.yml, canonical-domains-lint.yml, ci.yml]
+  windy-text: [adr-046-lint.yml, canonical-domains-lint.yml, ci.yml, secrets-lint.yml]
+  windy-text-site: [build.yml]
+  windy-translate: [canonical-domains-lint.yml, engine-tests.yml]
+  windy-traveler: [canonical-domains-lint.yml]
+  windy-uptime: [ci.yml]
+  windy-vault: [check.yml]
+  windycloud: [canonical-domains-lint.yml, ci.yml]
+  windytalk: [ci.yml]
+  windytranslate-site: [build.yml]
+  windytraveler-site: [build.yml]
