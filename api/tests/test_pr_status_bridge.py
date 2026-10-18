@@ -869,19 +869,23 @@ def test_autorerun_note_reads_kind_and_job(tmp_path, monkeypatch):
     assert bridge.autorerun_note("r", "s") is None                 # no file
     p.write_text("garbage")
     assert bridge.autorerun_note("r", "s") is None
-    p.write_text('{"r@s": {"at": 1, "kind": "runner-lost", "job": "41574"}, '
-                 '"r@t": {"at": 1}, "r@u": {"at": 1, "kind": "<b>", "job": "1; x"}}')
+    p.write_text('{"r@s": {"at": 1, "kind": "runner-lost", "job": "41574", "exit": 0}, '
+                 '"r@t": {"at": 1, "exit": 0}, "r@u": {"at": 1, "kind": "<b>", "job": "1; x", "exit": 0}, '
+                 '"r@f": {"at": 1, "kind": "runner-lost", "job": "9", "exit": 1}, '
+                 '"r@n": {"at": 1, "kind": "runner-lost", "job": "9"}}')
     assert bridge.autorerun_note("r", "s") == (
         "Re-queued once automatically: runner lost mid-step (job 41574). A second failure stays red.")
     assert bridge.autorerun_note("r", "t") == (
         "Re-queued once automatically: job died before any step ran. A second failure stays red.")
     assert "<b>" not in bridge.autorerun_note("r", "u") and "1; x" not in bridge.autorerun_note("r", "u")
     assert bridge.autorerun_note("r", "other") is None
+    assert bridge.autorerun_note("r", "f") is None      # rerun_ci.sh failed: nothing announced
+    assert bridge.autorerun_note("r", "n") is None      # not finished / no exit recorded yet
 
 
 def test_autorerun_note_is_posted_once(tmp_path, monkeypatch):
     p = tmp_path / "a.json"
-    p.write_text('{"r@s": {"at": 1, "kind": "runner-lost", "job": "7"}}')
+    p.write_text('{"r@s": {"at": 1, "kind": "runner-lost", "job": "7", "exit": 0}}')
     monkeypatch.setattr(bridge, "AUTORERUN_STATE", str(p))
     posted = []
     monkeypatch.setattr(bridge, "github", lambda m, path, body=None: (posted.append(body) or (201, {})))

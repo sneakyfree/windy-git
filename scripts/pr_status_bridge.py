@@ -628,14 +628,15 @@ AUTORERUN_STATE = os.environ.get("AUTORERUN_STATE", "/var/lib/windygit/autorerun
 
 def autorerun_note(repo: str, sha: str) -> str | None:
     """The description for a commit the autorerun timer re-queued, or None. Kind and job id
-    only (both written by autorerun_dead_jobs.py, re-checked here)."""
+    only (both written by autorerun_dead_jobs.py, re-checked here); only when the recorded
+    rerun_ci.sh exit code is 0."""
     try:
         with open(AUTORERUN_STATE) as f:
             entry = json.load(f).get(f"{repo}@{sha}")
     except (OSError, ValueError, AttributeError):
         return None
-    if not isinstance(entry, dict):
-        return None
+    if not isinstance(entry, dict) or entry.get("exit") != 0:
+        return None  # only a re-run that rerun_ci.sh confirmed (exit 0) is announced
     kind = entry.get("kind") if entry.get("kind") in ("dead-before-step", "runner-lost") else "dead-before-step"
     job = str(entry.get("job") or "")
     why = "runner lost mid-step" if kind == "runner-lost" else "job died before any step ran"
