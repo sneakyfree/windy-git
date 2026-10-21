@@ -77,10 +77,11 @@ def test_scan_patch_counts_lines_and_honours_glossary_blocks():
 
 
 def test_status_warn_by_default_and_block_by_mode(monkeypatch):
-    f = cg.Finding("docs/a.md", 3, "use Windy Accounts (or 'the Hub lane')", "the Hub")
+    f = cg.Finding("docs/a.md", 3, "use Windy Accounts / the Hub lane", "the Hub")
     state, desc, first = bt.status_for([f])
-    assert state == "success" and desc.startswith("⚠ WARN (not blocking): 1 retired birth term(s) added")
-    assert "docs/a.md:3 'the Hub' -> Windy Accounts" in desc and len(desc) <= 140 and first is f
+    assert state == "success" and desc.startswith("⚠ WARN: 1 retired term(s) added")
+    assert "docs/a.md:3 'the Hub' -> Windy Accounts / the Hub lane; see doctrine/" in desc
+    assert len(desc) <= 140 and first is f
     monkeypatch.setattr(bt, "MODE", "block")
     assert bt.status_for([f])[0] == "failure"
     assert bt.status_for([])[:2] == ("success", "OK: no retired agent-birth words added")
@@ -133,3 +134,12 @@ def test_no_newline_marker_does_not_shift_line_numbers():
     patch = "@@ -1 +1,2 @@\n-old\n\\ No newline at end of file\n+first\n+the hub here\n"
     found = bt.scan_patch("a.md", patch, lambda p: "")
     assert [(f.line, f.match) for f in found] == [(2, "the hub")]
+
+
+def test_long_description_keeps_the_glossary_path():
+    f = cg.Finding("docs/" + "very-long-folder-name/" * 4 + "PLAN.md", 1234,
+                   "use Windy Accounts / the Hub lane", "the Hub")
+    desc = bt.status_for([f])[1]
+    assert len(desc) <= 140 and desc.endswith(f"; see {bt.GLOSSARY}") and "…" in desc
+    short = bt.status_for([cg.Finding("a.md", 1, "use Birth Canal", "one hallway")])[1]
+    assert short.endswith(f"; see {bt.GLOSSARY}") and "…" not in short

@@ -43,7 +43,7 @@ OPEN, CLOSE = "<!-- glossary -->", "<!-- /glossary -->"
 RULES = [
     (re.compile(r"\b(?:hatch|agent|one)\s+hallway\b", re.I), "Birth Canal"),
     (re.compile(r"\bthe\s+hallway\b", re.I), "the Birth Canal / the Registry"),
-    (re.compile(r"\bthe\s+hub\b(?!\s+lane\b)", re.I), "Windy Accounts (or 'the Hub lane')"),
+    (re.compile(r"\bthe\s+hub\b(?!\s+lane\b)", re.I), "Windy Accounts / the Hub lane"),
 ]
 FINGERPRINT = hashlib.sha256("|".join(p.pattern for p, _ in RULES).encode()).hexdigest()[:8]
 
@@ -146,9 +146,15 @@ def status_for(findings, whole_tree: bool = False, grant=()):
         return "success", "OK: no retired agent-birth words added", None
     f, n = findings[0], len(findings)
     state = "failure" if MODE == "block" else "success"
-    lead = "BLOCKED" if MODE == "block" else "⚠ WARN (not blocking)"
-    desc = f"{lead}: {n} retired birth term(s) added, e.g. {f.path}:{f.line} '{f.match}' -> {f.kind[4:]}; see {GLOSSARY}"
-    return state, desc[:140], f
+    lead = "BLOCKED" if MODE == "block" else "⚠ WARN"
+    return state, fit(f"{lead}: {n} retired term(s) added, e.g. {f.path}:{f.line} '{f.match}' -> {f.kind[4:]}"), f
+
+
+def fit(head: str, limit: int = 140) -> str:
+    """GitHub cuts a status description at 140 chars: shorten the head, never the glossary path."""
+    tail = f"; see {GLOSSARY}"
+    room = limit - len(tail)
+    return (head if len(head) <= room else head[:room - 1] + "…") + tail
 
 
 def main(argv: list[str]) -> int:

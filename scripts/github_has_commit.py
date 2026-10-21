@@ -4,7 +4,7 @@
 Exit 0 = yes: GitHub returned the commit AND at least one pull request is associated
 with it (a PR's refs keep its commits for good). 1 = no: the repo answered and the
 commit is absent, or present but in no PR (an unreachable commit GitHub may
-garbage-collect, so Windy Git's copy could be the last one; Hub, 10-21). 2 = 2 = could not tell (any error, a timeout, no token, the repo not
+garbage-collect, so Windy Git's copy could be the last one; Hub, 10-21). 2 = could not tell (any error, a timeout, no token, the repo not
 readable). The sync deletes a Windy Git branch that GitHub deleted only on exit 0,
 so every doubt keeps the branch.
 

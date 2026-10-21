@@ -101,31 +101,52 @@ def lint_text(path: str, text: str) -> list[tuple[str, int, str, str]]:
 
 
 # ---------------------------------------------------------------- GitHub side
+class GhError(RuntimeError):
+    """gh api exited non-zero. not_found: GitHub answered 404 (the thing is truly absent)."""
+
+    def __init__(self, msg: str, not_found: bool = False):
+        super().__init__(msg)
+        self.not_found = not_found
+
+
 def gh(*args: str, check=True) -> str:
     r = subprocess.run(["gh", "api", *args], capture_output=True, text=True, timeout=60)
     if check and r.returncode != 0:
-        raise RuntimeError(f"gh api {args[0]} failed")
+        raise GhError(f"gh api {args[0]} failed", not_found="(HTTP 404)" in (r.stderr or ""))
     return r.stdout
-
-
-def public_repos(owners) -> list[tuple[str, str]]:
-    out = []
-    for o in owners:
-        txt = gh(f"users/{o}/repos?per_page=100&type=owner", "--paginate",
-                 "--jq", '.[]|select(.private==false and .archived==false)|.full_name+" "+.default_branch', check=False)
-        out += [tuple(row.split()) for row in txt.splitlines() if row.strip()]
-    return out
-
-
-def workflows_at(full: str, ref: str) -> list[tuple[str, str]]:
-    txt = gh(f"repos/{full}/contents/.github/workflows?ref={ref}", "--jq",
-             '.[]|select(.type=="file")|.path', check=False)
-    files = [p for p in txt.splitlines() if p.endswith((".yml", ".yaml"))]
-    return [(p, file_at(full, p, ref)) for p in files]
 
 
 class Unreadable(Exception):
     """GitHub didn't give us the bytes: never judge a file we didn't read (Hub, #53 B1)."""
+
+
+def public_repos(owners) -> list[tuple[str, str]]:
+    """Raises Unreadable if any owner's listing fails, or if none lists a repo: an empty
+    list would read as a clean sweep over nothing (Hub, #53 sweep nit b)."""
+    out = []
+    for o in owners:
+        try:
+            txt = gh(f"users/{o}/repos?per_page=100&type=owner", "--paginate",
+                     "--jq", '.[]|select(.private==false and .archived==false)|.full_name+" "+.default_branch')
+        except (RuntimeError, subprocess.SubprocessError) as e:
+            raise Unreadable(f"repo list of {o}") from e
+        out += [tuple(row.split()) for row in txt.splitlines() if row.strip()]
+    if not out:
+        raise Unreadable("repo lists (0 public repos)")
+    return out
+
+
+def workflows_at(full: str, ref: str) -> list[tuple[str, str]]:
+    """Only a real 404 means "no workflows"; any other failure is Unreadable (Hub, #53 nit a)."""
+    try:
+        txt = gh(f"repos/{full}/contents/.github/workflows?ref={ref}", "--jq",
+                 '.[]|select(.type=="file")|.path')
+    except (RuntimeError, subprocess.SubprocessError) as e:
+        if getattr(e, "not_found", False):
+            return []
+        raise Unreadable(f"{full} .github/workflows") from e
+    files = [p for p in txt.splitlines() if p.endswith((".yml", ".yaml"))]
+    return [(p, file_at(full, p, ref)) for p in files]
 
 
 def file_at(full: str, path: str, ref: str) -> str:
@@ -145,7 +166,11 @@ def file_at(full: str, path: str, ref: str) -> str:
 
 def cmd_report(owners) -> int:
     hits = 0
-    repos = public_repos(owners)
+    try:
+        repos = public_repos(owners)
+    except Unreadable as e:
+        print(f"# runner-guard sweep: ERROR ({e} unreadable)")
+        return 1
     unreadable = []
     for full, branch in repos:
         try:
@@ -214,9 +239,19 @@ def cmd_pr(owners, post: bool) -> int:
     def keep(full: str, sha: str) -> None:  # a skipped PR keeps what was already posted (Hub N1)
         seen.update(k for k in posted if k.startswith(f"{full}@{sha}:"))
 
-    for full, _branch in public_repos(owners):
-        prs = gh(f"repos/{full}/pulls?state=open&per_page=50", "--jq",
-                 '.[]|(.number|tostring)+" "+.head.sha+" "+.head.repo.full_name', check=False)
+    try:
+        repos = public_repos(owners)
+    except Unreadable as e:  # no state rewrite: every posted key stays (an empty pass would drop them all)
+        print(f"runner-guard pr: {e} unreadable this run; nothing posted")
+        return 1
+    for full, _branch in repos:
+        try:  # every page (Hub #53 nit c), and a failed list keeps that repo's keys
+            prs = gh(f"repos/{full}/pulls?state=open&per_page=100", "--paginate", "--jq",
+                     '.[]|(.number|tostring)+" "+.head.sha+" "+.head.repo.full_name')
+        except (RuntimeError, subprocess.SubprocessError):
+            print(f"{full} skipped: open-PR list unreadable this run")
+            seen.update(k for k in posted if k.startswith(f"{full}@"))
+            continue
         for line in prs.splitlines():
             num, sha, head_repo = line.split(" ", 2)
             # One files call per PR feeds both guards (filename + patch); the birth-terms

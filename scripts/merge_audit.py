@@ -16,6 +16,7 @@ import datetime as dt
 import json
 import subprocess
 import sys
+import time
 
 OWNER = "sneakyfree"
 REPOS = ("windy-vault", "windy-contracts")
@@ -26,9 +27,17 @@ RULE_START = "2026-10-10T23:30:00Z"
 WINDOW_H = 26
 
 
-def gh(path: str):
-    out = subprocess.run(["gh", "api", path], capture_output=True, text=True, timeout=60, check=True)
-    return json.loads(out.stdout or "null")
+def gh(path: str, tries: int = 2, pause: float = 5.0):
+    """One retry after a short pause: a single transient gh failure (a 502, a reset) used to
+    turn the whole nightly audit red."""
+    for n in range(tries):
+        try:
+            out = subprocess.run(["gh", "api", path], capture_output=True, text=True, timeout=60, check=True)
+            return json.loads(out.stdout or "null")
+        except subprocess.SubprocessError:
+            if n == tries - 1:
+                raise
+            time.sleep(pause)
 
 
 def latest_states(statuses: list[dict]) -> dict[str, str]:

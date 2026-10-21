@@ -71,3 +71,25 @@ def test_direct_push_is_flagged():
 def test_merges_before_the_rule_are_not_judged():
     api = fake([{"sha": "m1"}], {"m1": [pr(9, "h9", merged="2026-10-10T20:00:00Z")]}, {"h9": []})
     assert ma.audit("windy-vault", SINCE, api) == (0, [])
+
+
+def test_gh_retries_one_transient_failure(monkeypatch):
+    import subprocess
+    calls = []
+
+    class Out:
+        stdout = '{"ok": 1}'
+
+    def run(*a, **k):
+        calls.append(1)
+        if len(calls) == 1:
+            raise subprocess.CalledProcessError(1, "gh")
+        return Out()
+    monkeypatch.setattr(ma.subprocess, "run", run)
+    monkeypatch.setattr(ma.time, "sleep", lambda s: None)
+    assert ma.gh("x") == {"ok": 1} and len(calls) == 2
+    calls.clear()
+    monkeypatch.setattr(ma.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(subprocess.TimeoutExpired("gh", 60)))
+    import pytest
+    with pytest.raises(subprocess.TimeoutExpired):
+        ma.gh("x")
