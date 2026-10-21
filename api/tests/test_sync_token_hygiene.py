@@ -62,7 +62,9 @@ class _Server:
                     self.send_header("WWW-Authenticate", 'Basic realm="t"')
                     self.end_headers()
                     return
-                if prefix == "gh" and srv.hang_gh:
+                if prefix == "gh" and srv.hang_gh:  # True: every request; N: the next N requests
+                    if srv.hang_gh is not True:
+                        srv.hang_gh -= 1
                     time.sleep(60)
                     return
                 time.sleep(srv.delay)
@@ -249,6 +251,25 @@ def test_a_hung_fetch_times_out_instead_of_stalling_the_sync(world):
     assert rc == 1
     assert "FAILED initial clone of demo (timed out after 3s)" in out
     assert time.monotonic() - t0 < 30
+
+
+def test_a_hung_fetch_is_retried_once_and_then_given_up_quickly(world):
+    server = _Server(world / "srv")
+    try:
+        rc, out, _ = _run(world, server)                          # first run clones
+        assert rc == 0, out
+        server.hang_gh = 1                                        # the next request hangs once
+        t0 = time.monotonic()
+        rc, out, _ = _run(world, server, SYNC_FETCH_TIMEOUT="2")
+        assert rc == 0, out
+        assert "demo: fetch timed out after 2s; retrying once" in out and "demo ok" in out
+        server.hang_gh = True                                     # now every request hangs
+        rc, out, _ = _run(world, server, SYNC_FETCH_TIMEOUT="2")
+    finally:
+        server.close()
+    assert rc == 1
+    assert "FAILED fetch demo (timed out after 2s)" in out and out.count("retrying once") == 1
+    assert time.monotonic() - t0 < 60                             # never the 300 s clone timeout
 
 
 # --- SYNC_PRUNE_GONE: branches GitHub deleted leave Windy Git only when GitHub still has the commit
