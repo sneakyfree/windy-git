@@ -56,7 +56,7 @@ REPOS = os.environ.get(
     " windy-drops windy-code-web windy-code windy-traveler windy-registry eternitas"
     " windy-translate windytranslate-site windytraveler-site windy-hand"
     " windy-cloud-sites windy-cloud-domains windy-cloud-vps windytalk windy-pro windy-mind"
-    " windy-inbox windy-text windy-call windy-cell windy-hand-site windy-calendar-site windy-contracts windy-vault windy-uptime windy-pro-mobile windy-text-site",
+    " windy-inbox windy-text windy-hand-site windy-calendar-site windy-contracts windy-vault windy-uptime windy-pro-mobile windy-text-site",
 ).split()
 
 # Gitea run status -> GitHub status state. `skipped` is deliberately absent: a
@@ -293,7 +293,8 @@ def sync_prs(repo: str) -> list[str]:
         )
         if st not in (200, 201):
             print(f"  {repo}: FAILED to open mirror PR for GH#{pr['number']} "
-                  f"(head {pr['head']['ref']}) -> {st}: no CI will run for it")
+                  f"(head {pr['head']['ref']}) -> {st}; retrying next sync "
+                  "(a 404 usually means the branch reached GitHub after this run's fetch)")
             continue
         print(f"  {repo}: opened mirror PR for GH#{pr['number']} -> {st}")
         # Same sha re-opened from a non-archive branch (renaming the head closes a

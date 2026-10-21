@@ -47,13 +47,30 @@ FAILED=0
 
 # Repos Windy Git tracks FROM GitHub. Remove a repo from this list at the moment
 # it flips to Windy-Git-first, or the sync will fight its authors and win.
-REPOS="${SYNC_REPOS:-windy-calendar windy-search windy-registry Windy-Clone WindyCloud windy-cloud-sites windy-mind eternitas windy-agent windy-git windy-chat windy-mail windy-connect windy-drops windy-code-web windy-code windy-traveler windy-translate windytranslate-site windytraveler-site windy-hand windy-cloud-domains windy-cloud-vps windytalk windy-pro windy-inbox windy-text windy-call windy-cell windy-hand-site windy-calendar-site windy-contracts windy-vault windy-uptime windy-pro-mobile windy-text-site}"
+REPOS="${SYNC_REPOS:-windy-calendar windy-search windy-registry Windy-Clone WindyCloud windy-cloud-sites windy-mind eternitas windy-agent windy-git windy-chat windy-mail windy-connect windy-drops windy-code-web windy-code windy-traveler windy-translate windytranslate-site windytraveler-site windy-hand windy-cloud-domains windy-cloud-vps windytalk windy-pro windy-inbox windy-text windy-hand-site windy-calendar-site windy-contracts windy-vault windy-uptime windy-pro-mobile windy-text-site}"
 
 # Repos whose TAGS must not reach Windy Git. A tag push fires `on: push: tags`
 # workflows; windy-pro's build-electron is a matrix over ubuntu/macos/windows-
 # latest, labels no runner here has, so every leg would queue forever (and
 # queued jobs are invisible in /actions/tasks). Releases are built elsewhere.
 NO_TAGS="${SYNC_NO_TAGS:-windy-pro}"
+
+# windy-call and windy-cell left this list 2026-10-21: archived (read-only) on GitHub
+# by Windy Call; their Windy Git copies stay as frozen history.
+
+# Branches GitHub deleted (merged PR heads, mostly) used to stay on Windy Git for
+# ever: the bare cache below is fetched with --prune, but the push to Windy Git
+# was not, so 1,923 had piled up by 10-21 and made lanes ask whether work existed
+# only here. With SYNC_PRUNE_GONE=1, after each push, a branch that Windy Git has
+# and GitHub no longer has is deleted on Windy Git ONLY if GitHub still holds its
+# commit (scripts/github_has_commit.py exits 0). Every doubt keeps the branch.
+# At most SYNC_PRUNE_MAX GitHub checks (one API call each) per repo per run, to spare
+# the shared GitHub quota. A per-repo cursor in $WORK/prune-cursor.<repo> makes the next
+# run start after the last branch checked (wrapping at the end), so a backlog drains
+# instead of re-checking the same kept branches every 5 min. The delete carries a lease
+# on the checked sha: a branch moved on Windy Git after the check is left alone.
+PRUNE_GONE="${SYNC_PRUNE_GONE:-0}"
+PRUNE_MAX="${SYNC_PRUNE_MAX:-25}"
 
 # `archive/*` branches never reach Windy Git (negative refspec, git >= 2.29).
 # They are off-machine safety copies of unpushed work (one-repo doctrine), not
@@ -76,6 +93,37 @@ git_authed() {
     timeout -k 10 "$GIT_TIMEOUT" git "$@"
 }
 why() { [[ $1 -eq 124 || $1 -eq 137 ]] && echo " (timed out after ${GIT_TIMEOUT}s)"; }
+
+prune_gone() {  # prune_gone <repo> <bare>
+  local r=$1 bare=$2 dst="${WG_GIT}/${WG_OWNER}/${1}.git" gone heads b sha n=0 kept=0 checks=0 last="" rc
+  local cursor="$WORK/prune-cursor.${1}" cur=""
+  gone="$(git_authed --git-dir="$bare" push --dry-run --porcelain --prune "$dst" \
+            '+refs/heads/*:refs/heads/*' '^refs/heads/archive/*' 2>/dev/null \
+          | awk -F'\t' '$1 == "-" { sub(/^:refs\/heads\//, "", $2); print $2 }' \
+          | grep -v '^archive/' | LC_ALL=C sort || true)"
+  [[ -n "$gone" ]] || { rm -f "$cursor"; return 0; }
+  heads="$(git_authed ls-remote --heads "$dst" 2>/dev/null)" || { log "$r: prune skipped (cannot list Windy Git branches)"; return 0; }
+  [[ -f "$cursor" ]] && cur="$(cat "$cursor")"
+  # Branches after the cursor first, then wrap round to the start.
+  gone="$(LC_ALL=C awk -v c="$cur" '$0 > c' <<<"$gone"; LC_ALL=C awk -v c="$cur" '$0 <= c' <<<"$gone")"
+  while IFS= read -r b; do
+    [[ -n "$b" ]] || continue
+    (( checks >= PRUNE_MAX )) && break
+    sha="$(awk -F'\t' -v ref="refs/heads/$b" '$2 == ref { print $1 }' <<<"$heads")"
+    [[ -n "$sha" ]] || continue
+    checks=$((checks + 1)); last=$b
+    rc=0; python3 "$(dirname "$0")/github_has_commit.py" "$r" "$sha" || rc=$?
+    if (( rc == 0 )) && git_authed --git-dir="$bare" push --quiet --force-with-lease="refs/heads/$b:$sha" \
+         "$dst" ":refs/heads/$b" 2>/dev/null; then
+      n=$((n + 1))
+    else
+      kept=$((kept + 1))
+    fi
+  done <<<"$gone"
+  [[ -n "$last" ]] && printf '%s\n' "$last" > "$cursor"
+  (( n || kept )) && log "$r: pruned $n branch(es) GitHub deleted; kept $kept (commit not confirmed on GitHub, or the branch moved)"
+  return 0
+}
 
 umask 077
 mkdir -p "$WORK" && chmod 0750 "$WORK"
@@ -106,6 +154,7 @@ for r in $REPOS; do
        "${WG_GIT}/${WG_OWNER}/${r}.git" \
        '+refs/heads/*:refs/heads/*' '^refs/heads/archive/*' $([[ " $NO_TAGS " == *" $r "* ]] || echo '+refs/tags/*:refs/tags/*') 2>/dev/null; then
     log "$r ok (${before:0:7})"
+    [[ "$PRUNE_GONE" == 1 ]] && prune_gone "$r" "$bare"
   else
     rc=$?; log "FAILED push $r -> windy git$(why $rc)"; FAILED=1
   fi

@@ -1,6 +1,6 @@
 # Nightly sweep (Veron)
 
-One user timer runs five read-only checks at 09:40 UTC (Boss simplify rulings E, 10-07). It moved from Windy 0 to Veron on 2026-10-21, when every Windy lane left Windy 0.
+One user timer runs five checks at 09:40 UTC. They change nothing in any repo; guards-status runs `guards_report.py` with `sudo -n`, because it reads repo trees inside the Gitea container (Boss simplify rulings E, 10-07). It moved from Windy 0 to Veron on 2026-10-21, when every Windy lane left Windy 0.
 
 | step | what it does | heartbeat (windy-job) |
 |---|---|---|
