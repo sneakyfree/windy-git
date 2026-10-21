@@ -143,3 +143,51 @@ def test_long_description_keeps_the_glossary_path():
     assert len(desc) <= 140 and desc.endswith(f"; see {bt.GLOSSARY}") and "…" in desc
     short = bt.status_for([cg.Finding("a.md", 1, "use Birth Canal", "one hallway")])[1]
     assert short.endswith(f"; see {bt.GLOSSARY}") and "…" not in short
+
+
+def test_inline_code_is_not_prose():
+    assert words("set `the hub` in config") == []
+    assert words("``the hub`` and ```one hallway```") == []
+    assert words("`x` then the hub, then `y`") == ["the hub"]
+    assert words("a stray ` then the hub") == ["the hub"]          # unpaired backtick is not code
+
+
+def test_fenced_blocks_cover_their_lines_closed_only():
+    text = "a\n```md\nthe hub\n```\nthe hub\n~~~~\nthe hallway\n~~~\nstill fenced\n~~~~\n"
+    assert bt.fenced_lines(text) == {2, 3, 4, 6, 7, 8, 9, 10}      # ~~~ (3) can't close ~~~~ (4)
+    assert bt.fenced_lines("```\nthe hub\n") == set()               # unclosed: exempts nothing
+    assert bt.fenced_lines("```\nx\n``` not a close\n") == set()    # text after a fence: not a close
+    assert bt.fenced_lines("```\nx\n~~~\n") == set()                # other fence char: not a close
+    assert bt.exempt_lines("<!-- glossary -->\nthe hub\n<!-- /glossary -->\n```\nthe hub\n```\n") == {1, 2, 3, 4, 5, 6}
+
+
+def test_scan_patch_drops_findings_inside_a_fence_at_the_head():
+    patch = "@@ -0,0 +1,4 @@\n+```\n+the hub\n+```\n+the hub\n"
+    found = bt.scan_patch("a.md", patch, lambda p: "```\nthe hub\n```\nthe hub\n")
+    assert [(f.line, f.match) for f in found] == [(4, "the hub")]
+
+
+def test_unreadable_head_keeps_findings_and_is_not_cached(tmp_path, monkeypatch):
+    monkeypatch.setattr(cg, "CACHE", tmp_path / "cache.json")
+    pf = [{"f": "a.md", "p": "@@ -0,0 +1,3 @@\n+```\n+the hub\n+```\n", "c": 3}]
+    assert [f.line for f in bt.scan_pr("o/r", "s1", pf, lambda p: None)] == [2]   # can't see the fence: stays
+    assert not (tmp_path / "cache.json").exists()                                   # ...and is not cached
+    assert bt.scan_pr("o/r", "s1", pf, lambda p: "```\nthe hub\n```\n") == []      # readable next cycle
+    reads = []
+    assert bt.scan_pr("o/r", "s1", pf, lambda p: reads.append(p)) == [] and reads == []   # cached now
+    with __import__("pytest").raises(bt.Unread):
+        bt.drop_glossary([cg.Finding("a.md", 1, "use x", "the hub")], lambda p: None, strict=True)
+
+
+def test_unchecked_counts_md_files_without_a_diff():
+    pf = [{"f": "big.md", "p": None, "c": 9000}, {"f": "moved.md", "p": None, "c": 0},
+          {"f": "x.py", "p": None, "c": 5}, {"f": "unknown.md", "p": None}, {"f": "ok.md", "p": "@@", "c": 1}]
+    assert bt.unchecked(pf) == 2
+
+
+def test_status_names_unchecked_files_and_still_fits():
+    state, desc, first = bt.status_for([], unchecked=2)
+    assert state == "success" and first is None and "2 .md file(s) not checked" in desc
+    f = cg.Finding("docs/" + "x" * 80 + ".md", 7, "use Birth Canal", "one hallway")
+    state, desc, _ = bt.status_for([f], unchecked=1)
+    assert "(+1 .md not checked: no diff)" in desc and len(desc) <= 140 and desc.endswith(bt.GLOSSARY)
