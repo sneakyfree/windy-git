@@ -125,3 +125,17 @@ def test_heartbeat_expects_at_least_one_mirror():
     assert re.search(pattern, "mirror lag: 116 mirrors checked, 0 behind")
     assert not re.search(pattern, "mirror lag: 0 mirrors checked, 0 behind")
     assert not re.search(pattern, "mirror lag: 116 mirrors checked, 1 behind")
+
+
+def test_paging_has_a_cap_and_fails_loud_past_it(monkeypatch, capsys):
+    calls = []
+
+    def endless(path):
+        calls.append(path)
+        return {"data": [{"full_name": "windyadmin/x", "default_branch": "main", "empty": True}]}
+
+    monkeypatch.setattr(ml, "gitea", endless)
+    monkeypatch.setattr(ml, "MAX_PAGES", 3)
+    assert ml.main() == 1
+    assert capsys.readouterr().out.strip() == "mirror lag: ERROR (ValueError)"
+    assert len(calls) == 3
