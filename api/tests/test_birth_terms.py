@@ -191,3 +191,19 @@ def test_status_names_unchecked_files_and_still_fits():
     f = cg.Finding("docs/" + "x" * 80 + ".md", 7, "use Birth Canal", "one hallway")
     state, desc, _ = bt.status_for([f], unchecked=1)
     assert "(+1 .md not checked: no diff)" in desc and len(desc) <= 140 and desc.endswith(bt.GLOSSARY)
+
+
+def test_a_head_that_had_findings_gets_a_clearing_ok(tmp_path, monkeypatch):
+    # A rule change (e.g. fenced code exempt) can empty a head that already carries a WARN/BLOCK:
+    # check() returns [] (post the OK, bridge skips it if unchanged) instead of None (stay silent).
+    monkeypatch.setattr(cg, "CACHE", tmp_path / "cache.json")
+    monkeypatch.setattr(cg, "WORK", tmp_path)
+    (tmp_path / "demo.git").mkdir()
+    monkeypatch.setattr(cg, "fetched", lambda bare, sha: True)
+    monkeypatch.setattr(cg, "scan_added", lambda *a, **k: [])
+    assert bt.check("demo", "s1", "main", is_default_head=False) is None          # nothing ever found
+    import json
+    (tmp_path / "cache.json").write_text(json.dumps({
+        "birth-pr:demo:s1:oldfp": [{"path": "a.md", "line": 1, "kind": "use x", "match": "the hub"}]}))
+    assert bt.check("demo", "s1", "main", is_default_head=False) == []            # clear the old WARN
+    assert bt.check("demo", "s2", "main", is_default_head=False) is None          # other heads: silent

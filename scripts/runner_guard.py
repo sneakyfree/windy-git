@@ -289,7 +289,10 @@ def cmd_pr(owners, post: bool) -> int:
             bstate, bdesc, _ = birth_terms.status_for(lane, grant=grant, unchecked=nun)
             bkey = f"{full}@{sha}:{BT_CTX}:{bstate}:{bdesc}"
             seen.add(bkey)
-            if (bt or nun) and bkey not in posted:  # only when there is something to say (secondary rate limit)
+            # only when there is something to say (secondary rate limit), or to clear a status
+            # this head already carries (a rule change may have removed its findings)
+            prev = any(k.startswith(f"{full}@{sha}:{BT_CTX}:") for k in posted)
+            if (bt or nun or prev) and bkey not in posted:
                 print(f"{full}#{num}@{sha[:7]} {BT_CTX} {bstate} {bdesc}")
                 if post:
                     gh(f"repos/{full}/statuses/{sha}", "-f", f"state={bstate}", "-f", f"context={BT_CTX}",

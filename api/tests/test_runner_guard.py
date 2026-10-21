@@ -312,3 +312,12 @@ def test_pr_pass_splits_grant_owned_prose_on_the_public_path(monkeypatch, tmp_pa
                                  [rg.birth_terms.cg.Finding("docs/a.md", 1, "use x", "the hub")])
     assert len(lane) == 1 and grant == []
     assert rg.grant_split("VERONTECH/windy-pro", "aaa111", lane) == (lane, [])
+
+
+def test_pr_pass_clears_a_status_this_head_already_carries(monkeypatch, tmp_path):
+    calls = _bt_world(monkeypatch, tmp_path, '{"f": "docs/a.md", "p": "@@ -0,0 +1 @@\\n+`the hub`", "s": "added", "c": 1}\n')
+    (tmp_path / "s.json").write_text('["sneakyfree/windy-pro@aaa111:windy-git/birth-terms:success:⚠ WARN: old"]')
+    rg.cmd_pr(["sneakyfree"], post=True)
+    rg.cmd_pr(["sneakyfree"], post=True)
+    posts = [c for c in calls if "context=windy-git/birth-terms" in c]
+    assert len(posts) == 1 and "description=OK: no retired agent-birth words added" in posts[0]   # once

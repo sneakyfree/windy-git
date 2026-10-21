@@ -28,6 +28,7 @@ holds each PR's file list, so this costs no extra GitHub call there.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import sys
@@ -154,7 +155,20 @@ def check(repo: str, sha: str, default_branch: str, is_default_head: bool):
     found = cached(f"birth-pr:{repo}:{sha}:{FINGERPRINT}", scan)
     # Post only when there is something to say: an OK on every PR head is ~130 status
     # creates in one cycle against GitHub's secondary limit (Hub, #53), and WARN never blocks.
-    return found or None
+    # Exception: this head HAD findings under older rules, so a WARN/BLOCK may sit on it.
+    # [] lets the bridge replace it with an OK (it posts only if the status differs).
+    if found:
+        return found
+    return [] if had_findings(f"birth-pr:{repo}:{sha}:") else None
+
+
+def had_findings(prefix: str) -> bool:
+    """Did any cached scan under this key prefix (any rules version) find something?"""
+    try:
+        cache = json.loads(cg.CACHE.read_text())
+    except (OSError, ValueError):
+        return False
+    return any(k.startswith(prefix) and v for k, v in cache.items())
 
 
 def _show(bare: Path, sha: str, path: str) -> str | None:
