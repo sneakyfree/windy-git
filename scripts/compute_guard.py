@@ -259,7 +259,10 @@ def parse_added(repo: str, diff: str, allow: list[dict], *, line_fn=None, path_o
     line_fn = line_fn or scan_line
     path_ok = path_ok or _default_path_ok
     found, path, line = [], None, 0
-    for raw in diff.splitlines():
+    # "\n" only: splitlines() also breaks on U+2028/U+0085/\x0b/\x0c/\x1c-\x1e, so the tail of
+    # an added line after one of them was never scanned (Hub, #56). A CRLF line keeps no \r.
+    for raw in diff.split("\n"):
+        raw = raw[:-1] if raw.endswith("\r") else raw
         if raw.startswith("+++ "):
             p = raw[4:]
             path = None if p == "/dev/null" else p[2:] if p.startswith("b/") else p

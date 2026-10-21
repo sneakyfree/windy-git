@@ -16,6 +16,12 @@ sys.modules["runner_guard"] = rg
 _spec.loader.exec_module(rg)
 
 
+@pytest.fixture(autouse=True)
+def _private_cache(tmp_path, monkeypatch):
+    # birth-terms caches public scans per head: never read or write the live cache in tests
+    monkeypatch.setattr(rg.birth_terms.cg, "CACHE", tmp_path / "bt-cache.json")
+
+
 def rules(text):
     return [(r, ln) for _p, ln, r, _m in rg.lint_text("w.yml", text)]
 
@@ -107,8 +113,8 @@ def test_pr_files_rejects_non_file_rows(monkeypatch):
     assert rg.pr_files("o/r", "1") is None
     monkeypatch.setattr(rg, "gh", lambda *a, check=True: '["not", "a", "dict"]\n')
     assert rg.pr_files("o/r", "1") is None
-    monkeypatch.setattr(rg, "gh", lambda *a, check=True: '{"f": "a.md", "p": null}\n')
-    assert rg.pr_files("o/r", "1") == [{"f": "a.md", "p": None}]
+    monkeypatch.setattr(rg, "gh", lambda *a, check=True: '{"f": "a.md", "p": null, "c": 2}\n')
+    assert rg.pr_files("o/r", "1") == [{"f": "a.md", "p": None, "c": 2}]
 
 
 BAD_WF = "on: issue_comment\njobs:\n  t:\n    runs-on: self-hosted\n    steps: []\n"
@@ -166,6 +172,8 @@ def test_files_at_githubs_3000_cap_are_unreadable(monkeypatch):
     assert rg.pr_files("o/r", "1") is None
     monkeypatch.setattr(rg, "gh", lambda *a, check=True: '{"f": "gone.yml", "p": null, "s": "removed"}\n')
     assert rg.pr_files("o/r", "1") == []                         # removed files are not judged
+    monkeypatch.setattr(rg, "gh", lambda *a, check=True: '{"f": "a.md", "p": null, "s": "added", "c": 4}\n')
+    assert rg.pr_files("o/r", "1") == [{"f": "a.md", "p": None, "c": 4}]
 
 
 def test_report_is_an_error_when_a_repo_is_unreadable(monkeypatch, capsys):
@@ -247,3 +255,79 @@ def test_open_pr_list_is_paginated_and_a_failed_list_keeps_that_repos_keys(monke
     assert all("--paginate" in a and "per_page=100" in a[0] for a in seen_args)
     kept = state.read_text()
     assert "o/a@aaa111" in kept and "o/b@bbb222" not in kept   # failed list kept; closed PR pruned
+
+
+def test_report_end_to_end_403_listing_is_an_error_and_404_is_no_workflows(monkeypatch, capsys):
+    # Hub (#55 follow-up): pin the whole chain at the gh() level, not workflows_at alone.
+    def world(listing_404):
+        def fake_gh(*args, check=True):
+            if args[0].startswith("users/o/repos"):
+                return "o/r main\n"
+            if args[0].startswith("repos/o/r/contents/.github/workflows"):
+                raise rg.GhError("gh api contents failed", not_found=listing_404)
+            raise AssertionError(args[0])
+        return fake_gh
+    monkeypatch.setattr(rg, "gh", world(listing_404=False))
+    assert rg.cmd_report(["o"]) == 1
+    assert "runner-guard sweep: ERROR (1 repo(s) unreadable: o/r)" in capsys.readouterr().out
+    monkeypatch.setattr(rg, "gh", world(listing_404=True))
+    assert rg.cmd_report(["o"]) == 0
+    assert "runner-guard sweep: 0 hit(s) in 1 public repos" in capsys.readouterr().out
+
+
+def _bt_world(monkeypatch, tmp_path, rows):
+    calls = []
+    monkeypatch.setattr(rg, "STATE", str(tmp_path / "s.json"))
+    monkeypatch.setattr(rg, "public_repos", lambda owners: [("sneakyfree/windy-pro", "main")])
+
+    def fake_gh(*args, check=True):
+        if args[0].startswith("repos/sneakyfree/windy-pro/pulls?"):
+            return "7 aaa111 sneakyfree/windy-pro\n"
+        if args[0].endswith("/files?per_page=100"):
+            return rows
+        if "/contents/" in args[0]:
+            return base64.b64encode(b"x\n").decode()
+        calls.append([a for a in args if a.startswith(("context=", "state=", "description="))])
+        return ""
+    monkeypatch.setattr(rg, "gh", fake_gh)
+    return calls
+
+
+def test_pr_pass_posts_a_not_checked_note_when_github_omits_an_md_diff(monkeypatch, tmp_path):
+    calls = _bt_world(monkeypatch, tmp_path, '{"f": "docs/huge.md", "p": null, "s": "modified", "c": 40000}\n')
+    rg.cmd_pr(["sneakyfree"], post=True)
+    bt_posts = [c for c in calls if "context=windy-git/birth-terms" in c]
+    assert len(bt_posts) == 1 and "state=success" in bt_posts[0]
+    desc = [a for a in bt_posts[0] if a.startswith("description=")][0]
+    assert "NOT CHECKED: GitHub omitted the diff of all 1 .md file(s)" in desc and "OK" not in desc
+
+
+def test_not_checked_reads_ok_only_when_some_md_diff_was_read(monkeypatch, tmp_path):
+    rows = ('{"f": "docs/huge.md", "p": null, "s": "modified", "c": 40000}\n'
+            '{"f": "docs/small.md", "p": "@@ -0,0 +1 @@\\n+plain words", "s": "added", "c": 1}\n')
+    calls = _bt_world(monkeypatch, tmp_path, rows)
+    rg.cmd_pr(["sneakyfree"], post=True)
+    post = [c for c in calls if "context=windy-git/birth-terms" in c][0]
+    assert any(a.startswith("description=OK in checked lines; 1 .md file(s) not checked") for a in post)
+
+
+def test_pr_pass_splits_grant_owned_prose_on_the_public_path(monkeypatch, tmp_path):
+    monkeypatch.setattr(rg.birth_terms, "MODE", "block")
+    rows = '{"f": "src/client/desktop/README.md", "p": "@@ -0,0 +1 @@\\n+the hub", "s": "added", "c": 1}\n'
+    calls = _bt_world(monkeypatch, tmp_path, rows)
+    rg.cmd_pr(["sneakyfree"], post=True)
+    post = [c for c in calls if "context=windy-git/birth-terms" in c][0]
+    assert "state=success" in post and any("Grant-owned" in a for a in post)   # never blocks Grant's code
+    lane, grant = rg.grant_split("sneakyfree/windy-pro", "aaa111",
+                                 [rg.birth_terms.cg.Finding("docs/a.md", 1, "use x", "the hub")])
+    assert len(lane) == 1 and grant == []
+    assert rg.grant_split("VERONTECH/windy-pro", "aaa111", lane) == (lane, [])
+
+
+def test_pr_pass_clears_a_status_this_head_already_carries(monkeypatch, tmp_path):
+    calls = _bt_world(monkeypatch, tmp_path, '{"f": "docs/a.md", "p": "@@ -0,0 +1 @@\\n+`the hub`", "s": "added", "c": 1}\n')
+    (tmp_path / "s.json").write_text('["sneakyfree/windy-pro@aaa111:windy-git/birth-terms:success:⚠ WARN: old"]')
+    rg.cmd_pr(["sneakyfree"], post=True)
+    rg.cmd_pr(["sneakyfree"], post=True)
+    posts = [c for c in calls if "context=windy-git/birth-terms" in c]
+    assert len(posts) == 1 and "description=OK: no retired agent-birth words added" in posts[0]   # once

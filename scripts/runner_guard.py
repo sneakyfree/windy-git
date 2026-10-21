@@ -200,12 +200,30 @@ def _text_or_none(full: str, path: str, ref: str) -> str | None:
         return None  # birth-terms: no glossary exemption; the finding stays
 
 
+def grant_split(full: str, sha: str, findings: list) -> tuple[list, list]:
+    """(lane, Grant-owned) like the bridge's _post_guard: Grant-owned prose never blocks.
+    ci/grant-owned.yml names sneakyfree repos by short name. If the split can't run,
+    everything is WARN-only (never a block on code we can't attribute)."""
+    if not findings:
+        return [], []
+    owner, _, repo = full.partition("/")
+    if owner != "sneakyfree":
+        return list(findings), []
+    try:
+        import importlib
+
+        return importlib.import_module("guards_report").split_grant(repo, sha, findings)
+    except Exception as e:  # noqa: BLE001
+        print(f"{full}@{sha[:7]} {BT_CTX}: Grant-owned split failed ({type(e).__name__}); WARN only")
+        return [], list(findings)
+
+
 def pr_files(full: str, num: str) -> list[dict] | None:
-    """[{f: filename, p: patch|None}] for an open PR, or None if GitHub didn't answer with a
+    """[{f: filename, p: patch|None, c: changes}] for an open PR, or None if GitHub didn't answer with a
     file list (an error body, HTML, rate limit): never parse an error as filenames."""
     try:  # every page (Hub #53 B2: a workflow in file 101+ was never seen)
         rows = gh(f"repos/{full}/pulls/{num}/files?per_page=100", "--paginate", "--jq",
-                  '.[]|{f:.filename,p:.patch,s:.status}')
+                  '.[]|{f:.filename,p:.patch,s:.status,c:.changes}')
     except (RuntimeError, subprocess.SubprocessError):
         return None
     out, total = [], 0
@@ -220,7 +238,7 @@ def pr_files(full: str, num: str) -> list[dict] | None:
             return None
         total += 1
         if x.get("s") != "removed":
-            out.append({"f": x["f"], "p": x.get("p")})
+            out.append({"f": x["f"], "p": x.get("p"), "c": x.get("c")})
     if total >= FILES_CAP:  # GitHub lists at most 3,000 files: the rest are invisible to us
         return None
     return out
@@ -265,12 +283,17 @@ def cmd_pr(owners, post: bool) -> int:
             wf = [f for f in files if f.startswith(".github/workflows/") and f.endswith((".yml", ".yaml"))]
             # a fork's own content is read from the head repo at the head sha
             src = head_repo if head_repo and head_repo != "null" else full
-            bt = [h for x in pf for h in birth_terms.scan_patch(x["f"], x.get("p"),
-                                                               lambda p, s=src, h=sha: _text_or_none(s, p, h))]
-            bstate, bdesc, _ = birth_terms.status_for(bt)
+            bt = birth_terms.scan_pr(full, sha, pf, lambda p, s=src, h=sha: _text_or_none(s, p, h))
+            lane, grant = grant_split(full, sha, bt)
+            nun = birth_terms.unchecked(pf)
+            bstate, bdesc, _ = birth_terms.status_for(lane, grant=grant, unchecked=nun,
+                                                      checked=birth_terms.checked(pf))
             bkey = f"{full}@{sha}:{BT_CTX}:{bstate}:{bdesc}"
             seen.add(bkey)
-            if bt and bkey not in posted:  # only when there is something to say (secondary rate limit)
+            # only when there is something to say (secondary rate limit), or to clear a status
+            # this head already carries (a rule change may have removed its findings)
+            prev = any(k.startswith(f"{full}@{sha}:{BT_CTX}:") for k in posted)
+            if (bt or nun or prev) and bkey not in posted:
                 print(f"{full}#{num}@{sha[:7]} {BT_CTX} {bstate} {bdesc}")
                 if post:
                     gh(f"repos/{full}/statuses/{sha}", "-f", f"state={bstate}", "-f", f"context={BT_CTX}",
