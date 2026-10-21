@@ -155,6 +155,7 @@ def _run(world: Path, server: _Server, timeout_s="300", **extra):
         "GITHUB_OWNER": "o",
         "SYNC_REPOS": "demo",
         "SYNC_NO_TAGS": "",
+        "SYNC_CI_NET_PRUNE": "0",  # no dind in the test world
         "SYNC_WORK": str(world / "work"),
         "GITHUB_GIT_BASE": f"{server.base}/gh",
         "WG_GIT_BASE": f"{server.base}/wg",
@@ -398,3 +399,20 @@ def test_prune_cursor_compares_branch_names_as_strings(world):
     finally:
         server.close()
     assert calls.read_text().split("\n")[:-1] == [f"demo {shas['10']}", f"demo {shas['9']}"]
+
+
+def test_ci_network_prune_runs_every_sync_and_never_fails_it(world):
+    # 10-21: leaked job networks filled dind's ~31 pools; the sync now prunes idle ones each run.
+    log = world / "docker_calls"
+    fake = world / "bin" / "docker"
+    fake.write_text(f"#!/bin/sh\necho \"$@\" >> {log}\nexit 1\n")   # even a failing docker is non-fatal
+    fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+    server = _Server(world / "srv")
+    try:
+        rc, out, _ = _run(world, server, SYNC_CI_NET_PRUNE="1")
+    finally:
+        server.close()
+    assert rc == 0 and "all repos in step with GitHub" in out
+    assert "ci network prune failed or timed out (non-fatal)" in out
+    assert log.read_text().split() == ["exec", "windy-git-runner-dind-1", "docker", "-H", "tcp://127.0.0.1:2375",
+                                       "network", "prune", "-f", "--filter", "until=15m"]

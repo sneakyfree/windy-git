@@ -169,6 +169,18 @@ done
 # and the bridge are not. Bound them so a stuck exec costs one step, not the run.
 timeout -k 10 120 bash "$(dirname "$0")/cancel_unrunnable.sh" || log "janitor failed or timed out (non-fatal)"
 
+# Idle CI job networks, every run (10-21): dind has ~31 address pools, and a job cut short
+# (load cap, runner restart, a spike) leaks its network. The 6-hourly prune (deploy/runner/
+# prune.sh) was too slow on a busy day: 30 piled up and new jobs died in 0-1 s with "all
+# predefined address pools have been fully subnetted". Only UNUSED networks older than
+# 15 min go: a job attaches its network seconds after creating it, and a network in use
+# is never pruned. Bounded and non-fatal, like the janitor.
+CI_NET_PRUNE="${SYNC_CI_NET_PRUNE:-1}"
+if [[ "$CI_NET_PRUNE" == 1 ]]; then
+  timeout -k 5 60 docker exec windy-git-runner-dind-1 docker -H tcp://127.0.0.1:2375 \
+    network prune -f --filter until=15m >/dev/null 2>&1 || log "ci network prune failed or timed out (non-fatal)"
+fi
+
 # Private repos can't run GitHub Actions; mirror their open PRs here so CI
 # fires, and post the verdicts back to GitHub as commit statuses.
 if ! python3 "$(dirname "$0")/pr_status_bridge.py"; then
