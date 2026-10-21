@@ -31,8 +31,12 @@ import sys
 
 import yaml
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import birth_terms  # noqa: E402  (same directory)
+
 OWNERS = ["sneakyfree", "VERONTECH", "Windstorm-Institute", "Windstorm-Labs", "Public-Streamer"]
 CTX = "windy-git/runner-guard"
+BT_CTX = "windy-git/birth-terms"
 OUTSIDE = {"issue_comment", "workflow_run", "issues", "discussion", "discussion_comment",
            "pull_request_review", "pull_request_review_comment", "fork", "watch"}
 SAME_REPO_GATES = ("head.repo.full_name == github.repository", "github.repository == github.event.pull_request.head.repo.full_name",
@@ -154,11 +158,26 @@ def cmd_pr(owners, post: bool) -> int:
                  '.[]|(.number|tostring)+" "+.head.sha+" "+.head.repo.full_name', check=False)
         for line in prs.splitlines():
             num, sha, head_repo = line.split(" ", 2)
-            files = gh(f"repos/{full}/pulls/{num}/files?per_page=100", "--jq",
-                       '.[]|select(.status!="removed")|.filename', check=False).split()
+            # One files call per PR feeds both guards (filename + patch); the birth-terms
+            # guard reads only the added lines of *.md patches (no extra GitHub call).
+            rows = gh(f"repos/{full}/pulls/{num}/files?per_page=100", "--jq",
+                      '.[]|select(.status!="removed")|{f:.filename,p:.patch}', check=False)
+            pf = [json.loads(r) for r in rows.splitlines() if r.strip()]
+            files = [x["f"] for x in pf]
             wf = [f for f in files if f.startswith(".github/workflows/") and f.endswith((".yml", ".yaml"))]
             # a fork's own content is read from the head repo at the head sha
             src = head_repo if head_repo and head_repo != "null" else full
+            bt = [h for x in pf for h in birth_terms.scan_patch(x["f"], x.get("p"),
+                                                               lambda p, s=src, h=sha: file_at(s, p, h))]
+            bstate, bdesc, _ = birth_terms.status_for(bt)
+            bkey = f"{full}@{sha}:{BT_CTX}:{bstate}:{bdesc}"
+            seen.add(bkey)
+            if bkey not in posted:
+                print(f"{full}#{num}@{sha[:7]} {BT_CTX} {bstate} {bdesc}")
+                if post:
+                    gh(f"repos/{full}/statuses/{sha}", "-f", f"state={bstate}", "-f", f"context={BT_CTX}",
+                       "-f", f"description={bdesc}", check=False)
+                    posted.add(bkey)
             found = [h for f in wf for h in lint_text(f, file_at(src, f, sha))]
             if found:
                 p, ln, rule, msg = found[0]

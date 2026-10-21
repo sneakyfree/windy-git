@@ -61,10 +61,12 @@ def test_pr_mode_posts_each_status_once(monkeypatch, tmp_path):
         if args[0].startswith("repos/o/r/pulls?"):
             return "7 abc123 o/r\\n"
         if args[0].endswith("/files?per_page=100"):
-            return ".github/workflows/ci.yml\\n"
-        calls.append(args[0])
+            return '{"f": ".github/workflows/ci.yml", "p": null}\n'
+        calls.append((args[0], [a for a in args if a.startswith("context=")]))
         return ""
     monkeypatch.setattr(rg, "gh", fake_gh)
     rg.cmd_pr(["o"], post=True)
     rg.cmd_pr(["o"], post=True)
-    assert calls == ["repos/o/r/statuses/abc123"]
+    # each context posted ONCE across both passes: runner-guard and birth-terms
+    assert sorted(calls) == [("repos/o/r/statuses/abc123", ["context=windy-git/birth-terms"]),
+                             ("repos/o/r/statuses/abc123", ["context=windy-git/runner-guard"])]
