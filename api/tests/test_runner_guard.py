@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import base64
 import importlib.util
 import sys
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 _spec = importlib.util.spec_from_file_location("runner_guard", ROOT / "scripts" / "runner_guard.py")
@@ -106,3 +109,73 @@ def test_pr_files_rejects_non_file_rows(monkeypatch):
     assert rg.pr_files("o/r", "1") is None
     monkeypatch.setattr(rg, "gh", lambda *a, check=True: '{"f": "a.md", "p": null}\n')
     assert rg.pr_files("o/r", "1") == [{"f": "a.md", "p": None}]
+
+
+BAD_WF = "on: issue_comment\njobs:\n  t:\n    runs-on: self-hosted\n    steps: []\n"
+
+
+def _pr_world(monkeypatch, tmp_path, files_rows, contents):
+    calls, state = [], tmp_path / "s.json"
+    monkeypatch.setattr(rg, "STATE", str(state))
+    monkeypatch.setattr(rg, "public_repos", lambda owners: [("o/r", "main")])
+
+    def fake_gh(*args, check=True):
+        if args[0].startswith("repos/o/r/pulls?"):
+            return "7 aaa111 o/r\n"
+        if args[0] == "repos/o/r/pulls/7/files?per_page=100":
+            assert "--paginate" in args          # B2: every page, not just the first 100 files
+            return files_rows
+        if args[0].startswith("repos/o/r/contents/"):
+            return contents(args[0])
+        calls.append((args[0], [a for a in args if a.startswith(("context=", "state="))]))
+        return ""
+    monkeypatch.setattr(rg, "gh", fake_gh)
+    return calls, state
+
+
+def test_unreadable_workflow_contents_post_no_ok(monkeypatch, tmp_path):
+    # Hub #53 B1: a 403 on the contents call used to read as "" and post a false OK.
+    def contents(path):
+        raise RuntimeError("gh api 403")
+    calls, state = _pr_world(monkeypatch, tmp_path, '{"f": ".github/workflows/x.yml", "p": null}\n', contents)
+    state.write_text('["o/r@aaa111:failure:BLOCKED: R3 earlier"]')
+    rg.cmd_pr(["o"], post=True)
+    assert calls == []                                            # no status at all for that PR
+    assert "o/r@aaa111:failure:BLOCKED: R3 earlier" in state.read_text()   # N1: kept, not pruned
+
+
+def test_empty_contents_is_unreadable_too(monkeypatch):
+    monkeypatch.setattr(rg, "gh", lambda *a, check=True: "\n")
+    with pytest.raises(rg.Unreadable):
+        rg.file_at("o/r", ".github/workflows/x.yml", "abc")
+
+
+def test_a_workflow_on_page_two_is_seen(monkeypatch, tmp_path):
+    # Hub #53 B2: gh --paginate concatenates the pages; the workflow is the 101st file.
+    rows = "".join(f'{{"f": "src/f{i}.py", "p": null}}\n' for i in range(100))
+    rows += '{"f": ".github/workflows/x.yml", "p": null}\n'
+    b64 = base64.b64encode(BAD_WF.encode()).decode()
+    calls, _ = _pr_world(monkeypatch, tmp_path, rows, lambda path: b64)
+    rg.cmd_pr(["o"], post=True)
+    assert [c for c in calls if "context=windy-git/runner-guard" in c[1]][0][1][0] == "state=failure"
+
+
+def test_files_at_githubs_3000_cap_are_unreadable(monkeypatch):
+    rows = "".join(f'{{"f": "f{i}.md", "p": null, "s": "modified"}}\n' for i in range(rg.FILES_CAP))
+    monkeypatch.setattr(rg, "gh", lambda *a, check=True: rows)
+    assert rg.pr_files("o/r", "1") is None
+    monkeypatch.setattr(rg, "gh", lambda *a, check=True: '{"f": "gone.yml", "p": null, "s": "removed"}\n')
+    assert rg.pr_files("o/r", "1") == []                         # removed files are not judged
+
+
+def test_report_is_an_error_when_a_repo_is_unreadable(monkeypatch, capsys):
+    monkeypatch.setattr(rg, "public_repos", lambda owners: [("o/a", "main"), ("o/b", "main")])
+
+    def wf(full, branch):
+        if full == "o/b":
+            raise rg.Unreadable("x.yml")
+        return []
+    monkeypatch.setattr(rg, "workflows_at", wf)
+    assert rg.cmd_report(["o"]) == 1
+    out = capsys.readouterr().out
+    assert "runner-guard sweep: ERROR (1 repo(s) unreadable: o/b)" in out and "0 hit" not in out

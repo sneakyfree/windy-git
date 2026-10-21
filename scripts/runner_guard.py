@@ -124,35 +124,66 @@ def workflows_at(full: str, ref: str) -> list[tuple[str, str]]:
     return [(p, file_at(full, p, ref)) for p in files]
 
 
+class Unreadable(Exception):
+    """GitHub didn't give us the bytes: never judge a file we didn't read (Hub, #53 B1)."""
+
+
 def file_at(full: str, path: str, ref: str) -> str:
-    raw = gh(f"repos/{full}/contents/{path}?ref={ref}", "--jq", ".content", check=False).strip()
-    return base64.b64decode(raw).decode("utf-8", "replace") if raw else ""
+    """The file's text at ref. Raises Unreadable on any failure (403 rate limit, 404, 5xx,
+    an empty or non-base64 .content): "" would lint clean and post a false OK."""
+    try:
+        raw = gh(f"repos/{full}/contents/{path}?ref={ref}", "--jq", ".content").strip()
+    except (RuntimeError, subprocess.SubprocessError) as e:
+        raise Unreadable(path) from e
+    if not raw:
+        raise Unreadable(path)
+    try:
+        return base64.b64decode(raw, validate=False).decode("utf-8", "replace")
+    except (ValueError, TypeError) as e:
+        raise Unreadable(path) from e
 
 
 def cmd_report(owners) -> int:
     hits = 0
     repos = public_repos(owners)
+    unreadable = []
     for full, branch in repos:
-        for path, text in workflows_at(full, branch):
+        try:
+            pairs = workflows_at(full, branch)
+        except Unreadable:
+            unreadable.append(full)
+            continue
+        for path, text in pairs:
             for p, line, rule, msg in lint_text(path, text):
                 hits += 1
                 print(f"{full}\t{p}:{line}\t{rule}\t{msg}")
+    if unreadable:  # never a green sweep over workflows it couldn't read
+        print(f"# runner-guard sweep: ERROR ({len(unreadable)} repo(s) unreadable: {', '.join(unreadable)[:200]})")
+        return 1
     print(f"# runner-guard sweep: {hits} hit(s) in {len(repos)} public repos")
     return 1 if hits else 0
 
 
 STATE = os.environ.get("RUNNER_GUARD_STATE", "/var/lib/windy-git/runner-guard-posted.json")
+FILES_CAP = 3000  # GitHub's PR files API never lists more
+
+
+def _text_or_none(full: str, path: str, ref: str) -> str | None:
+    try:
+        return file_at(full, path, ref)
+    except Unreadable:
+        return None  # birth-terms: no glossary exemption; the finding stays
 
 
 def pr_files(full: str, num: str) -> list[dict] | None:
     """[{f: filename, p: patch|None}] for an open PR, or None if GitHub didn't answer with a
     file list (an error body, HTML, rate limit): never parse an error as filenames."""
-    try:
-        rows = gh(f"repos/{full}/pulls/{num}/files?per_page=100", "--jq",
-                  '.[]|select(.status!="removed")|{f:.filename,p:.patch}')
+    try:  # every page (Hub #53 B2: a workflow in file 101+ was never seen)
+        rows = gh(f"repos/{full}/pulls/{num}/files?per_page=100", "--paginate", "--jq",
+                  '.[]|{f:.filename,p:.patch,s:.status}')
     except (RuntimeError, subprocess.SubprocessError):
         return None
-    out = []
+    out, total = [], 0
     for r in rows.splitlines():
         if not r.strip():
             continue
@@ -162,7 +193,11 @@ def pr_files(full: str, num: str) -> list[dict] | None:
             return None
         if not isinstance(x, dict) or "message" in x or not isinstance(x.get("f"), str):
             return None
-        out.append(x)
+        total += 1
+        if x.get("s") != "removed":
+            out.append({"f": x["f"], "p": x.get("p")})
+    if total >= FILES_CAP:  # GitHub lists at most 3,000 files: the rest are invisible to us
+        return None
     return out
 
 
@@ -175,6 +210,10 @@ def cmd_pr(owners, post: bool) -> int:
     except (OSError, ValueError):
         posted = set()
     seen = set()
+
+    def keep(full: str, sha: str) -> None:  # a skipped PR keeps what was already posted (Hub N1)
+        seen.update(k for k in posted if k.startswith(f"{full}@{sha}:"))
+
     for full, _branch in public_repos(owners):
         prs = gh(f"repos/{full}/pulls?state=open&per_page=50", "--jq",
                  '.[]|(.number|tostring)+" "+.head.sha+" "+.head.repo.full_name', check=False)
@@ -185,13 +224,14 @@ def cmd_pr(owners, post: bool) -> int:
             pf = pr_files(full, num)
             if pf is None:  # the files call failed (403/404/5xx): no status from a broken answer
                 print(f"{full}#{num}@{sha[:7]} skipped: PR files unreadable this run")
+                keep(full, sha)
                 continue
             files = [x["f"] for x in pf]
             wf = [f for f in files if f.startswith(".github/workflows/") and f.endswith((".yml", ".yaml"))]
             # a fork's own content is read from the head repo at the head sha
             src = head_repo if head_repo and head_repo != "null" else full
             bt = [h for x in pf for h in birth_terms.scan_patch(x["f"], x.get("p"),
-                                                               lambda p, s=src, h=sha: file_at(s, p, h))]
+                                                               lambda p, s=src, h=sha: _text_or_none(s, p, h))]
             bstate, bdesc, _ = birth_terms.status_for(bt)
             bkey = f"{full}@{sha}:{BT_CTX}:{bstate}:{bdesc}"
             seen.add(bkey)
@@ -201,7 +241,12 @@ def cmd_pr(owners, post: bool) -> int:
                     gh(f"repos/{full}/statuses/{sha}", "-f", f"state={bstate}", "-f", f"context={BT_CTX}",
                        "-f", f"description={bdesc}", check=False)
                     posted.add(bkey)
-            found = [h for f in wf for h in lint_text(f, file_at(src, f, sha))]
+            try:
+                found = [h for f in wf for h in lint_text(f, file_at(src, f, sha))]
+            except Unreadable as e:  # Hub #53 B1: never an OK for a workflow we didn't read
+                print(f"{full}#{num}@{sha[:7]} skipped: {e} unreadable this run")
+                keep(full, sha)
+                continue
             if found:
                 p, ln, rule, msg = found[0]
                 state, desc = "failure", f"BLOCKED: {rule} {p}:{ln}: {msg}"[:140]
