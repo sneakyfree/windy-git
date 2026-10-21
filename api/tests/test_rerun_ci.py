@@ -61,7 +61,7 @@ def _run(w, **extra):
 
 
 def _hold(lock: Path, seconds: float):
-    fh = open(lock, "w")
+    fh = open(lock, "w")  # noqa: SIM115 -- held past return; the timer unlocks and closes it
     fcntl.flock(fh, fcntl.LOCK_EX)
     t = threading.Timer(seconds, lambda: (fcntl.flock(fh, fcntl.LOCK_UN), fh.close()))
     t.start()
