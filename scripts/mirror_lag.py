@@ -39,6 +39,7 @@ GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 STALE_S = 3600
 GRACE_S = 1800
 BATCH = 40
+MAX_PAGES = 40  # 2,000 mirrors; a Gitea that never returns an empty page is a fault, not a list
 _DUR = re.compile(r"(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)(?:\.\d+)?s)?")
 _GH = re.compile(r"^https://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$")
 
@@ -84,8 +85,8 @@ def interval_s(go_duration: str | None) -> int:
 
 def gitea_mirrors() -> list[dict]:
     """Every pull mirror: name, source, last refresh and default-branch head (None if empty)."""
-    out, page = [], 1
-    while True:
+    out = []
+    for page in range(1, MAX_PAGES + 1):
         d = gitea(f"/repos/search?mode=mirror&limit=50&page={page}")
         rows = (d or {}).get("data") or []
         for r in rows:
@@ -102,7 +103,8 @@ def gitea_mirrors() -> list[dict]:
             })
         if not rows:  # page until an empty page: never trust the page size to be 50
             return out
-        page += 1
+    # Never a silently truncated list: fail loud, so the heartbeat goes red.
+    raise ValueError(f"mirror list longer than {MAX_PAGES} pages")
 
 
 def github_heads(sources: list[str]) -> dict[str, dict | None]:
