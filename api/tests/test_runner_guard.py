@@ -179,3 +179,71 @@ def test_report_is_an_error_when_a_repo_is_unreadable(monkeypatch, capsys):
     assert rg.cmd_report(["o"]) == 1
     out = capsys.readouterr().out
     assert "runner-guard sweep: ERROR (1 repo(s) unreadable: o/b)" in out and "0 hit" not in out
+
+
+def _gh_fail(not_found):
+    def f(*a, check=True):
+        raise rg.GhError("gh api x failed", not_found=not_found)
+    return f
+
+
+def test_workflows_listing_404_is_none_but_other_errors_are_unreadable(monkeypatch):
+    # Hub #53 sweep nit a: check=False read a 403 on the listing as "no workflows" (a clean repo).
+    monkeypatch.setattr(rg, "gh", _gh_fail(not_found=True))
+    assert rg.workflows_at("o/r", "main") == []
+    monkeypatch.setattr(rg, "gh", _gh_fail(not_found=False))
+    with pytest.raises(rg.Unreadable):
+        rg.workflows_at("o/r", "main")
+
+
+def test_gh_marks_only_a_real_404_as_not_found(monkeypatch):
+    class R:
+        def __init__(self, err):
+            self.returncode, self.stdout, self.stderr = 1, "", err
+    monkeypatch.setattr(rg.subprocess, "run", lambda *a, **k: R("gh: Not Found (HTTP 404)"))
+    with pytest.raises(rg.GhError) as e:
+        rg.gh("repos/o/r/contents/x")
+    assert e.value.not_found
+    monkeypatch.setattr(rg.subprocess, "run", lambda *a, **k: R("gh: API rate limit exceeded (HTTP 403)"))
+    with pytest.raises(rg.GhError) as e:
+        rg.gh("repos/o/r/contents/x")
+    assert not e.value.not_found
+
+
+def test_repo_list_failure_or_zero_repos_is_an_error(monkeypatch, capsys, tmp_path):
+    # Hub #53 sweep nit b: a failed or empty repo list read as "0 hit(s) in 0 public repos".
+    monkeypatch.setattr(rg, "gh", _gh_fail(not_found=False))
+    assert rg.cmd_report(["o"]) == 1
+    assert "runner-guard sweep: ERROR (repo list of o unreadable)" in capsys.readouterr().out
+    monkeypatch.setattr(rg, "gh", lambda *a, check=True: "\n")
+    assert rg.cmd_report(["o"]) == 1
+    assert "ERROR (repo lists (0 public repos) unreadable)" in capsys.readouterr().out
+    # the PR pass leaves the posted state untouched instead of pruning every key
+    state = tmp_path / "s.json"
+    state.write_text('["o/r@aaa111:success:OK: no workflow changes"]')
+    monkeypatch.setattr(rg, "STATE", str(state))
+    assert rg.cmd_pr(["o"], post=True) == 1
+    assert "o/r@aaa111" in state.read_text()
+
+
+def test_open_pr_list_is_paginated_and_a_failed_list_keeps_that_repos_keys(monkeypatch, tmp_path):
+    # Hub #53 sweep nit c: only the first 50 open PRs were ever judged.
+    state = tmp_path / "s.json"
+    state.write_text('["o/a@aaa111:success:OK: no workflow changes", "o/b@bbb222:success:OK: no workflow changes"]')
+    monkeypatch.setattr(rg, "STATE", str(state))
+    monkeypatch.setattr(rg, "public_repos", lambda owners: [("o/a", "main"), ("o/b", "main")])
+    seen_args = []
+
+    def fake_gh(*args, check=True):
+        if args[0].startswith("repos/o/a/pulls?"):
+            seen_args.append(args)
+            raise rg.GhError("gh api 502")
+        if args[0].startswith("repos/o/b/pulls?"):
+            seen_args.append(args)
+            return ""                       # o/b really has no open PRs any more
+        raise AssertionError(args[0])
+    monkeypatch.setattr(rg, "gh", fake_gh)
+    rg.cmd_pr(["o"], post=True)
+    assert all("--paginate" in a and "per_page=100" in a[0] for a in seen_args)
+    kept = state.read_text()
+    assert "o/a@aaa111" in kept and "o/b@bbb222" not in kept   # failed list kept; closed PR pruned
