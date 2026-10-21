@@ -175,6 +175,11 @@ timeout -k 10 120 bash "$(dirname "$0")/cancel_unrunnable.sh" || log "janitor fa
 # predefined address pools have been fully subnetted". Only UNUSED networks older than
 # 15 min go: a job attaches its network seconds after creating it, and a network in use
 # is never pruned. Bounded and non-fatal, like the janitor.
+# Containers of jobs that finished 30+ min ago (a leaked RUNNING service container pins
+# its network, which the prune below then can't free). Never fails the sync.
+if [[ "${SYNC_REAP:-1}" == 1 ]]; then
+  timeout -k 5 60 bash "$(dirname "$0")/reap_task_containers.sh" || log "container reaper failed or timed out (non-fatal)"
+fi
 CI_NET_PRUNE="${SYNC_CI_NET_PRUNE:-1}"
 if [[ "$CI_NET_PRUNE" == 1 ]]; then
   timeout -k 5 60 docker exec windy-git-runner-dind-1 docker -H tcp://127.0.0.1:2375 \
