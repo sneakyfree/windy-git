@@ -67,6 +67,42 @@ def test_pr_mode_posts_each_status_once(monkeypatch, tmp_path):
     monkeypatch.setattr(rg, "gh", fake_gh)
     rg.cmd_pr(["o"], post=True)
     rg.cmd_pr(["o"], post=True)
-    # each context posted ONCE across both passes: runner-guard and birth-terms
-    assert sorted(calls) == [("repos/o/r/statuses/abc123", ["context=windy-git/birth-terms"]),
-                             ("repos/o/r/statuses/abc123", ["context=windy-git/runner-guard"])]
+    # posted ONCE across both passes; no birth-terms status when there is nothing to say
+    assert calls == [("repos/o/r/statuses/abc123", ["context=windy-git/runner-guard"])]
+
+
+
+def test_pr_files_error_skips_that_pr_and_the_pass_goes_on(monkeypatch, tmp_path):
+    # Hub #53: a rate-limit 403 (or 404/5xx, or an HTML body) on one PR's files call must not
+    # crash the pass: that PR gets no status this run, later PRs still do, state is saved.
+    calls = []
+    state = tmp_path / "s.json"
+    monkeypatch.setattr(rg, "STATE", str(state))
+    monkeypatch.setattr(rg, "public_repos", lambda owners: [("o/r", "main")])
+    monkeypatch.setattr(rg, "file_at", lambda *a: "")
+
+    def fake_gh(*args, check=True):
+        if args[0].startswith("repos/o/r/pulls?"):
+            return "7 aaa111 o/r\n8 bbb222 o/r\n9 ccc333 o/r\n"
+        if args[0] == "repos/o/r/pulls/7/files?per_page=100":
+            raise RuntimeError("gh api 403")                       # gh exits non-zero
+        if args[0] == "repos/o/r/pulls/8/files?per_page=100":
+            return '{"message": "API rate limit exceeded", "documentation_url": "x"}\n'
+        if args[0] == "repos/o/r/pulls/9/files?per_page=100":
+            return '{"f": "docs/a.md", "p": "@@ -0,0 +1 @@\\n+see the hub"}\n'
+        calls.append((args[0], [a for a in args if a.startswith("context=")]))
+        return ""
+    monkeypatch.setattr(rg, "gh", fake_gh)
+    assert rg.cmd_pr(["o"], post=True) == 0
+    assert calls == [("repos/o/r/statuses/ccc333", ["context=windy-git/birth-terms"]),
+                     ("repos/o/r/statuses/ccc333", ["context=windy-git/runner-guard"])]
+    assert state.exists()
+
+
+def test_pr_files_rejects_non_file_rows(monkeypatch):
+    monkeypatch.setattr(rg, "gh", lambda *a, check=True: "<html>502 Bad Gateway</html>\n")
+    assert rg.pr_files("o/r", "1") is None
+    monkeypatch.setattr(rg, "gh", lambda *a, check=True: '["not", "a", "dict"]\n')
+    assert rg.pr_files("o/r", "1") is None
+    monkeypatch.setattr(rg, "gh", lambda *a, check=True: '{"f": "a.md", "p": null}\n')
+    assert rg.pr_files("o/r", "1") == [{"f": "a.md", "p": None}]

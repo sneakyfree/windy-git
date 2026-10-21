@@ -50,13 +50,14 @@ def test_markdown_only_and_never_the_glossary_or_vendored():
     assert not bt.path_ok("doctrine/03-GLOSSARY-AGENT-BIRTH-TERMS.md")
     assert not bt.path_ok("node_modules/x/README.md")
     assert not bt.path_ok("docs/history/PLAN_REVIEW_2026-10-06.md")   # verbatim archive copies
+    assert not bt.path_ok("docs/History/OLD.md")                      # any case
     assert bt.path_ok("docs/historyless.md")
 
 
 def test_glossary_blocks_cover_their_lines_and_markers():
     text = "a\n<!-- glossary -->\nthe hub\n  <!-- /glossary -->\nthe hub\n"
     assert bt.glossary_lines(text) == {2, 3, 4}
-    assert bt.glossary_lines("<!-- glossary -->\nx\ny\n") == {1, 2, 3}   # unclosed: to the end
+    assert bt.glossary_lines("<!-- glossary -->\nx\ny\n") == set()   # unclosed: exempts nothing
 
 
 def test_scan_patch_counts_lines_and_honours_glossary_blocks():
@@ -115,6 +116,8 @@ def test_check_judges_only_pr_additions_with_blocks_outside_the_hunk(tmp_path, m
     found = bt.check("demo", sha, "main", is_default_head=False)
     assert [(f.path, f.line, f.match) for f in found] == [("PLAN.md", 7, "hatch hallway")]
     assert bt.check("demo", sha, "main", is_default_head=True) is None   # history is never judged
+    base = _git(src, "rev-parse", "main")
+    assert bt.check("demo", base, "main", is_default_head=False) is None   # nothing to say: no status
     assert bt.check("demo", "f" * 40, "main", is_default_head=False) is None  # not fetched yet
 
 
@@ -124,3 +127,9 @@ def test_lint_cli(tmp_path, capsys):
     assert bt.main(["lint", str(p)]) == 1
     out = capsys.readouterr().out
     assert f"{p}:1: 'the hub' -> Windy Accounts" in out and "1 finding(s)" in out
+
+
+def test_no_newline_marker_does_not_shift_line_numbers():
+    patch = "@@ -1 +1,2 @@\n-old\n\\ No newline at end of file\n+first\n+the hub here\n"
+    found = bt.scan_patch("a.md", patch, lambda p: "")
+    assert [(f.line, f.match) for f in found] == [(2, "the hub")]

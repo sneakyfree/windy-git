@@ -144,6 +144,28 @@ def cmd_report(owners) -> int:
 STATE = os.environ.get("RUNNER_GUARD_STATE", "/var/lib/windy-git/runner-guard-posted.json")
 
 
+def pr_files(full: str, num: str) -> list[dict] | None:
+    """[{f: filename, p: patch|None}] for an open PR, or None if GitHub didn't answer with a
+    file list (an error body, HTML, rate limit): never parse an error as filenames."""
+    try:
+        rows = gh(f"repos/{full}/pulls/{num}/files?per_page=100", "--jq",
+                  '.[]|select(.status!="removed")|{f:.filename,p:.patch}')
+    except (RuntimeError, subprocess.SubprocessError):
+        return None
+    out = []
+    for r in rows.splitlines():
+        if not r.strip():
+            continue
+        try:
+            x = json.loads(r)
+        except ValueError:
+            return None
+        if not isinstance(x, dict) or "message" in x or not isinstance(x.get("f"), str):
+            return None
+        out.append(x)
+    return out
+
+
 def cmd_pr(owners, post: bool) -> int:
     # Post each (repo, sha, state, description) ONCE: the sync runs every 5 min and GitHub caps
     # statuses per sha+context at 1000.
@@ -160,9 +182,10 @@ def cmd_pr(owners, post: bool) -> int:
             num, sha, head_repo = line.split(" ", 2)
             # One files call per PR feeds both guards (filename + patch); the birth-terms
             # guard reads only the added lines of *.md patches (no extra GitHub call).
-            rows = gh(f"repos/{full}/pulls/{num}/files?per_page=100", "--jq",
-                      '.[]|select(.status!="removed")|{f:.filename,p:.patch}', check=False)
-            pf = [json.loads(r) for r in rows.splitlines() if r.strip()]
+            pf = pr_files(full, num)
+            if pf is None:  # the files call failed (403/404/5xx): no status from a broken answer
+                print(f"{full}#{num}@{sha[:7]} skipped: PR files unreadable this run")
+                continue
             files = [x["f"] for x in pf]
             wf = [f for f in files if f.startswith(".github/workflows/") and f.endswith((".yml", ".yaml"))]
             # a fork's own content is read from the head repo at the head sha
@@ -172,7 +195,7 @@ def cmd_pr(owners, post: bool) -> int:
             bstate, bdesc, _ = birth_terms.status_for(bt)
             bkey = f"{full}@{sha}:{BT_CTX}:{bstate}:{bdesc}"
             seen.add(bkey)
-            if bkey not in posted:
+            if bt and bkey not in posted:  # only when there is something to say (secondary rate limit)
                 print(f"{full}#{num}@{sha[:7]} {BT_CTX} {bstate} {bdesc}")
                 if post:
                     gh(f"repos/{full}/statuses/{sha}", "-f", f"state={bstate}", "-f", f"context={BT_CTX}",

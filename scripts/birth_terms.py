@@ -37,7 +37,7 @@ import compute_guard as cg  # noqa: E402  (shared walker, cache and Finding)
 
 MODE = os.environ.get("BIRTH_TERMS_MODE", "warn")
 GLOSSARY = "doctrine/03-GLOSSARY-AGENT-BIRTH-TERMS.md"
-NEVER = re.compile(r"(^|/)(node_modules|vendor|third_party|history)/")
+NEVER = re.compile(r"(^|/)(node_modules|vendor|third_party|history)/", re.I)
 ESCAPE = "(historical)"
 OPEN, CLOSE = "<!-- glossary -->", "<!-- /glossary -->"
 RULES = [
@@ -64,17 +64,16 @@ def scan_line(path: str, text: str) -> list[tuple[str, str]]:
 
 
 def glossary_lines(text: str) -> set[int]:
-    """1-based line numbers inside <!-- glossary --> blocks (marker lines included).
-    An unclosed block runs to the end of the file."""
-    inside, out = False, set()
+    """1-based line numbers inside CLOSED <!-- glossary --> blocks (markers included).
+    An unclosed block exempts nothing: a stray opener must not silence a whole file."""
+    out, start = set(), None
     for n, line in enumerate(text.splitlines(), 1):
         s = line.strip()
-        if s == OPEN:
-            inside = True
-        if inside:
-            out.add(n)
-        if s == CLOSE:
-            inside = False
+        if s == OPEN and start is None:
+            start = n
+        elif s == CLOSE and start is not None:
+            out.update(range(start, n + 1))
+            start = None
     return out
 
 
@@ -103,7 +102,10 @@ def check(repo: str, sha: str, default_branch: str, is_default_head: bool):
                               line_fn=scan_line, path_ok=path_ok)
         return drop_glossary(found, lambda p: _show(bare, sha, p))
 
-    return cg.cached_scan(f"birth-pr:{repo}:{sha}:{FINGERPRINT}", scan)
+    found = cg.cached_scan(f"birth-pr:{repo}:{sha}:{FINGERPRINT}", scan)
+    # Post only when there is something to say: an OK on every PR head is ~130 status
+    # creates in one cycle against GitHub's secondary limit (Hub, #53), and WARN never blocks.
+    return found or None
 
 
 def _show(bare: Path, sha: str, path: str) -> str | None:
@@ -123,6 +125,8 @@ def scan_patch(path: str, patch: str | None, read) -> list:
         m = cg.HUNK.match(raw)
         if m:
             line = int(m.group(1))
+            continue
+        if raw.startswith("\\"):  # "\ No newline at end of file": not a line
             continue
         if raw.startswith("+"):
             for kind, match in scan_line(path, raw[1:]):
