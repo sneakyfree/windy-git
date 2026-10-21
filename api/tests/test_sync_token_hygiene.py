@@ -382,3 +382,19 @@ def test_prune_leaves_a_branch_that_moved_on_windy_git_after_the_check(world):
     out, _ = _two_runs(world, ("feat/x",), SYNC_PRUNE_GONE="1")
     assert "feat/x" in _wg_heads(world)
     assert "pruned 0 branch(es) GitHub deleted; kept 1" in out
+
+
+def test_prune_cursor_compares_branch_names_as_strings(world):
+    # Hub #43 nit: awk compared "10" > "9" numerically, so after cursor "10" the branch "9"
+    # (which sorts AFTER "10" as a string) was never reached with SYNC_PRUNE_MAX=1.
+    shas = {b: _gh_branch_with_own_commit(world, b) for b in ("10", "9")}
+    calls = _has_commit_stub(world, 1)
+    server = _Server(world / "srv")
+    try:
+        _run(world, server, SYNC_PRUNE_GONE="1", SYNC_PRUNE_MAX="1")
+        _delete_on_github(world, "10", "9")
+        _run(world, server, SYNC_PRUNE_GONE="1", SYNC_PRUNE_MAX="1")
+        _run(world, server, SYNC_PRUNE_GONE="1", SYNC_PRUNE_MAX="1")
+    finally:
+        server.close()
+    assert calls.read_text().split("\n")[:-1] == [f"demo {shas['10']}", f"demo {shas['9']}"]

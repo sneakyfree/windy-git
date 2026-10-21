@@ -105,7 +105,8 @@ prune_gone() {  # prune_gone <repo> <bare>
   heads="$(git_authed ls-remote --heads "$dst" 2>/dev/null)" || { log "$r: prune skipped (cannot list Windy Git branches)"; return 0; }
   [[ -f "$cursor" ]] && cur="$(cat "$cursor")"
   # Branches after the cursor first, then wrap round to the start.
-  gone="$(LC_ALL=C awk -v c="$cur" '$0 > c' <<<"$gone"; LC_ALL=C awk -v c="$cur" '$0 <= c' <<<"$gone")"
+  # Compare as strings (the "" forces it): awk would compare "10" and "9" as numbers.
+  gone="$(LC_ALL=C awk -v c="$cur" '($0 "") > (c "")' <<<"$gone"; LC_ALL=C awk -v c="$cur" '($0 "") <= (c "")' <<<"$gone")"
   while IFS= read -r b; do
     [[ -n "$b" ]] || continue
     (( checks >= PRUNE_MAX )) && break
