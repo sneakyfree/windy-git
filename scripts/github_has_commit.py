@@ -1,48 +1,67 @@
 #!/usr/bin/env python3
 """github_has_commit.py <repo> <sha>: does GitHub still hold this commit?
 
-Exit 0 = yes (GitHub answered 200 for the commit), 1 = no (404/422), 2 = could not
-tell (any other answer, a timeout, no token). The sync deletes a Windy Git branch
-that GitHub deleted only on exit 0, so every doubt keeps the branch.
+Exit 0 = yes (GitHub returned the commit object), 1 = no (the repo answered and the
+object is absent), 2 = could not tell (any error, a timeout, no token, the repo not
+readable). The sync deletes a Windy Git branch that GitHub deleted only on exit 0,
+so every doubt keeps the branch.
 
-A 200 means GitHub holds the commit NOW. An unreachable commit (its branch deleted
-and no PR ref pointing at it) can still answer 200 until GitHub garbage-collects
-it, so this is not a promise that GitHub keeps it forever.
+It asks GraphQL, not REST: GitHub meters the two separately, and the REST budget
+(5,000/h) is what the PR bridge and every lane spend, often down to ~1,000 left by
+the hour's end (10-21). One object lookup costs one GraphQL point from a budget
+the fleet barely uses.
+
+A yes means GitHub holds the commit NOW. An unreachable commit (its branch deleted
+and no PR ref pointing at it) can still answer until GitHub garbage-collects it,
+so this is not a promise that GitHub keeps it forever.
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import sys
 import urllib.error
 import urllib.request
 
-API = os.environ.get("GITHUB_API_BASE", "https://api.github.com")
+# Not GITHUB_GRAPHQL_URL: CI runners set that one, sometimes to "" (10-21 gate run 46066).
+API = os.environ.get("WINDYGIT_GITHUB_GRAPHQL_URL") or "https://api.github.com/graphql"
 OWNER = os.environ.get("GITHUB_OWNER", "sneakyfree")
+_NAME = re.compile(r"^[A-Za-z0-9._-]{1,100}$")
+QUERY = "query($o:String!,$n:String!,$s:GitObjectID!){repository(owner:$o,name:$n){object(oid:$s){oid}}}"
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) != 2 or not re.fullmatch(r"[0-9a-f]{40}", argv[1]):
+    if len(argv) != 2 or not _NAME.match(argv[0]) or not re.fullmatch(r"[0-9a-f]{40}", argv[1]):
         return 2
     token = os.environ.get("GITHUB_TOKEN")
     if not token:
         return 2
-    req = urllib.request.Request(
-        f"{API}/repos/{OWNER}/{argv[0]}/commits/{argv[1]}",
-        headers={
-            "Authorization": f"token {token}",
-            "Accept": "application/vnd.github+json",
-            # urllib's default UA is 403'd as a bot by GitHub's edge.
-            "User-Agent": "windy-git-sync",
-        },
-    )
+    body = json.dumps({"query": QUERY, "variables": {"o": OWNER, "n": argv[0], "s": argv[1]}}).encode()
     try:
+        req = urllib.request.Request(
+            API,
+            data=body,
+            headers={
+                "Authorization": f"bearer {token}",
+                "Content-Type": "application/json",
+                # urllib's default UA is 403'd as a bot by GitHub's edge.
+                "User-Agent": "windy-git-sync",
+            },
+        )
         with urllib.request.urlopen(req, timeout=30) as r:
-            return 0 if r.status == 200 else 2
-    except urllib.error.HTTPError as e:
-        return 1 if e.code in (404, 422) else 2
-    except (urllib.error.URLError, TimeoutError, OSError):
+            if r.status != 200:
+                return 2
+            d = json.loads(r.read() or b"null") or {}
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
         return 2
+    if d.get("errors"):
+        return 2
+    repo = (d.get("data") or {}).get("repository")
+    if repo is None:
+        return 2  # repo not readable: can't tell
+    obj = repo.get("object")
+    return 0 if obj and obj.get("oid") == argv[1] else 1
 
 
 if __name__ == "__main__":
