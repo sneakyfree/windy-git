@@ -222,6 +222,15 @@ def test_fence_after_a_list_marker_or_quote_exempts_nothing():
         assert bt.fenced_lines(text) == set(), marker
 
 
+def test_a_list_item_fence_cut_short_by_an_unindented_line_exempts_nothing():
+    # Hub #56: CommonMark ends the list item at line 4 (a <p> in pandoc); pairing 2 and 5 skipped it.
+    assert bt.fenced_lines(f"- Install:\n  ```sh\n  npm i\n{PROSE}\n  ```\n") == set()
+    assert bt.fenced_lines(f"> quote\n\n  ```\n  x\n{PROSE}\n  ```\n") == set()
+    assert bt.fenced_lines(f"- a\n ```\n{PROSE}\n ```\n") == set()               # 1-3 spaces, by rule
+    assert bt.fenced_lines("- a list\n\n```\nthe hub\n```\n") == {3, 4, 5}       # flush fence: still fine
+    assert bt.fenced_lines("  ```\nthe hub\n  ```\n") == {1, 2, 3}                 # no list: still fine
+
+
 def test_multiline_html_block_exempts_nothing_but_a_one_line_comment_is_fine():
     assert bt.fenced_lines(f"<!--\n```\n-->\n{PROSE}\n```\n") == set()
     assert bt.fenced_lines(f"<div>\n```\n</div>\n{PROSE}\n```\n") == set()

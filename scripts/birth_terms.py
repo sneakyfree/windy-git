@@ -48,7 +48,7 @@ RULES = [
     (re.compile(r"\bthe\s+hub\b(?!\s+lane\b)", re.I), "Windy Accounts / the Hub lane"),
 ]
 # Bump SCAN_VERSION whenever what is exempt changes, so cached scans are redone.
-SCAN_VERSION = "3"  # 2: fenced code + inline code exempt; 3: fail-safe fences, "\n" lines
+SCAN_VERSION = "4"  # 2: fenced code + inline code exempt; 3: fail-safe fences, "\n" lines; 4: list + indented fence
 FINGERPRINT = hashlib.sha256(("|".join(p.pattern for p, _ in RULES) + "|v" + SCAN_VERSION).encode()).hexdigest()[:8]
 # Not after a backslash or inside a longer run (Hub, #56: escaped and mid-run backticks).
 INLINE_CODE = re.compile(r"(?<![`\\])(`+)(?!`)(.+?)(?<!`)\1(?!`)")
@@ -64,6 +64,10 @@ UNSAFE_FENCE = re.compile(
     r"|^ {0,3}`{3,}(?!`)[^`]*`")                                      # backtick in the info string
 HTML_OPEN = re.compile(r"^ {0,3}<(?:[A-Za-z][A-Za-z0-9-]*|!--|\?|![A-Za-z]|!\[CDATA\[|/[A-Za-z])")
 ONE_LINE_COMMENT = re.compile(r"^ {0,3}<!--.*-->\s*$")  # e.g. <!-- glossary -->: ends on its own line
+# A list or quote anywhere + a fence indented 1-3 spaces: that fence may belong to a list item
+# that an unindented line ends early (Hub, #56: "- Install:\n  ```sh\n  npm i\nprose\n  ```").
+LIST_OR_QUOTE = re.compile(r"^ {0,3}(?:(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$)|>)")
+INDENTED_FENCE = re.compile(r"^ {1,3}(?:`{3,}|~{3,})")
 
 
 def lines(text: str) -> list[str]:
@@ -76,7 +80,12 @@ def lines(text: str) -> list[str]:
 def fences_unsafe(text: str) -> bool:
     if re.search(r"\r(?!\n)", text):  # a lone CR ends a line for CommonMark, not for git
         return True
+    listy = indented = False
     for line in lines(text):
+        listy = listy or bool(LIST_OR_QUOTE.match(line))
+        indented = indented or bool(INDENTED_FENCE.match(line))
+        if listy and indented:
+            return True
         if UNSAFE_FENCE.match(line):
             return True
         if HTML_OPEN.match(line) and not ONE_LINE_COMMENT.match(line):
