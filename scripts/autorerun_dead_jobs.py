@@ -78,7 +78,8 @@ order by max(j.stopped);
 def commit_sql(repo_id: int, sha: str) -> str:
     """Facts only: every job of every run at the commit, with its step marks.
     Columns: run index, workflow, event, job id, job status, task id, steps that ran,
-    runner-lost marks, Actions secrets the repo, its owner or the instance holds, task seconds."""
+    runner-lost marks, Actions secrets the repo, its owner or the instance holds, task seconds,
+    the job's runs-on labels (JSON)."""
     return f"""
 select r."index", r.workflow_id, r.event, j.id, j.status, j.task_id,
   (select count(*) from action_task_step s where s.task_id = j.task_id and s.status in (1, 2)),
@@ -90,12 +91,25 @@ select r."index", r.workflow_id, r.event, j.id, j.status, j.task_id,
   (select count(*) from secret sec where sec.repo_id = r.repo_id
      or sec.owner_id = (select p.owner_id from repository p where p.id = r.repo_id)
      or (sec.owner_id = 0 and sec.repo_id = 0)),
-  coalesce((select t.stopped - t.started from action_task t where t.id = j.task_id and t.started > 0), 0)
+  coalesce((select t.stopped - t.started from action_task t where t.id = j.task_id and t.started > 0), 0),
+  j.runs_on
 from action_run r
 join action_run_job j on j.run_id = r.id
 where r.repo_id = {int(repo_id)} and r.commit_sha = '{sha}'
 order by r."index", j.id;
 """
+
+
+RUNNER_LABELS_SQL = "select agent_labels from action_runner where coalesce(deleted, 0) = 0;"
+
+
+def runner_labels(query=None) -> list[frozenset] | None:
+    """The label set of every live (not deleted) runner; None when they can't be read."""
+    try:
+        rows = (query or psql)(RUNNER_LABELS_SQL)
+        return [frozenset(json.loads(r[0] or "[]")) for r in rows]
+    except (subprocess.SubprocessError, OSError, ValueError, IndexError):
+        return None
 
 
 def psql(sql: str) -> list[list[str]]:
@@ -136,14 +150,36 @@ def at_head(repo_id: int, branch: str, sha: str, query=psql) -> bool:
     return len(rows) == 1 and rows[0][0] == sha
 
 
-def judge(repo: str, rows: list[list[str]], allow: dict) -> tuple[str | None, str, str]:
-    """(kind or None, job id, reason). Pure: decides from commit_sql rows only."""
+def _labels(raw: str) -> frozenset | None:
+    try:
+        v = json.loads(raw)
+    except ValueError:
+        return None
+    return frozenset(v) if isinstance(v, list) else None
+
+
+def judge(repo: str, rows: list[list[str]], allow: dict,
+          labels: list[frozenset] | None = None) -> tuple[str | None, str, str]:
+    """(kind or None, job id, reason). Pure: decides from commit_sql rows (and the live
+    runners' label sets, when given) only."""
     jobs = []
     for row in rows:
         idx, wf, ev, job, st, task, ran, lost, secrets = row[:9]
         secs = row[9] if len(row) > 9 and row[9].lstrip("-").isdigit() else "0"
         jobs.append({"idx": int(idx), "wf": wf, "ev": ev, "job": job, "st": int(st), "task": int(task),
-                     "ran": int(ran), "lost": int(lost), "secrets": int(secrets), "secs": int(secs)})
+                     "ran": int(ran), "lost": int(lost), "secrets": int(secrets), "secs": int(secs),
+                     "runs_on": _labels(row[10]) if len(row) > 10 else None})
+
+    def unrunnable(j: dict) -> bool:
+        # Cancelled without ever being picked up, for labels NO live runner has (windy-pro's
+        # build-electron macos/windows/ubuntu-latest legs, cancelled by cancel_unrunnable.sh):
+        # it says nothing about the code. Every other cancel still counts as red. No label
+        # facts (labels None, runs_on unreadable) means no exemption: fail closed.
+        if j["st"] != 3 or j["task"] > 0 or labels is None or j["runs_on"] is None:
+            return False
+        return not any(j["runs_on"] <= have for have in labels)
+
+    jobs = [j for j in jobs if not unrunnable(j)]
     if any(j["secrets"] > 0 for j in jobs):
         return None, "", "repo holds Actions secrets"
     if any(j["ev"] == "pull_request_target" for j in jobs):
@@ -252,11 +288,12 @@ def bump_count(kind: str) -> dict:
 def plan(state: dict, allow: dict, now: float, query=psql) -> tuple[list[dict], dict]:
     """Eligible commits (at most MAX_PER_PASS) and a count of refusal reasons."""
     out, why = [], {}
+    labels = runner_labels(query)
     for repo_id, repo, sha, ref in (r[:4] for r in query(candidates_sql(int(now) - WINDOW_S))):
         key = f"{repo}@{sha}"
         if key in state or not _SHA.match(sha) or not str(repo_id).isdigit():
             continue
-        kind, job, reason = judge(repo, query(commit_sql(int(repo_id), sha)), allow)
+        kind, job, reason = judge(repo, query(commit_sql(int(repo_id), sha)), allow, labels)
         if not kind:
             why[reason] = why.get(reason, 0) + 1
             continue
@@ -297,7 +334,7 @@ def _pass() -> int:
           f"runner-lost {by['runner-lost']}); refused: {json.dumps(why, sort_keys=True)}")
     for t in todo:
         fresh = psql(commit_sql(t["repo_id"], t["sha"]))
-        kind, _job, reason = judge(t["repo"], fresh, allow)
+        kind, _job, reason = judge(t["repo"], fresh, allow, runner_labels(psql))
         if kind != t["kind"]:  # fresh rows right before acting: the commit moved on
             print(f"  {t['repo']}@{t['sha'][:7]}: re-check refused ({reason}); not re-run")
             continue
