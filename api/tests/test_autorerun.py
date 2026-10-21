@@ -32,7 +32,11 @@ class DB:
         create table secret (id int, repo_id int, owner_id int);
         create table action_run (id int, repo_id int, commit_sha text, ref text, "index" int,
                                  workflow_id text, event text);
-        create table action_run_job (id int, run_id int, status int, task_id int, stopped int);
+        create table action_run_job (id int, run_id int, status int, task_id int, stopped int,
+                                     runs_on text);
+        create table action_runner (agent_labels text, deleted int);
+        insert into action_runner values ('["veron-1","linux-x64","self-hosted"]', 0),
+                                         ('["macos-latest"]', 1);
         create table action_task (id int, started int, stopped int);
         create table action_task_step (task_id int, "index" int, status int, log_length int, stopped int);
         create table issue (id int, repo_id int, "index" int);
@@ -56,11 +60,11 @@ class DB:
         self.c.execute("delete from branch where repo_id = ? and name = ?", (repo, name))
         self.c.execute("insert into branch values (?,?,?,?)", (repo, name, sha, deleted))
 
-    def job(self, run, status, steps=(), stopped=NOW - 60, task_stop=None, secs=900):
+    def job(self, run, status, steps=(), stopped=NOW - 60, task_stop=None, secs=900, runs_on='["veron-1"]'):
         """steps: (status, log_length, stopped) per step, in order. No steps + status 2 = dead."""
         self.n += 1
         jid = task = self.n
-        self.c.execute("insert into action_run_job values (?,?,?,?,?)", (jid, run, status, task, stopped))
+        self.c.execute("insert into action_run_job values (?,?,?,?,?,?)", (jid, run, status, task, stopped, runs_on))
         ts = task_stop if task_stop is not None else stopped
         self.c.execute("insert into action_task values (?,?,?)", (task, ts - secs, ts))
         for i, (st, ln, sp) in enumerate(steps):
@@ -177,7 +181,7 @@ def test_candidates_sql_window_events_and_assignment():
     db.job(db.run(sha="b" * 40), 2, [], stopped=NOW - 4000)                 # outside the window
     db.job(db.run(sha="c" * 40, wf="canary.yml", ev="schedule"), 2, [])     # not a CI event
     r = db.run(sha="d" * 40)
-    db.c.execute("insert into action_run_job values (999, ?, 2, 0, ?)", (r, NOW - 60))  # never assigned
+    db.c.execute("insert into action_run_job values (999, ?, 2, 0, ?, ?)", (r, NOW - 60, '["veron-1"]'))  # never assigned
     rows = db.q(ar.candidates_sql(NOW - ar.WINDOW_S))
     assert [x[2] for x in rows] == [SHA]
 
@@ -446,3 +450,72 @@ def test_a_failed_attempt_on_the_current_head_still_uses_the_try(wired, monkeypa
     assert json.loads((tmp / "s.json").read_text())[f"windy-pro@{SHA}"]["exit"] == 1
     monkeypatch.setattr(ar.subprocess, "run", lambda *a, **k: calls.append(a))
     assert ar.main() == 0 and calls == []              # once, ever
+
+
+
+# --- unpicked cancels for labels no runner has (windy-pro build-electron *-latest legs)
+
+
+def unpicked(db, run, runs_on, status=3):
+    """A job cancelled before any runner took it: task 0, no task row."""
+    db.n += 1
+    db.c.execute("insert into action_run_job values (?,?,?,?,?,?)", (db.n, run, status, 0, NOW - 60, runs_on))
+    return db.n
+
+
+def judge_live(db, repo="windy-pro", repo_id=5):
+    return ar.judge(repo, db.q(ar.commit_sql(repo_id, SHA)), ALLOW, ar.runner_labels(db.q))
+
+
+def test_runner_labels_reads_live_runners_only():
+    assert ar.runner_labels(DB().q) == [frozenset({"veron-1", "linux-x64", "self-hosted"})]
+
+
+def test_runner_labels_unreadable_is_none():
+    def boom(sql):
+        raise OSError("db down")
+    assert ar.runner_labels(boom) is None
+
+
+def test_an_unrunnable_cancel_does_not_block_a_runner_lost_rerun():
+    db = DB()
+    r = db.run()
+    j = db.job(r, 2, lost_steps(NOW - 60))
+    unpicked(db, r, '["macos-latest"]')
+    unpicked(db, r, '["windows-latest"]')
+    assert judge_live(db) == ("runner-lost", str(j), "ok")
+
+
+def test_without_runner_labels_every_cancel_still_blocks():
+    db = DB()
+    r = db.run()
+    db.job(r, 2, lost_steps(NOW - 60))
+    unpicked(db, r, '["macos-latest"]')
+    assert judge(db) == (None, "", "a real red at the commit")          # labels not passed
+    assert ar.judge("windy-pro", db.q(ar.commit_sql(5, SHA)), ALLOW, None)[0] is None
+
+
+def test_an_unpicked_cancel_a_live_runner_could_take_still_blocks():
+    # e.g. Gitea's concurrency cancel of a queued veron-1 job: fail closed.
+    db = DB()
+    r = db.run()
+    db.job(r, 2, lost_steps(NOW - 60))
+    unpicked(db, r, '["veron-1"]')
+    assert judge_live(db) == (None, "", "a real red at the commit")
+
+
+def test_a_picked_up_cancel_still_blocks_even_for_odd_labels():
+    db = DB()
+    r = db.run()
+    db.job(r, 2, lost_steps(NOW - 60))
+    db.job(r, 3, runs_on='["macos-latest"]')   # it had a task: a runner took it, then it was cancelled
+    assert judge_live(db) == (None, "", "a real red at the commit")
+
+
+def test_a_deleted_runners_labels_do_not_count():
+    # macos-latest exists only on a DELETED runner in the fixture: still unrunnable.
+    db = DB()
+    r = db.run()
+    j = db.job(r, 2)
+    unpicked(db, r, '["macos-latest"]')
+    assert judge_live(db) == ("dead-before-step", str(j), "ok")
