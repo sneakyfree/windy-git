@@ -293,7 +293,8 @@ def sync_prs(repo: str) -> list[str]:
         )
         if st not in (200, 201):
             print(f"  {repo}: FAILED to open mirror PR for GH#{pr['number']} "
-                  f"(head {pr['head']['ref']}) -> {st}: no CI will run for it")
+                  f"(head {pr['head']['ref']}) -> {st}; retrying next sync "
+                  "(a 404 usually means the branch reached GitHub after this run's fetch)")
             continue
         print(f"  {repo}: opened mirror PR for GH#{pr['number']} -> {st}")
         # Same sha re-opened from a non-archive branch (renaming the head closes a
