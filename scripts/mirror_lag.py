@@ -21,7 +21,7 @@ A mirror is BEHIND when either
 A mirror whose GitHub repo can't be read is reported as UNREADABLE and counts as
 behind: say only what's true, never call an unchecked mirror fine.
 Prints one line per problem, then `mirror lag: <n> mirrors checked, <m> behind`.
-Exit 1 when m > 0 or on an API error.
+Exit 1 when m > 0, when no mirror is found, or on an API error.
 """
 from __future__ import annotations
 
@@ -100,7 +100,7 @@ def gitea_mirrors() -> list[dict]:
                 "interval": interval_s(r.get("mirror_interval")),
                 "head": head,
             })
-        if len(rows) < 50:
+        if not rows:  # page until an empty page: never trust the page size to be 50
             return out
         page += 1
 
@@ -153,6 +153,10 @@ def main() -> int:
         gh = github_heads([m["source"] for m in mirrors])
     except (urllib.error.URLError, TimeoutError, OSError, ValueError, KeyError) as e:
         print(f"mirror lag: ERROR ({type(e).__name__})")
+        return 1
+    if not mirrors:
+        # Zero mirrors is never "all in step": Gitea answering an empty list is a fault.
+        print("mirror lag: ERROR (no mirrors found)")
         return 1
     problems = judge(mirrors, gh, dt.datetime.now(dt.UTC).timestamp())
     for p in problems:

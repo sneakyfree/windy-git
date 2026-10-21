@@ -92,3 +92,36 @@ def test_main_reports_an_api_error_as_a_failure(monkeypatch, capsys):
 class _Fixed:
     def timestamp(self):
         return NOW
+
+
+def test_zero_mirrors_is_a_failure_not_all_clear(monkeypatch, capsys):
+    monkeypatch.setattr(ml, "gitea_mirrors", lambda: [])
+    monkeypatch.setattr(ml, "github_heads", lambda sources: {})
+    assert ml.main() == 1
+    assert capsys.readouterr().out.strip() == "mirror lag: ERROR (no mirrors found)"
+
+
+def test_paging_continues_until_an_empty_page(monkeypatch):
+    # A page smaller than 50 must not end the walk: Gitea's page cap may be lower.
+    pages = {
+        1: [{"full_name": "windyadmin/a", "default_branch": "main", "empty": True}] * 2,
+        2: [{"full_name": "windyadmin/b", "default_branch": "main", "empty": True}],
+        3: [],
+    }
+
+    def fake(path):
+        if path.startswith("/repos/search"):
+            return {"data": pages[int(path.rsplit("page=", 1)[1])]}
+        raise AssertionError(path)
+
+    monkeypatch.setattr(ml, "gitea", fake)
+    assert [m["name"] for m in ml.gitea_mirrors()] == ["windyadmin/a", "windyadmin/a", "windyadmin/b"]
+
+
+def test_heartbeat_expects_at_least_one_mirror():
+    import re
+    conf = (ROOT / "deploy/systemd/windygit-mirror-lag.service.d/windy-job.conf").read_text()
+    pattern = re.search(r'--expect "([^"]+)"', conf).group(1)
+    assert re.search(pattern, "mirror lag: 116 mirrors checked, 0 behind")
+    assert not re.search(pattern, "mirror lag: 0 mirrors checked, 0 behind")
+    assert not re.search(pattern, "mirror lag: 116 mirrors checked, 1 behind")
