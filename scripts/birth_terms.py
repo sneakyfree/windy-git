@@ -179,9 +179,10 @@ def cached(key: str, scan) -> list:
     try:
         return cg.cached_scan(key, scan)
     except Unread as e:
-        if e.found:  # posted but not final: remember that this head HAD findings, so a later
-            cg.cached_scan(f"{key}:unread", lambda: e.found)  # readable pass can clear it
-        return e.found
+        found = e.found
+    if found:  # posted but not final: remember that this head HAD findings, so a later
+        cg.cached_scan(f"{key}:unread", lambda: found)  # readable pass can clear it
+    return found
 
 
 def check(repo: str, sha: str, default_branch: str, is_default_head: bool):
