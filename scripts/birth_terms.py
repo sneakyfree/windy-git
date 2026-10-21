@@ -48,10 +48,40 @@ RULES = [
     (re.compile(r"\bthe\s+hub\b(?!\s+lane\b)", re.I), "Windy Accounts / the Hub lane"),
 ]
 # Bump SCAN_VERSION whenever what is exempt changes, so cached scans are redone.
-SCAN_VERSION = "2"  # 2: fenced code blocks + inline code exempt
+SCAN_VERSION = "3"  # 2: fenced code + inline code exempt; 3: fail-safe fences, "\n" lines
 FINGERPRINT = hashlib.sha256(("|".join(p.pattern for p, _ in RULES) + "|v" + SCAN_VERSION).encode()).hexdigest()[:8]
-INLINE_CODE = re.compile(r"(`+)(?!`)(.+?)(?<!`)\1(?!`)")
+# Not after a backslash or inside a longer run (Hub, #56: escaped and mid-run backticks).
+INLINE_CODE = re.compile(r"(?<![`\\])(`+)(?!`)(.+?)(?<!`)\1(?!`)")
 FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+# Shapes where this simple pairing and CommonMark disagree (Hub, #56 fuzz vs markdown-it):
+# a fence after a list marker or ">", a tab or 4+ spaces before a fence, a ``` opener whose
+# info string holds a backtick (not a fence at all), or a multi-line HTML block (raw HTML
+# can hold fence-looking lines). Any of them in a file: NO fence in it is exempt, so prose
+# is never skipped (fail-safe; the cost is a WARN on a fenced word, never a hidden one).
+UNSAFE_FENCE = re.compile(
+    r"^[ \t]*(?:(?:[-*+]|\d{1,9}[.)])[ \t]+|>[ \t]?)+(?:`{3,}|~{3,})"   # in a list item / quote
+    r"|^(?: {0,3}\t| {4,})[ \t]*(?:`{3,}|~{3,})"                       # tab or 4+ spaces first
+    r"|^ {0,3}`{3,}(?!`)[^`]*`")                                      # backtick in the info string
+HTML_OPEN = re.compile(r"^ {0,3}<(?:[A-Za-z][A-Za-z0-9-]*|!--|\?|![A-Za-z]|!\[CDATA\[|/[A-Za-z])")
+ONE_LINE_COMMENT = re.compile(r"^ {0,3}<!--.*-->\s*$")  # e.g. <!-- glossary -->: ends on its own line
+
+
+def lines(text: str) -> list[str]:
+    """Lines as git and CommonMark count them: split on "\n" only. str.splitlines() also
+    breaks on U+2028, U+0085, \\x0b, \\x0c, \\x1c-\\x1e and a lone \\r, which shifted every
+    exempt range below it by a line (Hub, #56: an evasion)."""
+    return text.split("\n")
+
+
+def fences_unsafe(text: str) -> bool:
+    if re.search(r"\r(?!\n)", text):  # a lone CR ends a line for CommonMark, not for git
+        return True
+    for line in lines(text):
+        if UNSAFE_FENCE.match(line):
+            return True
+        if HTML_OPEN.match(line) and not ONE_LINE_COMMENT.match(line):
+            return True
+    return False
 
 
 def path_ok(path: str) -> bool:
@@ -74,7 +104,7 @@ def glossary_lines(text: str) -> set[int]:
     """1-based line numbers inside CLOSED <!-- glossary --> blocks (markers included).
     An unclosed block exempts nothing: a stray opener must not silence a whole file."""
     out, start = set(), None
-    for n, line in enumerate(text.splitlines(), 1):
+    for n, line in enumerate(lines(text), 1):
         s = line.strip()
         if s == OPEN and start is None:
             start = n
@@ -87,9 +117,12 @@ def glossary_lines(text: str) -> set[int]:
 def fenced_lines(text: str) -> set[int]:
     """1-based line numbers inside CLOSED fenced code blocks (fences included). The closing
     fence uses the same character, at least as many, and nothing after it (CommonMark).
-    Unclosed: exempts nothing, like an unclosed glossary block."""
+    Unclosed: exempts nothing, like an unclosed glossary block. A file with any shape this
+    pairing can't judge (fences_unsafe) exempts nothing at all."""
+    if fences_unsafe(text):
+        return set()
     out, start, fence = set(), None, ""
-    for n, line in enumerate(text.splitlines(), 1):
+    for n, line in enumerate(lines(text), 1):
         m = FENCE.match(line)
         if start is None:
             if m:
@@ -137,6 +170,8 @@ def cached(key: str, scan) -> list:
     try:
         return cg.cached_scan(key, scan)
     except Unread as e:
+        if e.found:  # posted but not final: remember that this head HAD findings, so a later
+            cg.cached_scan(f"{key}:unread", lambda: e.found)  # readable pass can clear it
         return e.found
 
 
@@ -185,7 +220,8 @@ def scan_patch(path: str, patch: str | None, read, strict: bool = False) -> list
     if not patch or not path_ok(path):
         return []
     found, line = [], 0
-    for raw in patch.splitlines():
+    for raw in lines(patch):
+        raw = raw[:-1] if raw.endswith("\r") else raw
         m = cg.HUNK.match(raw)
         if m:
             line = int(m.group(1))
@@ -199,6 +235,11 @@ def scan_patch(path: str, patch: str | None, read, strict: bool = False) -> list
         elif not raw.startswith("-"):
             line += 1
     return drop_glossary(found, read, strict) if found else []
+
+
+def checked(pr_files: list[dict]) -> int:
+    """*.md files in a PR whose diff GitHub did send."""
+    return sum(1 for x in pr_files if path_ok(x["f"]) and x.get("p"))
 
 
 def unchecked(pr_files: list[dict]) -> int:
@@ -225,14 +266,18 @@ def scan_pr(full: str, sha: str, pr_files: list[dict], read) -> list:
     return cached(f"birth-pub:{full}:{sha}:{FINGERPRINT}", scan)
 
 
-def status_for(findings, whole_tree: bool = False, grant=(), unchecked: int = 0):
+def status_for(findings, whole_tree: bool = False, grant=(), unchecked: int = 0, checked: int = 1):
     """Same contract as compute_guard.status_for: `grant` findings never block.
-    unchecked: *.md files whose diff GitHub omitted (public path); named, never blocking."""
+    unchecked: *.md files whose diff GitHub omitted (public path); named, never blocking.
+    checked: *.md files whose diff WAS read; 0 with unchecked > 0 means nothing was read,
+    so the status must not say OK (Hub, #56)."""
     note = f" (+{unchecked} .md not checked: no diff)" if unchecked else ""
     if not findings and grant:
         g, n = grant[0], len(grant)
         return "success", fit(f"⚠ WARN (Grant-owned, not blocking): {n} retired term(s) added{note}, e.g. {g.path}:{g.line}"), g
     if not findings:
+        if unchecked and not checked:
+            return "success", f"NOT CHECKED: GitHub omitted the diff of all {unchecked} .md file(s); nothing was read", None
         if unchecked:
             return "success", f"OK in checked lines; {unchecked} .md file(s) not checked (GitHub omitted the diff)", None
         return "success", "OK: no retired agent-birth words added", None
@@ -257,7 +302,7 @@ def main(argv: list[str]) -> int:
     for p in argv[1:]:
         text = Path(p).read_text(errors="replace")
         inside = exempt_lines(text)
-        for n, line in enumerate(text.splitlines(), 1):
+        for n, line in enumerate(lines(text), 1):
             if n in inside or not path_ok(p):
                 continue
             for kind, match in scan_line(p, line):

@@ -298,7 +298,17 @@ def test_pr_pass_posts_a_not_checked_note_when_github_omits_an_md_diff(monkeypat
     rg.cmd_pr(["sneakyfree"], post=True)
     bt_posts = [c for c in calls if "context=windy-git/birth-terms" in c]
     assert len(bt_posts) == 1 and "state=success" in bt_posts[0]
-    assert "1 .md file(s) not checked" in [a for a in bt_posts[0] if a.startswith("description=")][0]
+    desc = [a for a in bt_posts[0] if a.startswith("description=")][0]
+    assert "NOT CHECKED: GitHub omitted the diff of all 1 .md file(s)" in desc and "OK" not in desc
+
+
+def test_not_checked_reads_ok_only_when_some_md_diff_was_read(monkeypatch, tmp_path):
+    rows = ('{"f": "docs/huge.md", "p": null, "s": "modified", "c": 40000}\n'
+            '{"f": "docs/small.md", "p": "@@ -0,0 +1 @@\\n+plain words", "s": "added", "c": 1}\n')
+    calls = _bt_world(monkeypatch, tmp_path, rows)
+    rg.cmd_pr(["sneakyfree"], post=True)
+    post = [c for c in calls if "context=windy-git/birth-terms" in c][0]
+    assert any(a.startswith("description=OK in checked lines; 1 .md file(s) not checked") for a in post)
 
 
 def test_pr_pass_splits_grant_owned_prose_on_the_public_path(monkeypatch, tmp_path):

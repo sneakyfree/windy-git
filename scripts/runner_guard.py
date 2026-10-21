@@ -286,7 +286,8 @@ def cmd_pr(owners, post: bool) -> int:
             bt = birth_terms.scan_pr(full, sha, pf, lambda p, s=src, h=sha: _text_or_none(s, p, h))
             lane, grant = grant_split(full, sha, bt)
             nun = birth_terms.unchecked(pf)
-            bstate, bdesc, _ = birth_terms.status_for(lane, grant=grant, unchecked=nun)
+            bstate, bdesc, _ = birth_terms.status_for(lane, grant=grant, unchecked=nun,
+                                                      checked=birth_terms.checked(pf))
             bkey = f"{full}@{sha}:{BT_CTX}:{bstate}:{bdesc}"
             seen.add(bkey)
             # only when there is something to say (secondary rate limit), or to clear a status
