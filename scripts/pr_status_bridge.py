@@ -571,6 +571,7 @@ def _verdict_text(r: dict) -> str:
 
 GUARD_CTX = "windy-git/compute-guard"
 HYGIENE_CTX = "windy-git/ci-hygiene"
+BIRTH_CTX = "windy-git/birth-terms"
 SECRET_CTX = "windy-git/secret-guard"
 
 
@@ -587,6 +588,11 @@ def post_secret_guard(repo: str, sha: str, default_branch: str, is_default_head:
 def post_ci_hygiene(repo: str, sha: str, default_branch: str, is_default_head: bool) -> None:
     """House rule 6: lockfile-only installs, pinned images, no host-port services (warn-only)."""
     _post_guard("ci_hygiene", HYGIENE_CTX, repo, sha, default_branch, is_default_head)
+
+
+def post_birth_terms(repo: str, sha: str, default_branch: str, is_default_head: bool) -> None:
+    """Retired agent-birth words in added *.md prose (Grant 10-21 glossary; warn-only)."""
+    _post_guard("birth_terms", BIRTH_CTX, repo, sha, default_branch, is_default_head)
 
 
 def _post_guard(modname: str, ctx: str, repo: str, sha: str, default_branch: str,
@@ -691,6 +697,7 @@ def main() -> int:
                 post_autorerun_note(repo, sha)
                 post_compute_guard(repo, sha, default_branch, sha == default_head)
                 post_ci_hygiene(repo, sha, default_branch, sha == default_head)
+                post_birth_terms(repo, sha, default_branch, sha == default_head)
                 post_secret_guard(repo, sha, default_branch, sha == default_head)
         except Exception as e:  # one repo's failure must not hide the others'
             print(f"  FAILED {repo}: {e}")
