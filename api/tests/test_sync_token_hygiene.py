@@ -158,6 +158,7 @@ def _run(world: Path, server: _Server, timeout_s="300", **extra):
         "SYNC_REPOS": "demo",
         "SYNC_NO_TAGS": "",
         "SYNC_CI_NET_PRUNE": "0",  # no dind in the test world
+        "SYNC_REAP": "0",
         "SYNC_WORK": str(world / "work"),
         "GITHUB_GIT_BASE": f"{server.base}/gh",
         "WG_GIT_BASE": f"{server.base}/wg",
