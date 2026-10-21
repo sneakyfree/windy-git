@@ -437,3 +437,39 @@ def test_ci_network_prune_runs_every_sync_and_never_fails_it(world):
     assert "ci network prune failed or timed out (non-fatal)" in out
     assert log.read_text().split() == ["exec", "windy-git-runner-dind-1", "docker", "-H", "tcp://127.0.0.1:2375",
                                        "network", "prune", "-f", "--filter", "until=15m"]
+
+
+def test_push_loop_takes_the_rerun_lock_and_never_leaves_it_held(world):
+    # rerun_ci.sh rewinds only while it holds $WORK/.push.lock; the sync holds it for its push
+    # loop alone. A holder that never lets go costs SYNC_PUSH_LOCK_WAIT, then the sync pushes anyway.
+    import fcntl
+    server = _Server(world / "srv")
+    try:
+        rc, out, _ = _run(world, server)
+        assert rc == 0, out
+        lock = world / "work" / ".push.lock"
+        with open(lock, "w") as fh:                              # free after a pass: nothing kept it
+            fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            rc, out, _ = _run(world, server, SYNC_PUSH_LOCK_WAIT="1")
+    finally:
+        server.close()
+    assert rc == 0, out
+    assert "push lock busy for 1 s (a rerun_ci.sh rewind?); pushing anyway" in out and "demo ok" in out
+
+
+def test_the_lock_is_free_while_the_bridge_runs(world):
+    # The point of the lock: the long post-push phase (the PR bridge, ~3.5 min) must not hold it.
+    probe = world / "bridge-saw"
+    (world / "scripts" / "pr_status_bridge.py").write_text(
+        "import fcntl\n"
+        f"fh = open({str(world / 'work' / '.push.lock')!r}, 'w')\n"
+        "try:\n    fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB); r = 'free'\n"
+        "except OSError:\n    r = 'held'\n"
+        f"open({str(probe)!r}, 'w').write(r)\n")
+    server = _Server(world / "srv")
+    try:
+        rc, out, _ = _run(world, server)
+    finally:
+        server.close()
+    assert rc == 0, out
+    assert probe.read_text() == "free"

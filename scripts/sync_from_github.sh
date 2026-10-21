@@ -95,7 +95,7 @@ git_authed() {
     GIT_CONFIG_KEY_2=credential.helper GIT_CONFIG_VALUE_2= \
     GIT_CONFIG_KEY_3=http.lowSpeedLimit GIT_CONFIG_VALUE_3=1000 \
     GIT_CONFIG_KEY_4=http.lowSpeedTime GIT_CONFIG_VALUE_4=60 \
-    timeout -k 10 "${T:-$GIT_TIMEOUT}" git "$@"
+    timeout -k 10 "${T:-$GIT_TIMEOUT}" git "$@" 9>&-  # a straggler must never keep the push lock
 }
 timed_out() { [[ $1 -eq 124 || $1 -eq 137 ]]; }
 why() { timed_out "$1" && echo " (timed out after ${2:-$GIT_TIMEOUT}s)"; }
@@ -136,6 +136,15 @@ umask 077
 mkdir -p "$WORK" && chmod 0750 "$WORK"
 log() { printf '[sync %s] %s\n' "$(date -u +%H:%M:%SZ)" "$*"; }
 
+# rerun_ci.sh rewinds a branch so the NEXT push re-fires CI; it must not do that while this
+# loop is pushing. It used to wait for the whole sync to be idle, but passes now take ~5 min
+# (the PR bridge), back to back, so it starved (10-21: Chat #451 and autorerun both timed
+# out). It now takes this lock instead, which only the push loop holds (~1.5 min).
+PUSH_LOCK="$WORK/.push.lock"
+exec 9>"$PUSH_LOCK"
+LOCK_WAIT="${SYNC_PUSH_LOCK_WAIT:-120}"
+flock -w "$LOCK_WAIT" 9 || log "push lock busy for ${LOCK_WAIT} s (a rerun_ci.sh rewind?); pushing anyway"
+
 for r in $REPOS; do
   bare="$WORK/${r}.git"
   src="${GH_GIT}/${GH_OWNER}/${r}.git"
@@ -172,6 +181,7 @@ for r in $REPOS; do
     rc=$?; log "FAILED push $r -> windy git$(why $rc)"; FAILED=1
   fi
 done
+flock -u 9  # the push loop is over: rerun_ci.sh may rewind now
 
 # Jobs that name labels no runner has (ubuntu/macos/windows-latest) would wait
 # forever and invisibly; cancel them after 30 min. Never fails the sync.
