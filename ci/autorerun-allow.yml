@@ -15,6 +15,7 @@ repos:
   windy-call: [adr-046-lint.yml, canonical-domains-lint.yml, ci.yml]
   windy-chat: [actionlint.yml, adr-046-lint.yml, canonical-domains-lint.yml, ci.yml]
   windy-clone: [adr-046-lint.yml, canonical-domains-lint.yml, ci.yml]
+  windy-clone-site: [ci.yml]
   windy-cloud-domains: [ci.yml]
   windy-cloud-sites: [ci.yml]
   windy-cloud-vps: [ci.yml]
