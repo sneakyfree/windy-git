@@ -141,24 +141,16 @@ allow:
 
   - repo: Windy-Clone
     paths:
-      - ".env.example"
-      - ".env.production.example"
       - "api/app/providers/elevenlabs.py"
-      - "api/app/providers/heygen.py"
-      - "api/app/providers/resembleai.py"
       - "api/app/services/connect.py"
-      - "api/ops-hook/deploy/ops-hook.env.example"
-      - "docker-compose.yml"
-      - "scripts/smoke-test.sh"
-    # voice-ai host + voice-ai key lines only, in today's 9 files; any other kind or file still flags
+    # BYOC only: the PERSON's own ElevenLabs key (adapter + key check), dark. voice-ai host lines only.
     matches:
-      - 'api\.deepgram\.com|api\.elevenlabs\.io|api\.cartesia\.ai|api\.play\.?ht(\.com)?|resemble\.ai|api\.heygen\.com|vision\.googleapis\.com|speech\.googleapis\.com|texttospeech\.googleapis\.com'
-      - '\b(?:DEEPGRAM|ELEVENLABS|ELEVEN|CARTESIA|PLAYHT|PLAY_HT|RESEMBLE|HEYGEN)_API_KEY\b|\bPLAYHT_USER_ID\b'
-    reason: "ElevenLabs integration live and paid; Hub route ruling pending. Dated: lapses on its own (D8 dry run 10-14)."
+      - 'api\.elevenlabs\.io'
+    reason: "BYOC ElevenLabs adapter on the person's own key (dark). Operator path retired (Windy-Clone #117). Hub ruling 2026-10-21T01:51:03Z (3): scoped to the BYOC lines; ends if BYOC is removed."
     exemption: owner-approved
     approved_by: windy-hub
-    approved_on: 2026-10-14
-    expires: 2026-10-28
+    approved_on: 2026-10-21
+    expires: 2027-01-19
 
   - repo: windy-pro
     paths:
