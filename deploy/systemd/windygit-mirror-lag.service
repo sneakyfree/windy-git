@@ -1,0 +1,11 @@
+[Unit]
+Description=Check every Windy Git pull mirror is in step with GitHub (reads only)
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/srv/windygit/src
+EnvironmentFile=/etc/windygit/sync.env
+ExecStart=/usr/bin/python3 /srv/windygit/src/scripts/mirror_lag.py
+TimeoutStartSec=600
+Nice=10

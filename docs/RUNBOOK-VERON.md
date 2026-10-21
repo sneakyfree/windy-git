@@ -89,6 +89,7 @@ sudo ss -tlnp | grep -E "3080|8600"                   # both must be 127.0.0.1
 | `windygit-sync.timer` | every 5 min (`OnUnitActiveSec`) | GitHub → Windy Git for `REPOS` in `scripts/sync_from_github.sh`, then `scripts/pr_status_bridge.py` (mirror PRs + GitHub commit statuses). A manual `systemctl start` RESETS the 5-min clock. |
 | `windygit-backup.timer` | nightly | `git bundle` + pg_dump → R2, 30-day retention |
 | `windygit-ci-prune.timer` | every 6 h | `deploy/runner/prune.sh` — CI dind storage, 60 GB cap |
+| `windygit-mirror-lag.timer` | hourly | `scripts/mirror_lag.py`: every pull mirror vs GitHub (stale refresh, head behind, source unreadable); reads only. Heartbeat `windygit-mirror-lag` (windy-uptime heartbeats-veron) goes red while any mirror lags. |
 | `windygit-tunnel.service` | always | the only ingress |
 
 ## CI (Gitea Actions) — see `docs/CUTOVER.md` for onboarding a repo
