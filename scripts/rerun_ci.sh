@@ -10,8 +10,8 @@
 # commit. Every workflow on that event re-runs, not only the failed one.
 #
 # Safety: refuses unless the branch is exactly at <sha-prefix> (GitHub's head),
-# never rewinds while a sync is running (a run already past this repo would
-# not push it back), waits for a sync that STARTS after the rewind, and if the
+# never rewinds while the sync's push loop runs (it takes that loop's lock),
+# waits for a sync that STARTS after the rewind, and if the
 # branch is not verifiably back at <sha-prefix> by the deadline, restores it
 # itself, so Windy Git is never left behind GitHub.
 set -euo pipefail
@@ -25,13 +25,16 @@ head=$($G rev-parse "refs/heads/${branch}")
 [[ "$head" == "$want"* ]] || { echo "refusing: ${branch} is at ${head:0:7}, not ${want}"; exit 1; }
 parent=$($G rev-parse "${head}^")
 
-# NOT `systemctl is-active`: the sync is Type=oneshot, which reads "activating"
-# (exit 3) for its whole run, so is-active says "idle" mid-run.
-busy() { case "$(systemctl show windygit-sync -p ActiveState --value)" in
-  activating|active|deactivating|reloading) return 0;; esac; return 1; }
-while busy; do sleep 5; done
+# Never rewind while the sync's push loop runs: take the lock that loop holds (not "wait until
+# the sync is idle": passes run back to back now and that wait starved, 10-21). A pass that
+# is past its push loop won't push again; the wait below needs a pass that STARTS after the
+# rewind, so the branch always comes back.
+exec 9>"${SYNC_WORK:-/srv/windygit/sync}/.push.lock"
+wait_s="${RERUN_LOCK_WAIT:-600}"
+flock -w "$wait_s" 9 || { echo "refusing: the sync's push loop held its lock for ${wait_s} s"; exit 1; }
 $G update-ref "refs/heads/${branch}" "$parent" "$head"
 mark=$(awk '{print int($1*1000000)}' /proc/uptime)
+flock -u 9
 echo "rewound ${repo}:${branch} ${head:0:7} -> ${parent:0:7}"
 
 deadline=$(( $(date +%s) + 900 ))
