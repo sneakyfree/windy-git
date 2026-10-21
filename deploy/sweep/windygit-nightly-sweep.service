@@ -1,0 +1,8 @@
+[Unit]
+Description=Windy Git nightly sweep: guards status, runner guard, contract drift, merge audit, public secret scan (Mondays). Moved from Windy 0 2026-10-21.
+
+[Service]
+Type=oneshot
+ExecStart=%h/.local/share/windygit-sweep/bin/nightly-sweep.sh
+TimeoutStartSec=9000
+Nice=10
