@@ -24,6 +24,7 @@ repos:
   windy-contracts: [check.yml]
   windy-drops: [canonical-domains-lint.yml, ci.yml]
   windy-hand: [ci.yml]
+  windy-admin: [ci.yml]
   windy-inbox: [canonical-domains-lint.yml, ci.yml]
   windy-mail: [canonical-domains-lint.yml, ci.yml, web.yml]
   windy-mind: [adr-046-lint.yml, canonical-domains-lint.yml, migrations.yml, tests.yml]
