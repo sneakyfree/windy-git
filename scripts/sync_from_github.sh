@@ -43,6 +43,11 @@ WG_GIT="${WG_GIT_BASE:-https://${WG}}"
 # One hung transfer must not stall every repo behind it (10-10: a windy-call
 # fetch hung 5 min, holding the bridge and every lane's CI statuses).
 GIT_TIMEOUT="${SYNC_GIT_TIMEOUT:-300}"
+# An incremental fetch of an existing clone is seconds; one that hangs before any data
+# flows (lowSpeed* never trips) used to cost the whole 300 s and delay every repo after
+# it (10-21 14:04Z: windy-agent; windy-pro and windy-calendar waited 10+ min). It gets
+# FETCH_TIMEOUT and ONE retry on a fresh connection, which is what usually clears it.
+FETCH_TIMEOUT="${SYNC_FETCH_TIMEOUT:-90}"
 FAILED=0
 
 # Repos Windy Git tracks FROM GitHub. Remove a repo from this list at the moment
@@ -90,9 +95,10 @@ git_authed() {
     GIT_CONFIG_KEY_2=credential.helper GIT_CONFIG_VALUE_2= \
     GIT_CONFIG_KEY_3=http.lowSpeedLimit GIT_CONFIG_VALUE_3=1000 \
     GIT_CONFIG_KEY_4=http.lowSpeedTime GIT_CONFIG_VALUE_4=60 \
-    timeout -k 10 "$GIT_TIMEOUT" git "$@"
+    timeout -k 10 "${T:-$GIT_TIMEOUT}" git "$@"
 }
-why() { [[ $1 -eq 124 || $1 -eq 137 ]] && echo " (timed out after ${GIT_TIMEOUT}s)"; }
+timed_out() { [[ $1 -eq 124 || $1 -eq 137 ]]; }
+why() { timed_out "$1" && echo " (timed out after ${2:-$GIT_TIMEOUT}s)"; }
 
 prune_gone() {  # prune_gone <repo> <bare>
   local r=$1 bare=$2 dst="${WG_GIT}/${WG_OWNER}/${1}.git" gone heads b sha n=0 kept=0 checks=0 last="" rc
@@ -146,8 +152,14 @@ for r in $REPOS; do
   # `--mirror` would also carry refs/pull/* (GitHub's read-only PR refs, which
   # Gitea rejects) and every remote-tracking ref, turning a working sync into a
   # wall of errors that hides the one that matters.
-  git_authed --git-dir="$bare" fetch --quiet --prune origin '+refs/heads/*:refs/heads/*' '+refs/tags/*:refs/tags/*' 2>/dev/null \
-    || { rc=$?; log "FAILED fetch $r$(why $rc)"; FAILED=1; continue; }
+  fetch() { T="$FETCH_TIMEOUT" git_authed --git-dir="$bare" fetch --quiet --prune origin \
+              '+refs/heads/*:refs/heads/*' '+refs/tags/*:refs/tags/*' 2>/dev/null; }
+  rc=0; fetch || rc=$?
+  if timed_out "$rc"; then
+    log "$r: fetch timed out after ${FETCH_TIMEOUT}s; retrying once"
+    rc=0; fetch || rc=$?
+  fi
+  (( rc == 0 )) || { log "FAILED fetch $r$(why $rc "$FETCH_TIMEOUT")"; FAILED=1; continue; }
 
   before="$(git --git-dir="$bare" rev-parse HEAD 2>/dev/null || echo none)"
 
