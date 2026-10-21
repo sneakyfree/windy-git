@@ -64,7 +64,11 @@ NO_TAGS="${SYNC_NO_TAGS:-windy-pro}"
 # only here. With SYNC_PRUNE_GONE=1, after each push, a branch that Windy Git has
 # and GitHub no longer has is deleted on Windy Git ONLY if GitHub still holds its
 # commit (scripts/github_has_commit.py exits 0). Every doubt keeps the branch.
-# At most SYNC_PRUNE_MAX deletions per repo per run, to spare the shared GitHub quota.
+# At most SYNC_PRUNE_MAX GitHub checks (one API call each) per repo per run, to spare
+# the shared GitHub quota. A per-repo cursor in $WORK/prune-cursor.<repo> makes the next
+# run start after the last branch checked (wrapping at the end), so a backlog drains
+# instead of re-checking the same kept branches every 5 min. The delete carries a lease
+# on the checked sha: a branch moved on Windy Git after the check is left alone.
 PRUNE_GONE="${SYNC_PRUNE_GONE:-0}"
 PRUNE_MAX="${SYNC_PRUNE_MAX:-25}"
 
@@ -91,25 +95,33 @@ git_authed() {
 why() { [[ $1 -eq 124 || $1 -eq 137 ]] && echo " (timed out after ${GIT_TIMEOUT}s)"; }
 
 prune_gone() {  # prune_gone <repo> <bare>
-  local r=$1 bare=$2 dst="${WG_GIT}/${WG_OWNER}/${1}.git" gone heads b sha n=0 kept=0 rc
+  local r=$1 bare=$2 dst="${WG_GIT}/${WG_OWNER}/${1}.git" gone heads b sha n=0 kept=0 checks=0 last="" rc
+  local cursor="$WORK/prune-cursor.${1}" cur=""
   gone="$(git_authed --git-dir="$bare" push --dry-run --porcelain --prune "$dst" \
             '+refs/heads/*:refs/heads/*' '^refs/heads/archive/*' 2>/dev/null \
           | awk -F'\t' '$1 == "-" { sub(/^:refs\/heads\//, "", $2); print $2 }' \
-          | grep -v '^archive/' || true)"
-  [[ -n "$gone" ]] || return 0
+          | grep -v '^archive/' | LC_ALL=C sort || true)"
+  [[ -n "$gone" ]] || { rm -f "$cursor"; return 0; }
   heads="$(git_authed ls-remote --heads "$dst" 2>/dev/null)" || { log "$r: prune skipped (cannot list Windy Git branches)"; return 0; }
+  [[ -f "$cursor" ]] && cur="$(cat "$cursor")"
+  # Branches after the cursor first, then wrap round to the start.
+  gone="$(LC_ALL=C awk -v c="$cur" '$0 > c' <<<"$gone"; LC_ALL=C awk -v c="$cur" '$0 <= c' <<<"$gone")"
   while IFS= read -r b; do
-    (( n >= PRUNE_MAX )) && break
+    [[ -n "$b" ]] || continue
+    (( checks >= PRUNE_MAX )) && break
     sha="$(awk -F'\t' -v ref="refs/heads/$b" '$2 == ref { print $1 }' <<<"$heads")"
     [[ -n "$sha" ]] || continue
+    checks=$((checks + 1)); last=$b
     rc=0; python3 "$(dirname "$0")/github_has_commit.py" "$r" "$sha" || rc=$?
-    if (( rc == 0 )); then
-      git_authed --git-dir="$bare" push --quiet "$dst" ":refs/heads/$b" 2>/dev/null && n=$((n + 1))
+    if (( rc == 0 )) && git_authed --git-dir="$bare" push --quiet --force-with-lease="refs/heads/$b:$sha" \
+         "$dst" ":refs/heads/$b" 2>/dev/null; then
+      n=$((n + 1))
     else
       kept=$((kept + 1))
     fi
   done <<<"$gone"
-  (( n || kept )) && log "$r: pruned $n branch(es) GitHub deleted; kept $kept (commit not confirmed on GitHub)"
+  [[ -n "$last" ]] && printf '%s\n' "$last" > "$cursor"
+  (( n || kept )) && log "$r: pruned $n branch(es) GitHub deleted; kept $kept (commit not confirmed on GitHub, or the branch moved)"
   return 0
 }
 

@@ -4,6 +4,10 @@
 Exit 0 = yes (GitHub answered 200 for the commit), 1 = no (404/422), 2 = could not
 tell (any other answer, a timeout, no token). The sync deletes a Windy Git branch
 that GitHub deleted only on exit 0, so every doubt keeps the branch.
+
+A 200 means GitHub holds the commit NOW. An unreachable commit (its branch deleted
+and no PR ref pointing at it) can still answer 200 until GitHub garbage-collects
+it, so this is not a promise that GitHub keeps it forever.
 """
 from __future__ import annotations
 

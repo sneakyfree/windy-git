@@ -9,6 +9,7 @@ here=$(dirname "$(readlink -f "$0")")
 . "$here/common.sh"
 state=$STATE/public-secret-scan.json
 json=~/leakscan/public-latest.json
+mkdir -p ~/leakscan
 page=$(mktemp); trap 'rm -f "$page"' EXIT
 (cd /srv/windygit/src && timeout 7000 python3 scripts/public_secret_scan.py --out "$json") >/dev/null
 new=$(python3 - "$json" "$page" "$state" <<'PY'

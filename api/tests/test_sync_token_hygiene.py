@@ -338,3 +338,47 @@ def test_prune_never_deletes_an_archive_branch_on_windy_git(world):
         server.close()
     assert (rc, rc2) == (0, 0), out + out2
     assert _wg_heads(world) == ["archive/old", "feat/x", "main"]
+
+
+def _gh_branch_with_own_commit(world: Path, name: str) -> str:
+    gh = str(world / "srv/gh/o/demo.git")
+    sha = subprocess.run(
+        ["git", "--git-dir", gh, "-c", "user.email=t@t", "-c", "user.name=t",
+         "commit-tree", "main^{tree}", "-p", "main", "-m", name],
+        capture_output=True, text=True, check=True,
+    ).stdout.strip()
+    _git("--git-dir", gh, "branch", name, sha)
+    return sha
+
+
+def test_prune_caps_github_checks_and_resumes_after_the_last_one(world):
+    shas = {b: _gh_branch_with_own_commit(world, b) for b in ("g1", "g2", "g3")}
+    calls = _has_commit_stub(world, 1)  # GitHub never confirms: every branch is kept
+    server = _Server(world / "srv")
+    try:
+        _run(world, server, SYNC_PRUNE_GONE="1", SYNC_PRUNE_MAX="2")
+        _delete_on_github(world, "g1", "g2", "g3")
+        _run(world, server, SYNC_PRUNE_GONE="1", SYNC_PRUNE_MAX="2")
+        first = calls.read_text().split("\n")[:-1]
+        _run(world, server, SYNC_PRUNE_GONE="1", SYNC_PRUNE_MAX="2")
+        second = calls.read_text().split("\n")[:-1][len(first):]
+    finally:
+        server.close()
+    assert first == [f"demo {shas['g1']}", f"demo {shas['g2']}"]  # 2 checks, not 3
+    assert second == [f"demo {shas['g3']}", f"demo {shas['g1']}"]  # resumes after g2, then wraps
+    assert {"g1", "g2", "g3"} <= set(_wg_heads(world))
+
+
+def test_prune_leaves_a_branch_that_moved_on_windy_git_after_the_check(world):
+    # The lease: the stub says "GitHub has it", but first moves the branch on Windy Git,
+    # as a push landing between ls-remote and the delete would.
+    wg = str(world / "srv/wg/windyadmin/demo.git")
+    moved = _gh_branch_with_own_commit(world, "elsewhere")
+    (world / "scripts/github_has_commit.py").write_text(
+        "import subprocess, sys\n"
+        f"subprocess.run(['git', '--git-dir', {wg!r}, 'update-ref', 'refs/heads/feat/x', {moved!r}], check=True)\n"
+        "sys.exit(0)\n"
+    )
+    out, _ = _two_runs(world, ("feat/x",), SYNC_PRUNE_GONE="1")
+    assert "feat/x" in _wg_heads(world)
+    assert "pruned 0 branch(es) GitHub deleted; kept 1" in out
