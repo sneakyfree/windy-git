@@ -27,6 +27,7 @@ repos:
   windy-inbox: [canonical-domains-lint.yml, ci.yml]
   windy-mail: [canonical-domains-lint.yml, ci.yml, web.yml]
   windy-mind: [adr-046-lint.yml, canonical-domains-lint.yml, migrations.yml, tests.yml]
+  windy-mind-acp: [ci.yml]
   windy-pro: [adr-046-lint.yml, canonical-domains-lint.yml, ci.yml]
   windy-pro-mobile: [canonical-domains-lint.yml, test.yml]
   windy-registry: [canonical-domains-lint.yml, ci.yml]
