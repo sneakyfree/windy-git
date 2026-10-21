@@ -24,7 +24,8 @@ import sys
 import urllib.error
 import urllib.request
 
-API = os.environ.get("GITHUB_GRAPHQL_URL", "https://api.github.com/graphql")
+# Not GITHUB_GRAPHQL_URL: CI runners set that one, sometimes to "" (10-21 gate run 46066).
+API = os.environ.get("WINDYGIT_GITHUB_GRAPHQL_URL") or "https://api.github.com/graphql"
 OWNER = os.environ.get("GITHUB_OWNER", "sneakyfree")
 _NAME = re.compile(r"^[A-Za-z0-9._-]{1,100}$")
 QUERY = "query($o:String!,$n:String!,$s:GitObjectID!){repository(owner:$o,name:$n){object(oid:$s){oid}}}"
@@ -37,17 +38,17 @@ def main(argv: list[str]) -> int:
     if not token:
         return 2
     body = json.dumps({"query": QUERY, "variables": {"o": OWNER, "n": argv[0], "s": argv[1]}}).encode()
-    req = urllib.request.Request(
-        API,
-        data=body,
-        headers={
-            "Authorization": f"bearer {token}",
-            "Content-Type": "application/json",
-            # urllib's default UA is 403'd as a bot by GitHub's edge.
-            "User-Agent": "windy-git-sync",
-        },
-    )
     try:
+        req = urllib.request.Request(
+            API,
+            data=body,
+            headers={
+                "Authorization": f"bearer {token}",
+                "Content-Type": "application/json",
+                # urllib's default UA is 403'd as a bot by GitHub's edge.
+                "User-Agent": "windy-git-sync",
+            },
+        )
         with urllib.request.urlopen(req, timeout=30) as r:
             if r.status != 200:
                 return 2

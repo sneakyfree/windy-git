@@ -65,3 +65,18 @@ def test_bad_input_or_no_token_cannot_tell(monkeypatch):
     assert hc.main(['bad"name', SHA]) == 2
     monkeypatch.delenv("GITHUB_TOKEN")
     assert hc.main(["windy-pro", SHA]) == 2
+
+
+def test_an_empty_github_graphql_url_from_ci_is_ignored(monkeypatch):
+    # Gitea/GitHub runners export GITHUB_GRAPHQL_URL, sometimes empty: it must not be used.
+    monkeypatch.setenv("GITHUB_GRAPHQL_URL", "")
+    spec = importlib.util.spec_from_file_location("ghc_env", ROOT / "scripts" / "github_has_commit.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod.API == "https://api.github.com/graphql"
+
+
+def test_a_bad_url_is_cannot_tell_not_a_crash(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "t")
+    monkeypatch.setattr(hc, "API", "")
+    assert hc.main(["windy-pro", SHA]) == 2
