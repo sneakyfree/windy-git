@@ -37,9 +37,9 @@ def answer(monkeypatch, payload=None, exc=None, seen=None):
     monkeypatch.setenv("GITHUB_TOKEN", "t")
 
 
-def test_yes_when_github_returns_the_object(monkeypatch):
+def test_yes_when_github_returns_the_commit_and_a_pr_keeps_it(monkeypatch):
     seen = []
-    answer(monkeypatch, {"data": {"repository": {"object": {"oid": SHA}}}}, seen=seen)
+    answer(monkeypatch, {"data": {"repository": {"object": {"oid": SHA, "associatedPullRequests": {"totalCount": 1}}}}}, seen=seen)
     assert hc.main(["windy-pro", SHA]) == 0
     assert seen[0]["variables"] == {"o": "sneakyfree", "n": "windy-pro", "s": SHA}
     assert "graphql" in hc.API
@@ -79,4 +79,15 @@ def test_an_empty_github_graphql_url_from_ci_is_ignored(monkeypatch):
 def test_a_bad_url_is_cannot_tell_not_a_crash(monkeypatch):
     monkeypatch.setenv("GITHUB_TOKEN", "t")
     monkeypatch.setattr(hc, "API", "")
+    assert hc.main(["windy-pro", SHA]) == 2
+
+
+def test_present_but_in_no_pr_is_no(monkeypatch):
+    # Hub 10-21: a commit GitHub still answers for but no PR holds can be garbage-collected.
+    answer(monkeypatch, {"data": {"repository": {"object": {"oid": SHA, "associatedPullRequests": {"totalCount": 0}}}}})
+    assert hc.main(["windy-pro", SHA]) == 1
+
+
+def test_missing_pr_count_cannot_tell(monkeypatch):
+    answer(monkeypatch, {"data": {"repository": {"object": {"oid": SHA}}}})
     assert hc.main(["windy-pro", SHA]) == 2
