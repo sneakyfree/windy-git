@@ -43,5 +43,6 @@ repos:
   windy-vault: [check.yml]
   windycloud: [canonical-domains-lint.yml, ci.yml]
   windytalk: [ci.yml]
+  windytalk-site: [build.yml]
   windytranslate-site: [build.yml]
   windytraveler-site: [build.yml]
