@@ -185,3 +185,16 @@ allow:
     approved_by: windy-hub
     approved_on: 2026-10-23
     expires: 2027-01-21
+
+  - repo: windy-mind-site
+    paths:
+      - "dev/token-mock.mjs"
+    # Local dev/test stand-in for Mind's token API (127.0.0.1 only). OPENAI_API_KEY is the SDK
+    # env-var NAME in a fake "setup" line pointed at api.windymind.ai with a fake wm_ key.
+    matches:
+      - 'OPENAI_API_KEY'
+    reason: "dev mock of Mind's token API (contracts/mind-token.v1.json): the SDK env-var name in a fake setup line pointed at api.windymind.ai; no provider call, fake key (Mind, 10-23)."
+    exemption: owner-approved
+    approved_by: windy-hub
+    approved_on: 2026-10-23
+    expires: 2027-01-21
