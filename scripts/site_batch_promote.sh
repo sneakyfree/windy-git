@@ -27,19 +27,47 @@ PLAN=(
 )
 A=http://localhost:3080/api/v1
 umask 077; W=$(mktemp -d /dev/shm/sitebatch.XXXX); trap 'shred -u "$W/h" 2>/dev/null; rm -rf "$W"' EXIT INT TERM
-sed -n 's/^GITEA_ADMIN_TOKEN=/Authorization: token /p' /srv/windygit/src/.env > "$W/h"
+ENVF="${SITE_BATCH_ENV:-/srv/windygit/src/.env}"   # override only to test the refusal
+sed -n 's/^GITEA_ADMIN_TOKEN=/Authorization: token /p' "$ENVF" > "$W/h"
+# Fail closed everywhere: this script's output IS the proof (Hub, #67).
+[ -s "$W/h" ] || { echo "no GITEA_ADMIN_TOKEN in $ENVF: refusing" >&2; exit 1; }
 api() { curl -s -H @"$W/h" "$@"; }
+mirror_of() {  # prints True/False, or exits on anything else (API error, 404, auth failure)
+  local m
+  m=$(api "$A/repos/windyadmin/$1" | python3 -c 'import json,sys
+try: v=json.load(sys.stdin).get("mirror")
+except Exception: v=None
+print(v)')
+  [[ "$m" == True || "$m" == False ]] || { echo "$1: mirror state unreadable ($m): STOP" >&2; exit 1; }
+  echo "$m"
+}
+if [ -n "${SITE_BATCH_ONLY:-}" ]; then   # e.g. SITE_BATCH_ONLY=windy-git-site to run one repo
+  PLAN=($(printf '%s\n' "${PLAN[@]}" | grep -E "^(${SITE_BATCH_ONLY//,/|}):" || true))
+  [ ${#PLAN[@]} -gt 0 ] || PLAN=("${SITE_BATCH_ONLY%%,*}:")   # unknown name: let mirror_of refuse it
+fi
+ok=0
 for row in "${PLAN[@]}"; do
   r=${row%%:*}; wfs=${row#*:}
-  mirror=$(api "$A/repos/windyadmin/$r" | python3 -c 'import json,sys;print(json.load(sys.stdin).get("mirror"))')
+  mirror=$(mirror_of "$r")
   if [ "$DRY" = --dry ]; then echo "$r: mirror=$mirror; would disable: ${wfs:-none}"; continue; fi
   if [ "$mirror" = True ]; then
-    (cd /srv/windygit/src && R=$r bash scripts/promote_to_ci.sh "$r" $wfs | tail -2)
+    (cd /srv/windygit/src && R=$r bash scripts/promote_to_ci.sh "$r" | tail -2)
+    [ "$(mirror_of "$r")" = False ] || { echo "$r: still a mirror after promote: STOP" >&2; exit 1; }
   else
-    echo "$r: already writable (mirror=$mirror), only disabling: ${wfs:-none}"
-    for w in $wfs; do api -o /dev/null -X PUT "$A/repos/windyadmin/$r/actions/workflows/$w/disable"; done
+    echo "$r: already writable"
   fi
+  for w in $wfs; do
+    code=$(api -o /dev/null -w '%{http_code}' -X PUT "$A/repos/windyadmin/$r/actions/workflows/$w/disable")
+    [ "$code" = 204 ] || { echo "$r: disable $w returned HTTP $code: STOP" >&2; exit 1; }
+  done
   c=$(api -o /dev/null -w '%{http_code}' -X PUT -H 'Content-Type: application/json' -d '{"permission":"read"}' "$A/repos/windyadmin/$r/collaborators/windy-ci-reader")
-  n=$(api "$A/repos/windyadmin/$r/actions/secrets" | python3 -c 'import json,sys;d=json.load(sys.stdin);print(len(d) if isinstance(d,list) else "?")')
-  echo "$r: ci-reader=$c actions_secrets=$n"
+  [[ "$c" == 204 || "$c" == 201 ]] || { echo "$r: windy-ci-reader grant returned HTTP $c: STOP" >&2; exit 1; }
+  n=$(api "$A/repos/windyadmin/$r/actions/secrets" | python3 -c 'import json,sys
+try: d=json.load(sys.stdin)
+except Exception: d=None
+print(len(d) if isinstance(d,list) else "?")')
+  [ "$n" = 0 ] || { echo "$r: actions secrets = $n (must be exactly 0): STOP" >&2; exit 1; }
+  echo "$r: disabled=[${wfs:-none}] ci-reader=$c actions_secrets=0"
+  ok=$((ok+1))
 done
+[ "$DRY" = --dry ] || echo "DONE: $ok/${#PLAN[@]} promoted, workflows disabled, ci-reader granted, secrets=0"
