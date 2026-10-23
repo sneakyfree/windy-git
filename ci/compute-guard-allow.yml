@@ -168,3 +168,33 @@ allow:
     approved_by: windy-hub
     approved_on: 2026-10-17
     expires: 2027-01-14
+
+  - repo: windy-mind-site
+    paths:
+      - "contracts/menu-examples/Catalog.default.json"
+      - "contracts/menu-examples/OAuthStart.openrouter.json"
+      - "functions/_lib/oauth.js"
+      - "test/bff.test.js"
+    # The site never calls an AI provider (every AI call goes through Mind's API). These lines name
+    # openrouter.ai as DATA or as a redirect-host CHECK. Only openrouter.ai lines are excused, so a
+    # new provider call in the same files still flags.
+    matches:
+      - 'openrouter\.ai'
+    reason: "No provider calls (Mind, 10-23). (1)+(2) vendored menu.v1 example DATA from Mind's contract: a catalog row's provider homepage url and an oauth/start reply fixture. (3) functions/_lib/oauth.js OAUTH_PROVIDERS = an open-redirect GUARD: checks the one-tap sign-in URL Mind returns is https on the provider's own host before sending the browser there; no API call, no key; Mind does the code exchange. (4) tests of that guard."
+    exemption: owner-approved
+    approved_by: windy-hub
+    approved_on: 2026-10-23
+    expires: 2027-01-21
+
+  - repo: windy-mind-site
+    paths:
+      - "dev/token-mock.mjs"
+    # Local dev/test stand-in for Mind's token API (127.0.0.1 only). OPENAI_API_KEY is the SDK
+    # env-var NAME in a fake "setup" line pointed at api.windymind.ai with a fake wm_ key.
+    matches:
+      - 'OPENAI_API_KEY'
+    reason: "dev mock of Mind's token API (contracts/mind-token.v1.json): the SDK env-var name in a fake setup line pointed at api.windymind.ai; no provider call, fake key (Mind, 10-23)."
+    exemption: owner-approved
+    approved_by: windy-hub
+    approved_on: 2026-10-23
+    expires: 2027-01-21
