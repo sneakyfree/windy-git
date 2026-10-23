@@ -31,14 +31,14 @@ keep=act-toolcache; (( ${tc_gb:-0} > TOOLCACHE_CAP_GB )) && keep=
 # 0-1 s with "all predefined address pools have been fully subnetted" (looked like load flakes).
 # until=1h: never touch the network of a job that is starting right now.
 "${D[@]}" network prune -f --filter until=1h >/dev/null
-"${D[@]}" image prune -af --filter until=168h >/dev/null
+"${D[@]}" image prune -af --filter until=168h --filter label!=windy-git.keep=1 >/dev/null
 "${D[@]}" builder prune -af --filter until=168h >/dev/null 2>&1 || true
 
 used_gb=$(du -s --block-size=1G /var/lib/docker/volumes/windy-git-runner_dind-storage | cut -f1)
 if (( used_gb > CAP_GB )); then
   # Over the cap even after the age-based pass: drop every unused image. The
   # next jobs re-pull (the act image is ~2 GB) — slower, never wrong.
-  "${D[@]}" image prune -af >/dev/null
+  "${D[@]}" image prune -af --filter label!=windy-git.keep=1 >/dev/null  # never the local CI image
   used_gb=$(du -s --block-size=1G /var/lib/docker/volumes/windy-git-runner_dind-storage | cut -f1)
 fi
 echo "ci storage ${used_gb}G (cap ${CAP_GB}G)"
