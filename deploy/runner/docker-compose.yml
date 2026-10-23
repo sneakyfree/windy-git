@@ -48,6 +48,7 @@ services:
     volumes:
       # A fresh volume: Sysbox shifts ownership to its own uid range. The old
       # `dind-storage` is kept untouched for the privileged rollback.
+      # Local CI images live in this volume: after switching volumes, re-run build-ci-image.sh.
       - dind-storage-sysbox:/var/lib/docker
       # READ-ONLY, non-secret build inputs for windy-pro's desktop jobs (models,
       # linux-x64 portable bundle, enter-monitor build), copied from the frozen
