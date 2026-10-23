@@ -168,3 +168,23 @@ def test_file_path_still_refuses_symlink_and_dev_stdin(tmp_path):
     rc, out = put_stdin(tmp_path, bare, "DEVSTDIN_KEY", FAKE.encode(), args=("/dev/stdin",))
     assert rc == 2 and FAKE not in out
     assert not branches(bare)
+
+
+def test_work_dir_prefers_ram(monkeypatch, tmp_path):
+    """The temp lockbox clone holds every value: it goes to RAM ($XDG_RUNTIME_DIR, then /dev/shm),
+    ~/.cache only where neither exists (Windy Git review of #65)."""
+    import importlib.util
+    import pathlib
+
+    spec = importlib.util.spec_from_file_location(
+        "lockbox_put_wd", pathlib.Path(__file__).resolve().parents[2] / "scripts" / "lockbox_put.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    run = tmp_path / "run"
+    run.mkdir()
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(run))
+    assert mod.work_dir() == str(run)
+    monkeypatch.delenv("XDG_RUNTIME_DIR")
+    monkeypatch.setattr(mod.os.path, "isdir", lambda d: d == "/dev/shm")
+    monkeypatch.setattr(mod.os, "access", lambda d, m: d == "/dev/shm")
+    assert mod.work_dir() == "/dev/shm"

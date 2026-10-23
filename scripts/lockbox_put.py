@@ -18,6 +18,8 @@ empty input is refused; surrounding whitespace/newline is stripped exactly as fo
 same value rules apply. Do NOT put the value in argv (`echo $VAL`, `printf %s $VAL` from a
 non-builtin, `env VAL=...`): argv is visible in ps to every user on the box. A bash
 builtin printf is not in ps, but prefer piping from a generator or a 0600 tmpfs file.
+Over ssh, pipe on the LOCAL side (`ssh host 'lockbox-put KEY -' < file`): typing into ssh
+WITHOUT -t echoes locally and cannot be detected remotely.
 Appends ONE line `- **`KEY`**: `<value>`` (the format
 lockbox-get reads) under a new heading at the END of ACCESS_LOCKBOX.md in a fresh temp clone,
 on a new branch, and opens a kit-army-config PR. Append-only: the diff is verified to be one
@@ -71,6 +73,17 @@ def key_exists(clone: str, key: str) -> bool:
         except OSError:
             continue
     return False
+
+
+def work_dir() -> str | None:
+    """Where the temporary lockbox clone lives. It holds EVERY lockbox value while it exists, so
+    prefer RAM (Boss 10-23: secrets never on a persistent disk): $XDG_RUNTIME_DIR, then /dev/shm.
+    Only where neither exists (macOS) does it fall back to ~/.cache, as before."""
+    for d in (os.environ.get("XDG_RUNTIME_DIR"), "/dev/shm"):
+        if d and os.path.isdir(d) and os.access(d, os.W_OK | os.X_OK):
+            return d
+    cache = Path.home() / ".cache"
+    return str(cache) if cache.is_dir() else None
 
 
 def read_stdin_value() -> str:
@@ -137,7 +150,7 @@ def main(argv=None) -> int:
         die("value must be one line of 8-512 chars from [A-Za-z0-9._~+/=:@%,-] (no spaces, quotes, backticks)")
     note = re.sub(r"[`\n\r]", " ", a.note)[:160]
     lane = re.sub(r"[^A-Za-z0-9 ._-]", "", a.lane)[:40]
-    tmp = tempfile.mkdtemp(prefix="lockbox-put-", dir=str(Path.home() / ".cache") if (Path.home() / ".cache").is_dir() else None)
+    tmp = tempfile.mkdtemp(prefix="lockbox-put-", dir=work_dir())
     os.chmod(tmp, 0o700)
     clone = os.path.join(tmp, "k")
     try:
