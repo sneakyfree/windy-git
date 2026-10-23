@@ -19,11 +19,12 @@ runner:
   fetch_timeout: 5s
   fetch_interval: 2s
   # Job image = deploy/runner/ci-image (catthehacker act-22.04 by digest + pinned tools),
-  # built locally by build-ci-image.sh. Rollback: point these back at catthehacker/ubuntu:act-22.04.
+  # built locally by build-ci-image.sh. Rollback: point these at
+  # docker://localhost/windy-git-ci/ubuntu:22.04-0 (the old image by digest, kept) + restart-idle.sh.
   labels:
     # windy-git's own workflows.
-    - "veron-1:docker://windy-git-ci/ubuntu:22.04-1"
-    - "linux-x64:docker://windy-git-ci/ubuntu:22.04-1"
+    - "veron-1:docker://localhost/windy-git-ci/ubuntu:22.04-1"
+    - "linux-x64:docker://localhost/windy-git-ci/ubuntu:22.04-1"
     # THE FLEET'S EXISTING CONVENTION. Surveyed 2026-08-12 across ten repos:
     # 36 of 36 active workflows say `runs-on: [self-hosted, linux, x64]`.
     # They were written for the self-hosted runners that died when the repos
@@ -32,9 +33,9 @@ runner:
     #
     # A job asking for [self-hosted, linux, x64] matches only if the runner
     # advertises ALL THREE, so all three are declared separately.
-    - "self-hosted:docker://windy-git-ci/ubuntu:22.04-1"
-    - "linux:docker://windy-git-ci/ubuntu:22.04-1"
-    - "x64:docker://windy-git-ci/ubuntu:22.04-1"
+    - "self-hosted:docker://localhost/windy-git-ci/ubuntu:22.04-1"
+    - "linux:docker://localhost/windy-git-ci/ubuntu:22.04-1"
+    - "x64:docker://localhost/windy-git-ci/ubuntu:22.04-1"
 
 cache:
   enabled: true

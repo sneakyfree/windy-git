@@ -1,0 +1,6 @@
+# ROLLBACK image: exactly the job image every job ran on until 10-22 (catthehacker/ubuntu
+# act-22.04, pinned BY DIGEST), with ONLY a keep label added so prune.sh never deletes it.
+# The moving catthehacker tag itself carries no keep label and would be pruned (Hub, #62 S2).
+FROM catthehacker/ubuntu@sha256:3488f78aa97770c8d5d835f2913c1a782d3121ad3f2aafb17054fb1d554ea4e1
+LABEL windy-git.keep="1" \
+      windy-git.base="catthehacker/ubuntu:act-22.04@sha256:3488f78aa97770c8d5d835f2913c1a782d3121ad3f2aafb17054fb1d554ea4e1"
