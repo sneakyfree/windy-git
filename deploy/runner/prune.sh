@@ -20,7 +20,12 @@ D=(docker exec windy-git-runner-dind-1 docker -H tcp://127.0.0.1:2375)  # dind l
 # windy-chat #377 runs 1107 + 1112, 10-16). Keep it, but cap it: over the cap it
 # goes too (one racy batch, then warm again).
 TOOLCACHE_CAP_GB="${CI_TOOLCACHE_CAP_GB:-8}"
-TC=/var/lib/docker/volumes/windy-git-runner_dind-storage/_data/volumes/act-toolcache
+# Measure the volume dind ACTUALLY uses (its mount at /var/lib/docker), never a hardcoded name:
+# the sysbox move (dind-storage -> dind-storage-sysbox) left both caps measuring the idle old
+# volume, so they never fired (Hub, 10-22). No mount found = refuse, never a silent "under cap".
+STORE=$(docker inspect -f '{{range .Mounts}}{{if eq .Destination "/var/lib/docker"}}{{.Source}}{{end}}{{end}}' windy-git-runner-dind-1)
+[[ -n "$STORE" && -d "$STORE" ]] || { echo "ci storage UNKNOWN: dind has no /var/lib/docker mount"; exit 1; }
+TC="$STORE/volumes/act-toolcache"
 tc_gb=$(du -s --block-size=1G "$TC" 2>/dev/null | cut -f1 || true)
 keep=act-toolcache; (( ${tc_gb:-0} > TOOLCACHE_CAP_GB )) && keep=
 # An empty $keep matches no volume name, so then nothing is kept.
@@ -34,12 +39,12 @@ keep=act-toolcache; (( ${tc_gb:-0} > TOOLCACHE_CAP_GB )) && keep=
 "${D[@]}" image prune -af --filter until=168h --filter label!=windy-git.keep=1 >/dev/null
 "${D[@]}" builder prune -af --filter until=168h >/dev/null 2>&1 || true
 
-used_gb=$(du -s --block-size=1G /var/lib/docker/volumes/windy-git-runner_dind-storage | cut -f1)
+used_gb=$(du -s --block-size=1G "$STORE" | cut -f1)
 if (( used_gb > CAP_GB )); then
   # Over the cap even after the age-based pass: drop every unused image. The
   # next jobs re-pull (the act image is ~2 GB) — slower, never wrong.
   "${D[@]}" image prune -af --filter label!=windy-git.keep=1 >/dev/null  # never the local CI image
-  used_gb=$(du -s --block-size=1G /var/lib/docker/volumes/windy-git-runner_dind-storage | cut -f1)
+  used_gb=$(du -s --block-size=1G "$STORE" | cut -f1)
 fi
 echo "ci storage ${used_gb}G (cap ${CAP_GB}G)"
 (( used_gb <= CAP_GB )) || { echo "STILL OVER CAP"; exit 1; }
