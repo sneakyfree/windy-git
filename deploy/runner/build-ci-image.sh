@@ -2,7 +2,7 @@
 # Build Windy Git's CI job images inside the CI dind (jobs run there, so that's where they
 # must live) and prove them. Run on Veron as root. Idempotent.
 #   localhost/windy-git-ci/ubuntu:22.04-0  rollback: the old job image by digest + keep label
-#   localhost/windy-git-ci/ubuntu:22.04-1  the job image: + pinned tools (gettext-base/envsubst)
+#   localhost/windy-git-ci/ubuntu:22.04-1  the job image: + pinned tools (gettext-base/envsubst, zsh)
 # The localhost/ prefix makes a pull from Docker Hub impossible: a missing image fails loudly.
 # After switching dind storage (e.g. the privileged-compose rollback volume), re-run this:
 # local images live in the dind volume.
