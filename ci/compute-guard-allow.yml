@@ -169,6 +169,25 @@ allow:
     approved_on: 2026-10-17
     expires: 2027-01-14
 
+  - repo: windyword-site
+    paths:
+      - "src/legal/legal-generated.js"
+    # Same legal prose as the windy-pro entry above, vendored byte-for-byte
+    # (Word, 10-25): generated from windy-pro's legal sources, every word
+    # hashed into the account-server's consent/wording registry, so a reword
+    # here would be a new privacy-policy version needing Grant's typed OK and
+    # an account-server deploy first -- not something to do just to quiet a
+    # scanner. Only a line naming one of the three env vars, with no env
+    # read and no provider host on it, is excused; a real call in this file
+    # still flags.
+    matches:
+      - '^(?!.*(?:process\.env|os\.environ|getenv|import\.meta\.env|api\.openai\.com|api\.groq\.com|api\.deepgram\.com)).*\b(?:OPENAI|GROQ|DEEPGRAM)_API_KEY\b'
+    reason: "windyword-site's legal-generated.js is windy-pro's generated privacy policy (v24, Grant-approved 10-17) vendored byte-for-byte -- the user-own-key env var NAMES in disclosure prose, no call. Word, 10-25: rewording would move the consent/wording hashes and need its own Grant OK + account-server deploy first."
+    exemption: owner-approved
+    approved_by: windy-hub
+    approved_on: 2026-10-24
+    expires: 2027-01-22
+
   - repo: windy-mind-site
     paths:
       - "contracts/menu-examples/Catalog.default.json"
