@@ -14,5 +14,18 @@ RUN apt-get update -qq \
  && apt-get install -y -qq --no-install-recommends gettext-base=0.21-4ubuntu4 zsh=5.8.1-1 \
  && rm -rf /var/lib/apt/lists/*
 
+# pwsh (PowerShell 7.4 LTS): windyword-site's scripts/j2-browser.test.mjs (#225, the J2 VM's
+# browser cleanup) skips without it, so it never gated (Word, 10-27). Microsoft's own .deb from the
+# PowerShell GitHub release, pinned by version AND sha256 (= the release's hashes.sha256), so no
+# new apt source is trusted; its deps (libicu70, libssl3, libgssapi-krb5-2) come from Ubuntu's.
+ARG PWSH_VERSION=7.4.22
+ARG PWSH_SHA256=c9053b126a7b8a9872b9933ab3a64ce9d5b6e54d2dcb6fcc5243558e0bda4649
+RUN curl -fsSL -o /tmp/pwsh.deb \
+      "https://github.com/PowerShell/PowerShell/releases/download/v${PWSH_VERSION}/powershell_${PWSH_VERSION}-1.deb_amd64.deb" \
+ && echo "${PWSH_SHA256}  /tmp/pwsh.deb" | sha256sum -c - \
+ && apt-get update -qq \
+ && apt-get install -y -qq --no-install-recommends /tmp/pwsh.deb \
+ && rm -f /tmp/pwsh.deb && rm -rf /var/lib/apt/lists/*
+
 LABEL windy-git.keep="1" \
       windy-git.base="catthehacker/ubuntu:act-22.04@sha256:3488f78aa97770c8d5d835f2913c1a782d3121ad3f2aafb17054fb1d554ea4e1"
