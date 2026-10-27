@@ -29,5 +29,18 @@ RUN curl -fsSL -o /tmp/pwsh.deb \
  && apt-get install -y -qq --no-install-recommends /tmp/pwsh.deb \
  && rm -f /tmp/pwsh.deb && rm -rf /var/lib/apt/lists/*
 
+# rclone v1.60.1 (EXACT): WindyCloud's deploy/vault-b2-copy tests wrap the real rclone and parse its
+# --use-json-log output, whose format changes between versions; prod (Veron) runs 1.60.1, so CI
+# must too (Cloud, #201, 10-27). Without it 11 tests failed. Upstream .deb pinned by sha256 =
+# SHA256SUMS on both github.com and downloads.rclone.org, whose PGP signature verifies with
+# rclone's release key FBF737ECE9F8AB18604BD2AC93935E02FF3B54FA (checked 10-27). No apt source added.
+ARG RCLONE_VERSION=1.60.1
+ARG RCLONE_SHA256=1c89af499e9d81c3ee2af8fa74a88414c22657c3df439f4d812e803bff5671cd
+RUN curl -fsSL -o /tmp/rclone.deb \
+      "https://github.com/rclone/rclone/releases/download/v${RCLONE_VERSION}/rclone-v${RCLONE_VERSION}-linux-amd64.deb" \
+ && echo "${RCLONE_SHA256}  /tmp/rclone.deb" | sha256sum -c - \
+ && apt-get install -y -qq --no-install-recommends /tmp/rclone.deb \
+ && rm -f /tmp/rclone.deb
+
 LABEL windy-git.keep="1" \
       windy-git.base="catthehacker/ubuntu:act-22.04@sha256:3488f78aa97770c8d5d835f2913c1a782d3121ad3f2aafb17054fb1d554ea4e1"
