@@ -40,3 +40,21 @@ def pytest_make_collect_report(collector):
     rep = outcome.get_result()
     if _strict() and rep.skipped:
         _fail(rep)
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_sessionfinish(session, exitstatus):
+    """Backstop for any skip the hooks above can't see, e.g. a pytest.skip in a SUBDIRECTORY's
+    conftest.py, which drops that whole directory before this file's collect hook runs for it
+    (Hub, #79 follow-up). The hooks above give each skip a named failure; this makes sure no
+    skip at all leaves a CI run green."""
+    tr = session.config.pluginmanager.get_plugin("terminalreporter")
+    skipped = (tr.stats.get("skipped") if tr else None) or []
+    if _strict() and skipped and session.exitstatus == 0:
+        session.exitstatus = 1
+        tr.write_line(f"FAILED under CI: {len(skipped)} skip(s) got past the per-test checks "
+                      "(a skip is a hole in the gate):", red=True)
+        for rep in skipped:
+            where = getattr(rep, "nodeid", "") or "?"
+            reason = rep.longrepr[2] if isinstance(rep.longrepr, tuple) else str(rep.longrepr)
+            tr.write_line(f"  {where}: {reason}", red=True)

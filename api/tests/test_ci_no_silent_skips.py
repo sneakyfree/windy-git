@@ -77,6 +77,20 @@ def test_locally_a_skip_stays_a_skip(tmp_path):
         assert "2 skipped" in r.stdout, r.stdout
 
 
+def test_under_ci_a_subdirectory_conftest_skip_fails_too(tmp_path):
+    """Hub #79 follow-up: a skip in a sub-directory's conftest.py drops that directory before
+    the root collect hook runs for it; only the sessionfinish backstop catches it."""
+    (tmp_path / "sub").mkdir()
+    files = {"test_ok.py": "def test_ok():\n    pass\n",
+             "sub/conftest.py": 'import pytest\npytest.skip("tool Z not installed", allow_module_level=True)\n',
+             "sub/test_z.py": "def test_z():\n    pass\n"}
+    r = _run(tmp_path, "true", files)
+    assert r.returncode == 1, r.stdout
+    assert "FAILED under CI: 1 skip(s)" in r.stdout and "tool Z not installed" in r.stdout, r.stdout
+    r = _run(tmp_path, None, files)
+    assert r.returncode == 0 and "1 passed, 1 skipped" in r.stdout, r.stdout
+
+
 def test_check_yml_sets_ci_on_the_tests_step():
     """The hooks above only bite when CI is set; don't rely on act_runner's defaults (Hub, #79)."""
     wf = yaml.safe_load((HERE.parents[1] / ".gitea" / "workflows" / "check.yml").read_text())
