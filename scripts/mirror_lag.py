@@ -22,6 +22,12 @@ A mirror whose GitHub repo can't be read is reported as UNREADABLE and counts as
 behind: say only what's true, never call an unchecked mirror fine.
 Prints one line per problem, then `mirror lag: <n> mirrors checked, <m> behind`.
 Exit 1 when m > 0, when no mirror is found, or on an API error.
+
+KNOWN-STALE: a lagging mirror of a PRIVATE GitHub repo can't refresh (no credential
+since 10-23), so it prints, every run, as KNOWN-STALE with that reason (never as
+current) but does not count in <m>: an alarm that is red for a known, accepted reason
+trains everyone to ignore red. After PRIVATE_NO_KEY_UNTIL they count again, so nothing
+gets permanent amnesty. Public mirrors always count.
 """
 from __future__ import annotations
 
@@ -41,6 +47,14 @@ GRACE_S = 1800
 BATCH = 40
 MAX_PAGES = 40  # 2,000 mirrors; a Gitea that never returns an empty page is a fault, not a list
 _DUR = re.compile(r"(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)(?:\.\d+)?s)?")
+
+# Boss 2026-10-27: mark, don't hide. Every pull mirror of a PRIVATE GitHub repo lost its
+# credential in the 10-23 dead-key sweep, so it cannot refresh: it shows as KNOWN-STALE, by
+# cause, not by a name list (the set moves every time GitHub does: 3 on 10-26, a different 2
+# an hour later). Public mirrors need no credential and still count. Ends on this date.
+PRIVATE_NO_KEY_UNTIL = dt.date(2026, 11, 26)
+_NO_KEY = ("private pull mirror with no GitHub credential since the 10-23 dead-key sweep; "
+           "frozen at its last good copy until the one-key design lands")
 _GH = re.compile(r"^https://github\.com/([^/]+)/([^/]+?)(?:\.git)?/?$")
 
 
@@ -116,7 +130,7 @@ def github_heads(sources: list[str]) -> dict[str, dict | None]:
         chunk = todo[i:i + BATCH]
         q = "query{" + " ".join(
             f'a{j}: repository(owner:{json.dumps(o)}, name:{json.dumps(n)})'
-            "{pushedAt defaultBranchRef{target{oid}}}"
+            "{pushedAt isPrivate defaultBranchRef{target{oid}}}"
             for j, (_, o, n) in enumerate(chunk)
         ) + "}"
         data = (github_graphql(q) or {}).get("data") or {}
@@ -126,6 +140,7 @@ def github_heads(sources: list[str]) -> dict[str, dict | None]:
                 found[s] = {
                     "head": ((r.get("defaultBranchRef") or {}).get("target") or {}).get("oid"),
                     "pushed": _ts(r.get("pushedAt")),
+                    "private": bool(r.get("isPrivate")),
                 }
     return found
 
@@ -149,6 +164,19 @@ def judge(mirrors: list[dict], gh: dict[str, dict | None], now: float) -> list[s
     return problems
 
 
+def split_known(problems: list[str], private: set[str], today: dt.date) -> tuple[list[str], list[str]]:
+    """Pure: (real problems, KNOWN-STALE lines). `private` = mirror names whose GitHub source
+    is private (so it has no credential to refresh with). A line's mirror name is its second word."""
+    real, known = [], []
+    for p in problems:
+        name = p.split(" ", 2)[1].rstrip(":")
+        if name in private and today <= PRIVATE_NO_KEY_UNTIL:
+            known.append(f"KNOWN-STALE {p} ({_NO_KEY}; excused until {PRIVATE_NO_KEY_UNTIL.isoformat()})")
+        else:
+            real.append(p)
+    return real, known
+
+
 def main() -> int:
     try:
         mirrors = gitea_mirrors()
@@ -160,10 +188,13 @@ def main() -> int:
         # Zero mirrors is never "all in step": Gitea answering an empty list is a fault.
         print("mirror lag: ERROR (no mirrors found)")
         return 1
-    problems = judge(mirrors, gh, dt.datetime.now(dt.UTC).timestamp())
-    for p in problems:
+    now = dt.datetime.now(dt.UTC)
+    private = {m["name"] for m in mirrors if (gh.get(m["source"]) or {}).get("private")}
+    problems, known = split_known(judge(mirrors, gh, now.timestamp()), private, now.date())
+    for p in problems + known:
         print(f"  {p}")
-    print(f"mirror lag: {len(mirrors)} mirrors checked, {len(problems)} behind")
+    tail = f", {len(known)} known-stale" if known else ""
+    print(f"mirror lag: {len(mirrors)} mirrors checked, {len(problems)} behind{tail}")
     return 1 if problems else 0
 
 
