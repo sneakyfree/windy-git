@@ -87,3 +87,35 @@ def test_it_refuses_a_job_that_is_not_waiting_and_unclaimed(tmp_path):
         r = subprocess.run(["bash", str(SCRIPT), bad], env=env, capture_output=True, text=True, timeout=30)
         assert r.returncode == 2 and "refusing" in r.stdout, (bad, r.stdout)
     assert _updated(db, 3) == 90 and _updated(db, 4) == 95 and _updated(db, 9) == 500
+
+
+def test_killed_mid_watch_it_still_reverts(tmp_path):
+    """Hub #87: Ctrl-C or kill during the watch must not leave the job jumped."""
+    import signal
+    db, env = _setup(tmp_path)
+    p = subprocess.Popen(["bash", str(SCRIPT), "9"], env=env, stdout=subprocess.PIPE, text=True)
+    for _ in range(200):
+        if _updated(db, 9) != 500:
+            break
+        time.sleep(0.05)
+    assert _updated(db, 9) == 99
+    p.send_signal(signal.SIGTERM)
+    out, _ = p.communicate(timeout=30)
+    assert p.returncode == 130 and "REVERTED on exit" in out, out
+    assert _updated(db, 9) == 500
+
+
+def test_picked_second_in_the_same_instant_is_reported_as_ok(tmp_path):
+    db, env = _setup(tmp_path)
+    p = subprocess.Popen(["bash", str(SCRIPT), "9"], env=env, stdout=subprocess.PIPE, text=True)
+    for _ in range(200):
+        if _updated(db, 9) != 500:
+            break
+        time.sleep(0.05)
+    c = sqlite3.connect(db)
+    c.execute("insert into action_task (job_id) values (1)")
+    c.execute("insert into action_task (job_id) values (9)")
+    c.execute("update action_run_job set status=6 where id in (1, 9)")
+    c.commit()
+    out, _ = p.communicate(timeout=30)
+    assert p.returncode == 0 and "picked second, right after job 1" in out, out

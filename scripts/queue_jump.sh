@@ -28,6 +28,11 @@ IFS='|' read -r status task old <<<"$row"
 min=$(q "select min(updated) from action_run_job where status=5 and task_id=0;")
 new=$((min - 1))
 last_task=$(q "select coalesce(max(id),0) from action_task;")
+# From here on ANY exit (Ctrl-C, kill, a failed wg-q under set -e) restores the old value; only the
+# OK paths clear the trap (Hub, #87). The revert itself never fails the exit.
+revert() { q "update action_run_job set updated=$old where id=$job and status=5;" >/dev/null 2>&1 || true; }
+trap 'revert; echo "REVERTED on exit: job $job back to updated=$old"' EXIT
+trap 'exit 130' INT TERM
 q "update action_run_job set updated=$new where id=$job and status=5 and task_id=0;" >/dev/null
 echo "job $job: updated $old -> $new (oldest waiting was $min); watching for the next pick"
 
@@ -36,12 +41,14 @@ while [ "$(date +%s)" -lt "$end" ]; do
   first=$(q "select job_id from action_task where id > $last_task order by id limit 1;")
   if [ -n "$first" ]; then
     if [ "$first" = "$job" ]; then
-      echo "OK: job $job was the next job picked ($(date -u +%TZ))"; exit 0
+      trap - EXIT; echo "OK: job $job was the next job picked ($(date -u +%TZ))"; exit 0
     fi
-    q "update action_run_job set updated=$old where id=$job and status=5;" >/dev/null
-    echo "REVERTED: job $first was picked first; job $job back to updated=$old"; exit 1
+    if [ "$(q "select status from action_run_job where id=$job;")" != 5 ]; then
+      # Two runners picked at once and ours came second: it still ran at the front (Hub, #87).
+      trap - EXIT; echo "OK: job $job was picked second, right after job $first ($(date -u +%TZ))"; exit 0
+    fi
+    trap - EXIT; revert; echo "REVERTED: job $first was picked first; job $job back to updated=$old"; exit 1
   fi
   sleep "$POLL"
 done
-q "update action_run_job set updated=$old where id=$job and status=5;" >/dev/null
-echo "REVERTED: nothing was picked within ${WAIT}s; job $job back to updated=$old"; exit 1
+trap - EXIT; revert; echo "REVERTED: nothing was picked within ${WAIT}s; job $job back to updated=$old"; exit 1
