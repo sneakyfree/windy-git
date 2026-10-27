@@ -117,3 +117,9 @@ def test_restart_drains_longer_than_the_runner_shutdown_timeout():
     assert stop > int(m.group(1)) * (60 if m.group(2) == "m" else 1)
     assert 'docker restart -t "$STOP_T"' in s
     assert '[ -x "$WGQ" ] ||' in s, "a missing DB helper must refuse, not wait for hours"
+
+
+def test_job_containers_get_an_init_as_pid_1():
+    """act's job entrypoint is `sleep` with no init, so orphans stayed zombies (Boss GO 10-27, Word)."""
+    opts = yaml.safe_load((RUNNER / "config.yaml").read_text())["container"]["options"] or ""
+    assert "--init" in opts.split(), opts

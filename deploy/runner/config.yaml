@@ -55,7 +55,11 @@ container:
   # at all.
   network: ""
   privileged: false
-  options:
+  # --init: PID 1 in every job container is docker-init (tini), which reaps orphans as a real
+  # Linux system does. act starts jobs with entrypoint `sleep` and no init, so an orphaned
+  # child stayed a zombie forever: windy-pro's desktop-soak-1965 (hang=1) and
+  # fix146-contract-health failed on that alone (Word, Boss GO 10-27). Undo: empty this line.
+  options: "--init"
   workdir_parent: /workspace
   # A job may bind-mount exactly ONE daemon path: the read-only windy-pro build
   # inputs (mounted :ro into dind itself). Per-runner, not per-repo (act_runner
