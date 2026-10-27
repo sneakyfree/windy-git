@@ -7,8 +7,8 @@ tool shows up red instead of quietly shrinking the gate.
 
 The ONE exception (Boss 10-27 20:03Z): tests that need a live outside service, listed
 BY NAME in LIVE_ONLY.txt at the pytest rootdir. One entry per line: a nodeid prefix,
-then `# owner: ...; reason: ...; run: <command that runs them>`. All three fields are
-required (a malformed entry stops a CI run). A listed test may skip; every other skip
+then `# owner: ...; reason: ...; run: <command that runs them>`. All three fields need a
+non-blank value and `run` must run pytest (a malformed entry stops a CI run). A listed test may skip; every other skip
 fails. Allowed skips are still named at the end of the run. No file = no exceptions.
 
 This file is the fleet drop-in: copy it as-is into a repo's root conftest.py and set
@@ -26,6 +26,7 @@ import pytest
 
 LIVE_ONLY_FILE = "LIVE_ONLY.txt"
 _ENTRY = re.compile(r"^(?P<prefix>\S+)\s+#\s*(?P<meta>.*)$")
+_FIELD = re.compile(r"^\s*(\w+)\s*:(.*)$")
 _live_only: list[str] = []
 
 
@@ -43,9 +44,13 @@ def load_live_only(path: Path) -> list[str]:
         if not line or line.startswith("#"):
             continue
         m = _ENTRY.match(line)
-        meta = m.group("meta").lower() if m else ""
-        if not (m and all(f"{k}:" in meta for k in ("owner", "reason", "run"))):
-            raise pytest.UsageError(f"{path.name}:{n}: needs '<nodeid prefix>  # owner: ...; reason: ...; run: ...'")
+        fields = dict(_FIELD.match(part).groups() for part in (m.group("meta").split(";") if m else [])
+                      if _FIELD.match(part))
+        fields = {k.lower(): v.strip() for k, v in fields.items()}
+        # Every field needs a VALUE, and `run` must be a command that runs pytest (Hub, #83).
+        if not (m and all(fields.get(k) for k in ("owner", "reason", "run")) and "pytest" in fields["run"]):
+            raise pytest.UsageError(f"{path.name}:{n}: needs '<nodeid prefix>  # owner: <who>; reason: <why>; "
+                                    "run: <a command that runs pytest on it>'")
         out.append(m.group("prefix"))
     return out
 

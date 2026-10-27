@@ -8,6 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 HERE = Path(__file__).resolve().parent
@@ -116,8 +117,15 @@ def test_under_ci_only_the_live_only_list_may_skip(tmp_path):
     assert "1 live-only skip(s) allowed" in r.stdout, r.stdout
 
 
-def test_a_live_only_entry_must_name_owner_reason_and_run(tmp_path):
-    files = {"test_live.py": LIVE, "LIVE_ONLY.txt": "test_live.py  # owner: Windy Cloud; reason: needs live Eternitas\n"}
+@pytest.mark.parametrize("entry", [
+    "test_live.py  # owner: Windy Cloud; reason: needs live Eternitas",          # no run
+    "test_live.py  # owner: ; reason: ; run: ",                                  # blank values (Hub, #83)
+    "test_live.py  # reason: owner: run:",                                       # keys, no values (Hub, #83)
+    "test_live.py  # owner: Cloud; reason: live; run: ask Cloud",                # run isn't a pytest command
+    "test_live.py",                                                              # no comment at all
+])
+def test_a_live_only_entry_must_name_owner_reason_and_run(tmp_path, entry):
+    files = {"test_live.py": LIVE, "LIVE_ONLY.txt": entry + "\n"}
     r = _run(tmp_path, "true", files)
     assert r.returncode != 0 and "LIVE_ONLY.txt:1: needs" in (r.stdout + r.stderr), r.stdout + r.stderr
     r = _run(tmp_path, None, files)  # locally the list isn't read at all
