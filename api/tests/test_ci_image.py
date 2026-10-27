@@ -44,11 +44,37 @@ def test_both_images_pin_the_same_base_by_digest_and_keep_themselves():
     assert "apt-get" not in base, "the rollback image is the old image, unchanged"
 
 
+def _hash_pinned_debs(dockerfile: str) -> set[str]:
+    """Local .deb paths the Dockerfile checks with `sha256sum -c` against an ARG whose default
+    is a full 64-hex sha256: pinned by content, which is stronger than name=version."""
+    shas = {m.group(1) for m in re.finditer(r"^ARG (\w+)=[0-9a-f]{64}$", dockerfile, re.M)}
+    text = dockerfile.replace("\\\n", " ")
+    return {m.group(2) for m in re.finditer(r'echo "\$\{(\w+)\}\s+(/\S+\.deb)" \| sha256sum -c', text)
+            if m.group(1) in shas}
+
+
+def _pinned(pkg: str, debs: set[str]) -> bool:
+    return "=" in pkg or pkg in debs
+
+
 def test_apt_packages_are_version_pinned():
-    pkgs = _apt_packages((RUNNER / "ci-image" / "Dockerfile").read_text())
+    df = (RUNNER / "ci-image" / "Dockerfile").read_text()
+    pkgs, debs = _apt_packages(df), _hash_pinned_debs(df)
     assert pkgs, "the job image installs something"
-    assert all("=" in p for p in pkgs), pkgs
+    assert all(_pinned(p, debs) for p in pkgs), pkgs
     assert _apt_packages("RUN apt-get install -qq -y \\\n  foo=1 \\\n  bar\n") == ["foo=1", "bar"]
+
+
+def test_a_local_deb_counts_as_pinned_only_with_a_sha256_check():
+    sha = "a" * 64
+    good = f'ARG X_SHA={sha}\nRUN curl -o /tmp/x.deb u \\\n && echo "${{X_SHA}}  /tmp/x.deb" | sha256sum -c - \\\n && apt-get install -y /tmp/x.deb\n'
+    assert _hash_pinned_debs(good) == {"/tmp/x.deb"}
+    no_check = "RUN curl -o /tmp/x.deb u && apt-get install -y /tmp/x.deb\n"
+    assert not all(_pinned(p, _hash_pinned_debs(no_check)) for p in _apt_packages(no_check))
+    short_sha = good.replace(sha, "a" * 12)  # not a full sha256: not a pin
+    assert _hash_pinned_debs(short_sha) == set()
+    other_file = good.replace('"${X_SHA}  /tmp/x.deb"', '"${X_SHA}  /tmp/y.deb"')  # checks another file
+    assert not all(_pinned(p, _hash_pinned_debs(other_file)) for p in _apt_packages(other_file))
 
 
 def test_rollback_points_at_the_kept_base_image():
