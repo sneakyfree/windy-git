@@ -48,7 +48,13 @@ while [ ${#pending[@]} -gt 0 ]; do
   for c in "${pending[@]}"; do
     if busy "${name_of[$c]}"; then left+=("$c"); continue; fi
     if [ "$DRY" = 1 ]; then echo "$c (${name_of[$c]}): idle -> WOULD stop (dry run)"; continue; fi
-    docker stop -t "$STOP_T" "$c" >/dev/null && stopped+=("$c") && echo "$c (${name_of[$c]}): idle, stopped $(date -u +%TZ)"
+    # A FAILED stop keeps the runner pending (retried next pass): dropping it would let
+    # `compose up` recreate dind under a runner that may be mid-job (Hub, #74 LOW).
+    if docker stop -t "$STOP_T" "$c" >/dev/null; then
+      stopped+=("$c"); echo "$c (${name_of[$c]}): idle, stopped $(date -u +%TZ)"
+    else
+      left+=("$c"); echo "$c (${name_of[$c]}): docker stop FAILED; will retry"
+    fi
   done
   [ "$DRY" = 1 ] && { echo "dry run: ${#left[@]} busy now (${left[*]:-none}); nothing stopped"; exit 0; }
   pending=("${left[@]}")
