@@ -94,9 +94,10 @@ sudo ss -tlnp | grep -E "3080|8600"                   # both must be 127.0.0.1
 
 ## CI (Gitea Actions) — see `docs/CUTOVER.md` for onboarding a repo
 
-- **Six runners × capacity 1** (`deploy/runner/docker-compose.yml`), one shared
-  dind capped at 12 cores / 64 GB. Capacity >1 in one runner shares
-  `/root/.cache/act` between jobs and races (`lstat …: no such file`).
+- **Two runners × capacity 1 by default** (Boss 10-27: Veron ran at load 37-56; CI runs at most 2
+  jobs at once). Runners 3-6 stay defined behind the compose profile `extra-runners`; start one
+  only on a Boss GO, with a BOARD line. One shared dind capped at 12 cores / 64 GB. Capacity >1 in
+  one runner shares `/root/.cache/act` between jobs and races (`lstat …: no such file`).
 - **Runners are scoped to the `windyadmin` user** (`action_runner.owner_id=1`),
   so only first-party repos run. A repo owned by anyone else — a plane-created
   agent or `u-system` repo — gets NO runner. Re-registrations inherit this
@@ -172,6 +173,35 @@ never a value. It runs nightly from Windy 0's sweep (heartbeat `windy-sync-token
 
 Anything but zeros, or a dir other than `root:root/750`, means a regression. Fix it before anything
 else, and never print a token to find it: compare sha256[:10] only.
+
+## Stop a runner without killing its job (the safe drain)
+
+Under a deep queue a runner claims its next job within `fetch_interval` (2 s) of finishing one, so
+"wait until idle, then `docker stop`" loses the race. A `docker stop` on a runner that just claimed a
+job drains for `shutdown_timeout` (3m) and then KILLS a longer job. Per runner:
+1. the DB says idle (`action_task` status 6 count = 0 for its name);
+2. `docker pause <c>` (frozen, so it can't claim);
+3. after 1 s, re-check: if it's now busy, `docker unpause` and try later;
+4. still idle: `docker update --restart=no <c>` and `docker kill <c>` (no job, so nothing is lost).
+To apply a config change, start it again (`docker start`). After interrupting a drain loop, check
+`docker ps -a --filter status=paused` and unpause any leftovers. Every wait loop needs a deadline.
+
+## Move one job to the front of the queue (GO'd prod deploys only)
+
+Boss rule (10-27): only a PR with a **GO'd same-day prod deploy** jumps the queue; ask Boss for any
+other. BOARD line before and after.
+
+```bash
+ssh wg-veron
+cd /srv/windygit/src && bash scripts/queue_jump.sh <action_run_job id>
+```
+Gitea 1.24 has no priority knob: a runner gets the waiting job with the lowest `updated`, then
+`id`. The script refuses unless the job is waiting and unclaimed. It sets that one row's `updated`
+one second below the oldest waiting job, then watches: OK when it is the next job picked; if any
+other job is picked first (or none within `QUEUE_JUMP_WAIT`, default 30 min) it restores the old
+value and exits 1. First use: 10-27, windy-admin run 74 went next, ahead of about 140.
+Don't cancel a duplicate run to post a "same tree" status by hand: the status bridge maps
+cancelled to `error` and re-posts that every cycle over any manual status.
 
 ## Re-run a PR's CI (Gitea 1.24 has no rerun API)
 
