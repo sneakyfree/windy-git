@@ -17,6 +17,11 @@ PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("anthropic key", re.compile(r"\bsk-ant-[A-Za-z0-9_-]{20,}")),
     ("openai key", re.compile(r"\bsk-(?:proj-|svcacct-)?(?!ant-)[A-Za-z0-9_-]{32,}")),
     ("stripe live key", re.compile(r"\b[rs]k_live_[A-Za-z0-9]{20,}")),
+    # Test-mode keys and webhook signing secrets are still credentials: a sandbox sk_test_ sat in
+    # windy-pro-mobile's docs from 03-01 because only live keys had a shape (Boss, 10-27).
+    # pk_ (publishable) keys are public by design: no shape.
+    ("stripe test key", re.compile(r"\b[rs]k_test_[A-Za-z0-9]{20,}")),
+    ("stripe webhook secret", re.compile(r"\bwhsec_[A-Za-z0-9]{24,}")),
     ("google api key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}(?![0-9A-Za-z_-])")),
     # Twilio (Windy Text 10-01: a live auth token sat in test files for months). An auth token
     # is a bare 32-hex with no prefix, so it is only caught when ASSIGNED to a secret-ish name.
@@ -29,7 +34,7 @@ PATTERNS: list[tuple[str, re.Pattern[str]]] = [
 
 # git grep -E (POSIX ERE) prefilter: cheap superset of PATTERNS.
 PREFILTER = ("[0-9]{8,10}:[A-Za-z0-9_-]{35}|gh[pousr]_[A-Za-z0-9]{36}|github_pat_|(AKIA|ASIA)[0-9A-Z]{16}"
-             "|xox[abprs]-|sk-ant-|sk-[A-Za-z0-9_-]{32}|sk-proj-|[rs]k_live_|AIza[0-9A-Za-z_-]{35}"
+             "|xox[abprs]-|sk-ant-|sk-[A-Za-z0-9_-]{32}|sk-proj-|[rs]k_live_|[rs]k_test_|whsec_|AIza[0-9A-Za-z_-]{35}"
              "|-----BEGIN [A-Z ]*PRIVATE KEY-----|(AC|SK)[0-9a-f]{32}|[0-9a-fA-F]{32}|pypi-AgE")
 
 
