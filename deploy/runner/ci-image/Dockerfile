@@ -42,5 +42,17 @@ RUN curl -fsSL -o /tmp/rclone.deb \
  && apt-get install -y -qq --no-install-recommends /tmp/rclone.deb \
  && rm -f /tmp/rclone.deb
 
+# Chromium for Playwright 1.59.1 (EXACT: windy-pro's package-lock pins it). The npm version fixes the
+# browser revision: chromium-1217 + chromium_headless_shell-1217 (Chrome for Testing 147.0.7727.15).
+# Baked in at build time so no job downloads ~630 MB or apt-gets OS libs on every run (Boss GO
+# 10-27, Word #1558). --with-deps installs Chromium's OS libraries HERE, once; the image digest
+# is their pin. The global CLI is removed afterwards: repos use their own pinned playwright,
+# which finds these browsers via PLAYWRIGHT_BROWSERS_PATH. Jobs run as root, so pass --no-sandbox.
+ARG PLAYWRIGHT_VERSION=1.59.1
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN npm install -g --no-fund --no-audit "playwright@${PLAYWRIGHT_VERSION}" \
+ && playwright install --with-deps chromium \
+ && npm uninstall -g playwright && rm -rf /var/lib/apt/lists/* /root/.npm
+
 LABEL windy-git.keep="1" \
       windy-git.base="catthehacker/ubuntu:act-22.04@sha256:3488f78aa97770c8d5d835f2913c1a782d3121ad3f2aafb17054fb1d554ea4e1"
