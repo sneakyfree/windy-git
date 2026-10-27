@@ -10,8 +10,10 @@ FROM catthehacker/ubuntu@sha256:3488f78aa97770c8d5d835f2913c1a782d3121ad3f2aafb1
 # zsh: windy-pro-mobile's mobile-round-posts-every-job.test.ts spawns scripts/bench/mobile-round.sh
 # directly via zsh (the script's own shebang is #!/bin/zsh); without it those 3 cases could only
 # skip-with-a-reason, never run for real (Mobile, run 43/#370, 10-24).
+# age: Windy Git's own test_backup_encryption.py (3 tests) skipped on every CI run without it, so
+# the backup round-trip never gated (Boss 10-27: CI runs the WHOLE suite, no silent holes).
 RUN apt-get update -qq \
- && apt-get install -y -qq --no-install-recommends gettext-base=0.21-4ubuntu4 zsh=5.8.1-1 \
+ && apt-get install -y -qq --no-install-recommends gettext-base=0.21-4ubuntu4 zsh=5.8.1-1 age=1.0.0-1ubuntu0.1 \
  && rm -rf /var/lib/apt/lists/*
 
 # pwsh (PowerShell 7.4 LTS): windyword-site's scripts/j2-browser.test.mjs (#225, the J2 VM's
