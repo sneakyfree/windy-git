@@ -171,3 +171,10 @@ def test_the_git_grep_prefilter_lets_every_shape_through(kind, text, tmp_path):
     f.write_text(text + "\n")
     r = subprocess.run(["grep", "-E", "-q", ss.PREFILTER, str(f)])
     assert r.returncode == 0, kind
+
+
+def test_contracts_indexnow_placeholder_is_allowed_by_hash_only():
+    ph = "0123456789abcdef" * 2  # windy-contracts tests/test_indexnow.py:24, a public placeholder
+    (kind, h), = ss.find(f'KEY = "{ph}"')
+    assert kind == "32-hex secret assignment" and h == "3eb1bd43"
+    assert h in sg.load_allow()["windy-contracts"]["hashes"]
