@@ -188,3 +188,32 @@ def test_the_amnesty_has_a_near_end_date():
     import datetime
     latest_allowed = datetime.date(2026, 10, 27) + datetime.timedelta(days=31)
     assert latest_allowed >= ml.PRIVATE_NO_KEY_UNTIL
+
+
+def test_main_counts_a_lagging_public_mirror(monkeypatch, capsys):
+    # The mirror image (Hub, #73): a PUBLIC source that lags is a real problem, never excused.
+    import datetime
+    monkeypatch.setattr(ml, "PRIVATE_NO_KEY_UNTIL", datetime.date(2027, 1, 31))
+    monkeypatch.setattr(ml, "gitea_mirrors", lambda: [mirror(head=A)])
+    monkeypatch.setattr(ml, "github_heads", lambda sources: {SRC: {"head": B, "pushed": NOW - 7200, "private": False}})
+    monkeypatch.setattr(ml.dt, "datetime", type("D", (), {"now": staticmethod(lambda tz=None: _Fixed())}))
+    assert ml.main() != 0
+    lines = capsys.readouterr().out.strip().splitlines()
+    assert lines[0].strip() == f"BEHIND windyadmin/site: Windy Git {A[:8]}, GitHub {B[:8]}"
+    assert "KNOWN-STALE" not in "\n".join(lines)
+    assert lines[-1] == "mirror lag: 1 mirrors checked, 1 behind"
+
+
+def test_github_heads_reads_private_from_isPrivate_only(monkeypatch):
+    # Pins the parse itself: main()'s tests stub github_heads out, so only this catches
+    # "private" being set without GitHub saying so (that would excuse every mirror).
+    pub = "https://github.com/sneakyfree/pub.git"
+    priv = "https://github.com/sneakyfree/priv.git"
+    answer = {"data": {
+        "a0": {"pushedAt": None, "isPrivate": False, "defaultBranchRef": {"target": {"oid": A}}},
+        "a1": {"pushedAt": None, "isPrivate": True, "defaultBranchRef": {"target": {"oid": B}}},
+    }}
+    monkeypatch.setattr(ml, "github_graphql", lambda q: answer)
+    out = ml.github_heads([pub, priv])
+    assert out[pub]["private"] is False
+    assert out[priv]["private"] is True
