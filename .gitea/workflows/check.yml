@@ -63,6 +63,10 @@ jobs:
         run: python3 scripts/vocab_audit.py
 
       - name: tests
+        # CI=true: api/tests/conftest.py turns any skip into a failure here, so a missing
+        # tool can't silently drop tests from the gate (Boss 10-27: whole suite in CI).
+        env:
+          CI: "true"
         run: .venv/bin/pytest -q
 
       # act_runner 0.6.1 starts steps without waiting for the service's health
