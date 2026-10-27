@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Restart Windy Git's CI runner containers ONE AT A TIME, each only when it has no running
 # task (a `docker restart` kills the job it is running: "runner lost", 10-21 CI cap lesson).
-# Use after a runner config change (labels/job image). Run on Veron as root.
+# Use after a runner config.yaml change (labels, container options). A job-image RETAG needs no
+# restart: the daemon resolves the tag per job. Only RUNNING runners are touched (stopped ones,
+# e.g. behind the extra-runners profile, stay stopped). Run on Veron as root.
 #   WGQ=<path to wg-q>   (default: the invoking user's ~/bin/wg-q)
 set -euo pipefail
 WGQ="${WGQ:-$(getent passwd "${SUDO_USER:-$USER}" | cut -d: -f6)/bin/wg-q}"
