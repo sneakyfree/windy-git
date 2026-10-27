@@ -59,6 +59,10 @@ services:
     # session. Veron 1 is his workstation, not a dedicated build box.
     cpus: 12.0            # 12 of 24 cores
     mem_limit: 64g
+    # Top-level slice at CPUWeight=20: under contention CI yields to everything else (the
+    # sign-up journeys first); idle, it still uses its full 12 cores. See windygitci.slice.
+    # Changing this recreates dind: apply with recreate-idle.sh, never a bare `up -d`.
+    cgroup_parent: windygitci.slice
     restart: unless-stopped
 
   # ── FOUR runners × capacity 1, not one runner × capacity 4 (2026-09-23) ──
@@ -121,6 +125,7 @@ services:
     networks: [jobs]
     cpus: 2.0
     mem_limit: 4g
+    cgroup_parent: windygitci.slice   # same slice as dind (runners 2-6 inherit via <<: *runner)
     restart: unless-stopped
 
   # Each extra runner registers itself on first start (own name, own volume —
