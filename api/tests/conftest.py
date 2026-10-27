@@ -17,11 +17,26 @@ def _strict() -> bool:
     return os.environ.get("CI", "").lower() in {"1", "true", "yes"}
 
 
+def _fail(rep) -> None:
+    reason = rep.longrepr[2] if isinstance(rep.longrepr, tuple) else str(rep.longrepr)
+    rep.outcome = "failed"
+    rep.longrepr = f"skipped under CI (a skip is a hole in the gate): {reason}"
+
+
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_makereport(item, call):
+    """Skips in setup (skipif marks, fixtures) and in the test body."""
     outcome = yield
     rep = outcome.get_result()
     if _strict() and rep.skipped and not hasattr(rep, "wasxfail"):
-        reason = rep.longrepr[2] if isinstance(rep.longrepr, tuple) else str(rep.longrepr)
-        rep.outcome = "failed"
-        rep.longrepr = f"skipped under CI (a skip is a hole in the gate): {reason}"
+        _fail(rep)
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_make_collect_report(collector):
+    """Skips while COLLECTING a module (module-level pytest.skip(allow_module_level=True),
+    pytest.importorskip): these drop a whole file and never reach runtest_makereport (Hub, #79)."""
+    outcome = yield
+    rep = outcome.get_result()
+    if _strict() and rep.skipped:
+        _fail(rep)
