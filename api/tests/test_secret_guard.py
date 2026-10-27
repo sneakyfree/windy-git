@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 import sys
 from pathlib import Path
 
@@ -26,6 +27,8 @@ CASES = [
     ("anthropic key", "ANTHROPIC_API_KEY=sk-ant-" + "x" * 30),
     ("openai key", "OPENAI_API_KEY=sk-proj-" + "y" * 40),
     ("stripe live key", "STRIPE=sk_live_" + "z" * 24),
+    ("stripe test key", "STRIPE_SECRET_KEY=sk_test_" + "z" * 24),
+    ("stripe webhook secret", "STRIPE_WEBHOOK_SECRET=whsec_" + "w" * 32),
     ("google api key", "key=AIza" + "B" * 35),
     ("private key block", "-----BEGIN OPENSSH PRIVATE KEY-----"),
 ]
@@ -46,6 +49,10 @@ def test_each_shape_is_found_and_only_its_hash_is_kept(kind, text):
     "sha512-" + "Q" * 86 + "==",           # lockfile integrity
     "version: 12345678:abc",               # short, not a token
     "sk-ant-short",                        # too short
+    "sk_test_...",                         # a doc placeholder, not a key
+    "STRIPE_SECRET_KEY=sk_test_xxx",       # too short
+    "whsec_placeholder",                   # too short
+    "pk_test_" + "p" * 40,                 # publishable: public by design
     "re_test_register_sends_verification", # windy-pro's fake Resend key
     "ANTHROPIC_API_KEY=",                  # a name, not a value
 ])
@@ -154,3 +161,13 @@ def test_pypi_token_shape_hash_only():
     assert [k for k, _ in got] == ["pypi token"] and got[0][1] == ss.h8(tok)
     assert tok not in repr(got)
     assert ss.find("pypi-AgE-too-short") == []
+
+
+@pytest.mark.parametrize("kind, text", CASES)
+def test_the_git_grep_prefilter_lets_every_shape_through(kind, text, tmp_path):
+    """The tree scan only looks at lines `git grep -E PREFILTER` returns: a shape missing from it
+    is never seen on a default-branch push."""
+    f = tmp_path / "a.txt"
+    f.write_text(text + "\n")
+    r = subprocess.run(["grep", "-E", "-q", ss.PREFILTER, str(f)])
+    assert r.returncode == 0, kind
