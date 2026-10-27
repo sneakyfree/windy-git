@@ -8,6 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 HERE = Path(__file__).resolve().parent
@@ -96,3 +97,50 @@ def test_check_yml_sets_ci_on_the_tests_step():
     wf = yaml.safe_load((HERE.parents[1] / ".gitea" / "workflows" / "check.yml").read_text())
     steps = [s for job in wf["jobs"].values() for s in job.get("steps", []) if s.get("name") == "tests"]
     assert steps and all(str((s.get("env") or {}).get("CI")).lower() == "true" for s in steps), steps
+
+
+LIVE = 'import pytest\n\n@pytest.mark.skipif(True, reason="needs ETERNITAS_URL")\ndef test_live():\n    pass\n'
+LIVE_ENTRY = "test_live.py  # owner: Windy Cloud; reason: needs live Eternitas; run: ETERNITAS_URL=... pytest test_live.py\n"
+
+
+def test_under_ci_only_the_live_only_list_may_skip(tmp_path):
+    """Boss 10-27 20:03Z: named live-only tests may skip; every other skip still fails."""
+    files = {"test_live.py": LIVE, "test_other.py": 'import pytest\n\ndef test_o():\n    pytest.skip("tool W missing")\n',
+             "test_ok.py": "def test_ok():\n    pass\n", "LIVE_ONLY.txt": "# live-only tests\n\n" + LIVE_ENTRY}
+    r = _run(tmp_path, "true", files)
+    assert r.returncode == 1, r.stdout
+    assert "tool W missing" in r.stdout and "1 failed" in r.stdout.splitlines()[-1], r.stdout
+    assert "1 live-only skip(s) allowed by LIVE_ONLY.txt" in r.stdout and "test_live.py::test_live" in r.stdout, r.stdout
+    (tmp_path / "test_other.py").unlink()
+    r = _run(tmp_path, "true", {k: v for k, v in files.items() if k != "test_other.py"})
+    assert r.returncode == 0 and "1 passed, 1 skipped" in r.stdout, r.stdout
+    assert "1 live-only skip(s) allowed" in r.stdout, r.stdout
+
+
+@pytest.mark.parametrize("entry", [
+    "test_live.py  # owner: Windy Cloud; reason: needs live Eternitas",          # no run
+    "test_live.py  # owner: ; reason: ; run: ",                                  # blank values (Hub, #83)
+    "test_live.py  # reason: owner: run:",                                       # keys, no values (Hub, #83)
+    "test_live.py  # owner: Cloud; reason: live; run: ask Cloud",                # run isn't a pytest command
+    "test_live.py",                                                              # no comment at all
+])
+def test_a_live_only_entry_must_name_owner_reason_and_run(tmp_path, entry):
+    files = {"test_live.py": LIVE, "LIVE_ONLY.txt": entry + "\n"}
+    r = _run(tmp_path, "true", files)
+    assert r.returncode != 0 and "LIVE_ONLY.txt:1: needs" in (r.stdout + r.stderr), r.stdout + r.stderr
+    r = _run(tmp_path, None, files)  # locally the list isn't read at all
+    assert r.returncode == 0 and "1 skipped" in r.stdout, r.stdout
+
+
+def test_a_live_only_entry_covers_its_own_file_or_directory_only():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("_nsconf", HERE / "conftest.py")
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    assert m._covers("tests/live", "tests/live/test_a.py::test_x")
+    assert m._covers("tests/live/", "tests/live/test_a.py")
+    assert m._covers("tests/test_e.py", "tests/test_e.py::T::test_y")
+    assert m._covers("tests/test_e.py::test_y", "tests/test_e.py::test_y")
+    assert not m._covers("tests/live", "tests/live_cache.py::test_z")
+    assert not m._covers("tests/test_e.py", "tests/test_e.pyx")
+    assert not m._covers("tests/test_e.py::test_y", "tests/test_e.py::test_y2")
