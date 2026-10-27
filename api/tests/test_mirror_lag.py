@@ -93,6 +93,11 @@ class _Fixed:
     def timestamp(self):
         return NOW
 
+    def date(self):
+        # NOW = 2027-01-15T08:00:00Z. Not via datetime.datetime: the tests patch that very class.
+        import datetime
+        return datetime.date(2027, 1, 15)
+
 
 def test_zero_mirrors_is_a_failure_not_all_clear(monkeypatch, capsys):
     monkeypatch.setattr(ml, "gitea_mirrors", lambda: [])
@@ -139,3 +144,47 @@ def test_paging_has_a_cap_and_fails_loud_past_it(monkeypatch, capsys):
     assert ml.main() == 1
     assert capsys.readouterr().out.strip() == "mirror lag: ERROR (ValueError)"
     assert len(calls) == 3
+
+
+# ---- KNOWN-STALE (Boss 10-27): private mirrors (no credential) are marked, never read as current ----
+
+def test_a_private_mirror_lagging_is_marked_not_counted():
+    import datetime
+    real, known = ml.split_known(["BEHIND windyadmin/site: Windy Git aaaaaaaa, GitHub bbbbbbbb"],
+                                 {"windyadmin/site"}, datetime.date(2026, 11, 1))
+    assert real == []
+    assert known[0].startswith("KNOWN-STALE BEHIND windyadmin/site: Windy Git aaaaaaaa, GitHub bbbbbbbb (private pull mirror")
+    assert known[0].endswith("excused until 2026-11-26)")
+
+
+def test_a_public_mirror_lagging_still_counts():
+    import datetime
+    line = "BEHIND windyadmin/site: Windy Git aaaaaaaa, GitHub bbbbbbbb"
+    assert ml.split_known([line], set(), datetime.date(2026, 11, 1)) == ([line], [])
+
+
+def test_private_mirrors_count_again_after_the_end_date():
+    import datetime
+    line = "STALE windyadmin/site: last refresh 61 min ago"
+    assert ml.split_known([line], {"windyadmin/site"}, datetime.date(2026, 11, 27)) == ([line], [])
+
+
+def test_main_exits_0_when_only_private_mirrors_lag(monkeypatch, capsys):
+    import datetime
+    import re
+    monkeypatch.setattr(ml, "PRIVATE_NO_KEY_UNTIL", datetime.date(2027, 1, 31))
+    monkeypatch.setattr(ml, "gitea_mirrors", lambda: [mirror(head=A)])
+    monkeypatch.setattr(ml, "github_heads", lambda sources: {SRC: {"head": B, "pushed": NOW - 7200, "private": True}})
+    monkeypatch.setattr(ml.dt, "datetime", type("D", (), {"now": staticmethod(lambda tz=None: _Fixed())}))
+    assert ml.main() == 0
+    lines = capsys.readouterr().out.strip().splitlines()
+    assert lines[0].strip().startswith("KNOWN-STALE BEHIND windyadmin/site:")
+    assert lines[-1] == "mirror lag: 1 mirrors checked, 0 behind, 1 known-stale"
+    conf = (ROOT / "deploy/systemd/windygit-mirror-lag.service.d/windy-job.conf").read_text()
+    assert re.search(re.search(r'--expect "([^"]+)"', conf).group(1), lines[-1])
+
+
+def test_the_amnesty_has_a_near_end_date():
+    import datetime
+    latest_allowed = datetime.date(2026, 10, 27) + datetime.timedelta(days=31)
+    assert latest_allowed >= ml.PRIVATE_NO_KEY_UNTIL
