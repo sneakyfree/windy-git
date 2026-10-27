@@ -45,12 +45,23 @@ def test_both_images_pin_the_same_base_by_digest_and_keep_themselves():
 
 
 def _hash_pinned_debs(dockerfile: str) -> set[str]:
-    """Local .deb paths the Dockerfile checks with `sha256sum -c` against an ARG whose default
-    is a full 64-hex sha256: pinned by content, which is stronger than name=version."""
+    """Local .deb paths pinned by content, which is stronger than name=version. A path counts
+    only when ONE RUN step (Hub, #75 follow-up):
+      - checks it with `echo "${ARG}  <path>" | sha256sum -c`, ARG defaulting to a full 64-hex
+        sha256, and
+      - lets that check stop the build: followed directly by `&&` or the end of the RUN, never
+        `||` or `;` (which would carry on after a mismatch), and
+      - installs that same path AFTER the check, in the same RUN."""
     shas = {m.group(1) for m in re.finditer(r"^ARG (\w+)=[0-9a-f]{64}$", dockerfile, re.M)}
-    text = dockerfile.replace("\\\n", " ")
-    return {m.group(2) for m in re.finditer(r'echo "\$\{(\w+)\}\s+(/\S+\.deb)" \| sha256sum -c', text)
-            if m.group(1) in shas}
+    runs = re.findall(r"^RUN\s+(.*)$", dockerfile.replace("\\\n", " "), re.M)
+    pinned = set()
+    for run in runs:
+        for m in re.finditer(r'echo "\$\{(\w+)\}\s+(/\S+\.deb)" \| sha256sum -c(?:\s+-)?\s*(?=&&|$)', run):
+            path = m.group(2)
+            installs_after = re.search(rf"apt-get\s+install\b[^&;|]*\s{re.escape(path)}(?=\s|$)", run[m.end():])
+            if m.group(1) in shas and installs_after:
+                pinned.add(path)
+    return pinned
 
 
 def _pinned(pkg: str, debs: set[str]) -> bool:
@@ -75,6 +86,16 @@ def test_a_local_deb_counts_as_pinned_only_with_a_sha256_check():
     assert _hash_pinned_debs(short_sha) == set()
     other_file = good.replace('"${X_SHA}  /tmp/x.deb"', '"${X_SHA}  /tmp/y.deb"')  # checks another file
     assert not all(_pinned(p, _hash_pinned_debs(other_file)) for p in _apt_packages(other_file))
+    # The check must be able to STOP the build (Hub, #75 follow-up): these all carry on after a mismatch.
+    for ignored in ("sha256sum -c - || true", "sha256sum -c - ; true", "sha256sum -c - ||:"):
+        weak = good.replace("sha256sum -c -", ignored)
+        assert _hash_pinned_debs(weak) == set(), ignored
+    after = f'ARG X_SHA={sha}\nRUN curl -o /tmp/x.deb u \\\n && apt-get install -y /tmp/x.deb \\\n && echo "${{X_SHA}}  /tmp/x.deb" | sha256sum -c -\n'
+    assert _hash_pinned_debs(after) == set(), "a check AFTER the install pins nothing"
+    split = f'ARG X_SHA={sha}\nRUN echo "${{X_SHA}}  /tmp/x.deb" | sha256sum -c -\nRUN apt-get install -y /tmp/x.deb\n'
+    assert _hash_pinned_debs(split) == set(), "check and install must share one RUN"
+    at_end = f'ARG X_SHA={sha}\nRUN curl -o /tmp/x.deb u && apt-get install -y /tmp/x.deb && echo "${{X_SHA}}  /tmp/x.deb" | sha256sum -c\n'
+    assert _hash_pinned_debs(at_end) == set(), "ending the RUN is fine only when the install came after"
 
 
 def test_rollback_points_at_the_kept_base_image():
