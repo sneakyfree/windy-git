@@ -7,8 +7,9 @@ oldest first; everything else stays FIFO behind them; main pushes and schedules 
 moved. "At most one at a time per runner slot": each pass keeps up to SLOTS approved jobs at the
 front, so approvals jump the line without starving everything else.
 Cheap on the GitHub quota (shared with stamps): it looks only at heads that have WAITING PR jobs,
-a head once seen fully approved is cached (approvals don't un-post), and it skips when fewer
-than MIN_BUDGET calls are left. Logged; one BOARD line per pass when it moves anything.
+a head seen fully approved is cached for APPROVAL_TTL_S (an approval CAN be withdrawn: a later
+failure or pending status on the same context wins, so the head is re-read after the TTL, Hub
+#96 LOW), and it skips when fewer than MIN_BUDGET calls are left. Logged; one BOARD line per pass when it moves anything.
 Required approvals per repo: APPROVALS below (windy-git needs only Hub's: it is Boss-exempt).
 """
 
@@ -26,6 +27,7 @@ import pr_status_bridge as b  # noqa: E402  (same GitHub helper and token)
 
 SLOTS = int(os.environ.get("APPROVED_FIRST_SLOTS", "2"))
 MIN_BUDGET = int(os.environ.get("APPROVED_FIRST_MIN_BUDGET", "1500"))
+APPROVAL_TTL_S = int(os.environ.get("APPROVED_FIRST_TTL_S", "1800"))
 STATE = Path(os.environ.get("APPROVED_FIRST_STATE", "/var/lib/windygit/approved-heads.json"))
 LOG = Path(os.environ.get("APPROVED_FIRST_LOG", "/var/log/windygit/approved-first.log"))
 DEFAULT_APPROVALS = ("windy-hub/approved", "windy-boss/approved")
@@ -40,15 +42,20 @@ group by p.name, j.commit_sha order by 3;
 """
 
 
-def approved(repo: str, sha: str, cache: set[str]) -> bool:
-    if sha in cache:
+def approved(repo: str, sha: str, cache: dict[str, float], now: float | None = None) -> bool:
+    """cache: sha -> when it was last READ fully approved. Fresh entries are trusted; older ones
+    are re-read, and a head no longer fully approved leaves the cache."""
+    now = time.time() if now is None else now
+    t = cache.get(sha, float("-inf"))
+    if t <= now and now - t < APPROVAL_TTL_S:   # a FUTURE read time (corrupt file, clock step back) is expired
         return True
+    cache.pop(sha, None)
     need = APPROVALS.get(repo, DEFAULT_APPROVALS)
     newest: dict[str, str] = {}                 # statuses come newest first: a later failure wins
     for s in b.commit_statuses(repo, sha):
         newest.setdefault(s["context"], s.get("state", ""))
     if all(newest.get(c) == "success" for c in need):
-        cache.add(sha)
+        cache[sha] = now
         return True
     return False
 
@@ -81,9 +88,11 @@ def main(query=cs.psql, post=cs.board) -> int:
         print(f"  approved-first: skipped (GitHub API budget {budget} < {MIN_BUDGET})")
         return 0
     try:
-        cache = set(json.loads(STATE.read_text()))
-    except (OSError, ValueError):
-        cache = set()
+        raw = json.loads(STATE.read_text())
+        # the old format (a list of shas, no read times) reads as expired: every head is re-read once
+        cache = {k: float(v) for k, v in raw.items()} if isinstance(raw, dict) else {}
+    except (OSError, ValueError, TypeError, AttributeError):
+        cache = {}
     try:
         heads = query(WAITING_HEADS_SQL)
         eligible = [(repo, sha) for repo, sha, _ in heads if b.SAFE_SHA.match(sha) and approved(repo, sha, cache)]
@@ -93,7 +102,8 @@ def main(query=cs.psql, post=cs.board) -> int:
         return 0
     try:
         STATE.parent.mkdir(parents=True, exist_ok=True)
-        STATE.write_text(json.dumps(sorted(cache & {sha for _, sha, _ in heads})))
+        live = {sha for _, sha, _ in heads}
+        STATE.write_text(json.dumps({k: v for k, v in cache.items() if k in live}, sort_keys=True))
     except OSError:
         pass
     if moved:
