@@ -944,8 +944,8 @@ def test_a_pass_runs_at_the_floor_and_when_the_budget_is_unreadable(monkeypatch,
     for budget_reply in ((200, {"resources": {"core": {"remaining": 1500}}}), (500, {})):
         calls = []
 
-        def github(method, path, body=None, _r=budget_reply):
-            calls.append(path)
+        def github(method, path, body=None, _r=budget_reply, _calls=calls):
+            _calls.append(path)
             return _r if path == "/rate_limit" else (404, {})
         monkeypatch.setattr(bridge, "github", github)
         monkeypatch.setattr(bridge, "REPOS", ["repo-x"])
