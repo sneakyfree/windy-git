@@ -907,3 +907,50 @@ def test_autorerun_note_is_posted_once(tmp_path, monkeypatch):
                         lambda repo, sha: [{"context": "windy-git/autorerun", "state": "success", "description": desc}])
     bridge.post_autorerun_note("r", "s")
     assert len(posted) == 1
+
+
+def test_a_pass_is_skipped_below_the_budget_floor(monkeypatch, capsys, tmp_path):
+    """10-28: the bridge (about 345 calls a pass) shares the user quota with stamps and lanes."""
+    monkeypatch.setattr(bridge, "SKIPS_FILE", tmp_path / "skips")
+    calls = []
+
+    def github(method, path, body=None):
+        calls.append(path)
+        if path == "/rate_limit":
+            return 200, {"resources": {"core": {"remaining": 1499}}}
+        return 200, []
+    monkeypatch.setattr(bridge, "github", github)
+    monkeypatch.setattr(bridge, "GITEA_TOKEN", "x")
+    monkeypatch.setattr(bridge, "GITHUB_TOKEN", "x")
+    assert bridge.main() == 0 and bridge.main() == 0
+    assert calls == ["/rate_limit"] * 2 and "1499 < 1500" in capsys.readouterr().out
+    assert bridge.main() == 1                                   # 3rd in a row: the pass FAILS -> alert
+    assert "WARN: the bridge has skipped 3 passes in a row" in capsys.readouterr().out
+
+
+def test_a_full_pass_resets_the_skip_count(monkeypatch, tmp_path):
+    monkeypatch.setattr(bridge, "SKIPS_FILE", tmp_path / "skips")
+    (tmp_path / "skips").write_text("2\n")
+    monkeypatch.setattr(bridge, "github", lambda m, p, body=None:
+                        (200, {"resources": {"core": {"remaining": 4000}}}) if p == "/rate_limit" else (404, {}))
+    monkeypatch.setattr(bridge, "REPOS", [])
+    monkeypatch.setattr(bridge, "GITEA_TOKEN", "x")
+    monkeypatch.setattr(bridge, "GITHUB_TOKEN", "x")
+    assert bridge.main() == 0 and (tmp_path / "skips").read_text().strip() == "0"
+
+
+def test_a_pass_runs_at_the_floor_and_when_the_budget_is_unreadable(monkeypatch, tmp_path):
+    monkeypatch.setattr(bridge, "SKIPS_FILE", tmp_path / "skips")
+    for budget_reply in ((200, {"resources": {"core": {"remaining": 1500}}}), (500, {})):
+        calls = []
+
+        def github(method, path, body=None, _r=budget_reply):
+            calls.append(path)
+            return _r if path == "/rate_limit" else (404, {})
+        monkeypatch.setattr(bridge, "github", github)
+        monkeypatch.setattr(bridge, "REPOS", ["repo-x"])
+        monkeypatch.setattr(bridge, "sync_prs", lambda r: [])
+        monkeypatch.setattr(bridge, "GITEA_TOKEN", "x")
+        monkeypatch.setattr(bridge, "GITHUB_TOKEN", "x")
+        bridge.main()
+        assert len(calls) > 1, budget_reply                 # it went on to the repos
