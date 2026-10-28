@@ -101,3 +101,11 @@ def test_the_old_list_state_reads_as_expired(monkeypatch, tmp_path):
     assert reads == [A]                                           # re-read once, not trusted blindly
     saved = json.loads((tmp_path / "approved.json").read_text())
     assert isinstance(saved, dict) and set(saved) == {A}
+
+
+def test_a_read_time_in_the_future_is_expired_not_trusted_forever(monkeypatch):
+    """Hub #106 LOW: a corrupt file or a clock step back must not pin an approval."""
+    reads = []
+    monkeypatch.setattr(af.b, "commit_statuses", lambda repo, sha: reads.append(sha) or [])
+    cache = {A: 10_000.0}
+    assert not af.approved("windy-git", A, cache, now=1000.0) and reads == [A] and A not in cache

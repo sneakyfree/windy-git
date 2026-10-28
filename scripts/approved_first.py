@@ -46,7 +46,8 @@ def approved(repo: str, sha: str, cache: dict[str, float], now: float | None = N
     """cache: sha -> when it was last READ fully approved. Fresh entries are trusted; older ones
     are re-read, and a head no longer fully approved leaves the cache."""
     now = time.time() if now is None else now
-    if now - cache.get(sha, float("-inf")) < APPROVAL_TTL_S:
+    t = cache.get(sha, float("-inf"))
+    if t <= now and now - t < APPROVAL_TTL_S:   # a FUTURE read time (corrupt file, clock step back) is expired
         return True
     cache.pop(sha, None)
     need = APPROVALS.get(repo, DEFAULT_APPROVALS)
