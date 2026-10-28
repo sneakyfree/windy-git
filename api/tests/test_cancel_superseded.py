@@ -1,9 +1,10 @@
-"""scripts/cancel_superseded.py: WAITING PR jobs on replaced commits are cancelled, nothing else
+"""scripts/cancel_superseded.py: waiting/blocked PR jobs on replaced commits are cancelled, nothing else
 (Boss 10-28 08:44Z: never running, main, tag or schedule; logged; one BOARD line when > 0)."""
 
 from __future__ import annotations
 
 import importlib.util
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -14,8 +15,9 @@ _spec.loader.exec_module(cs)
 
 def test_the_cancel_sql_carries_every_safety_line():
     sql = " ".join(cs.CANCEL_SQL.split())
-    assert "j.status = 5 and j.task_id = 0" in sql                       # waiting and unclaimed only
-    assert sql.count("j.status = 5 and j.task_id = 0") == 2              # re-checked inside the UPDATE
+    assert "j.status in (5, 7) and j.task_id = 0" in sql                 # waiting/blocked, unclaimed only
+    assert sql.count("j.status in (5, 7) and j.task_id = 0") == 2        # re-checked inside the UPDATE
+    assert re.findall(r"j\.status in \(([^)]*)\)", sql) == ["5, 7", "5, 7"]    # never 6 (running)
     assert "r.ref like 'refs/pull/%/head'" in sql                        # PR refs only: no main, no tag
     assert "r.event in ('pull_request', 'pull_request_sync')" in sql     # no push, schedule or dispatch
     assert "r.commit_sha <> n.commit_sha" in sql and "order by r.repo_id, r.ref, r.id desc" in sql
@@ -36,7 +38,7 @@ def test_cancels_are_logged_runs_closed_and_one_board_line_posted(tmp_path, monk
         return []
     assert cs.main(query, posts.append) == 0
     assert any("r.id in (501,502)" in s for s in seen)                   # runs closed when all cancelled
-    assert len(posts) == 1 and "3 WAITING PR jobs" in posts[0] and "Windy-Clone 1, windy-pro 2" in posts[0]
+    assert len(posts) == 1 and "3 waiting/blocked PR jobs" in posts[0] and "Windy-Clone 1, windy-pro 2" in posts[0]
     assert (tmp_path / "log").read_text().count("cancelled job") == 3
 
 
