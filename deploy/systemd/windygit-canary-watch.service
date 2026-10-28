@@ -1,0 +1,10 @@
+[Unit]
+Description=The login canary must never go quiet unseen: WARN after 20 min with no run (reads only)
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/srv/windygit/src
+# windy-job: "canary: ok" missing = a windy-uptime alert carrying the WARN line (Boss 10-28 (D)).
+ExecStart=/usr/local/bin/windy-job windygit-canary-watch 30m --expect "^canary: ok" --owner 13 -- /usr/bin/python3 /srv/windygit/src/scripts/canary_watch.py
+TimeoutStartSec=60

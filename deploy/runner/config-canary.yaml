@@ -1,0 +1,62 @@
+# act_runner configuration for the CANARY runner only (Boss 10-28 (B)). Same as config.yaml
+# except the labels. The login canary must never wait behind builds (10-28: 8 schedules
+# cancelled unpicked behind a 151-job queue, 07:10-08:42Z). Outside the 2-job CI cap: about 10 s
+# of work every 10 min.
+#
+# act_runner configuration (G7.1).
+#
+# Labels are EXPLICIT and PINNED. `ubuntu-latest` is banned (G7.5): all four
+# windy-registry workflows use it and every single run fails, because a
+# self-hosted runner has no such label unless you invent one. A workflow that
+# names a label nobody provides queues forever and looks like a hung CI system
+# rather than a typo.
+
+log:
+  level: info
+
+runner:
+  file: /data/.runner
+  capacity: 1          # per runner; parallelism = runners started by default (2, Boss 10-27). See docker-compose.yml
+  timeout: 10m          # the canary job has timeout-minutes 8
+  shutdown_timeout: 3m
+  insecure: false
+  fetch_timeout: 5s
+  fetch_interval: 2s
+  # Job image = deploy/runner/ci-image (catthehacker act-22.04 by digest + pinned tools),
+  # built locally by build-ci-image.sh. Rollback: point these at
+  # docker://localhost/windy-git-ci/ubuntu:22.04-0 (the old image by digest, kept) + restart-idle.sh.
+  labels:
+    # ONLY the canary label (Boss 10-28 (B)): this runner takes canary jobs and nothing else, and
+    # it is registered to the windy-git REPO, so no other repo can send work to it.
+    - "canary:docker://localhost/windy-git-ci/ubuntu:22.04-1"
+
+cache:
+  enabled: true
+  dir: /data/cache
+
+container:
+  # Empty = act creates a NETWORK PER JOB and removes it afterwards.
+  #
+  # This started as `bridge` for isolation, which was a mistake in both
+  # directions. It broke service containers — Postgres came up healthy but the
+  # job could not resolve the name `postgres`, because service DNS aliases only
+  # exist on a per-job network — and it was *weaker* isolation, since every
+  # concurrent job shared one flat bridge and could see its neighbours.
+  #
+  # A per-job network is both correct and stricter. Still no route to the forge:
+  # these networks live inside the dind daemon, which has no forge attachment
+  # at all.
+  network: ""
+  privileged: false
+  # --init: PID 1 in every job container is docker-init (tini), which reaps orphans as a real
+  # Linux system does. act starts jobs with entrypoint `sleep` and no init, so an orphaned
+  # child stayed a zombie forever: windy-pro's desktop-soak-1965 (hang=1) and
+  # fix146-contract-health failed on that alone (Word, Boss GO 10-27). Undo: empty this line.
+  options: "--init"
+  workdir_parent: /workspace
+  # A job may bind-mount exactly ONE daemon path: the read-only windy-pro build
+  # inputs (mounted :ro into dind itself). Per-runner, not per-repo (act_runner
+  # limit): any windyadmin repo could mount it; it is non-secret and read-only.
+  valid_volumes: ["/ci-inputs/windy-pro"]
+  docker_host: "-"       # do NOT expose the runner's own docker socket to jobs
+  force_pull: false

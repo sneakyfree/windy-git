@@ -20,7 +20,8 @@ on:
 
 jobs:
   probe:
-    runs-on: veron-1
+    # Its own runner (Boss 10-28 (B)): a monitor must never wait behind builds.
+    runs-on: canary
     timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
@@ -45,4 +46,6 @@ jobs:
           CANARY_LOGIN_EMAIL: ${{ secrets.CANARY_LOGIN_EMAIL }}
           CANARY_LOGIN_PASSWORD: ${{ secrets.CANARY_LOGIN_PASSWORD }}
           CANARY_ALERT_TO: ${{ secrets.CANARY_ALERT_TO }}
+          # Windy Git's OWN HQ ingest token (Admin mints it 10-28). Unset = the HQ row stays dark.
+          WINDY_GIT_HQ_INGEST_TOKEN: ${{ secrets.WINDY_GIT_HQ_INGEST_TOKEN }}
         run: python3 scripts/canary.py

@@ -323,6 +323,47 @@ def send_alert(subject: str, lines: list[str]) -> bool:
         return False
 
 
+# ── One HQ result row per run (Boss 10-28 (D), Admin's monitor_silent) ─────────────────────
+# Without it, HQ only sees the account server's probe logins: it can't tell this canary from
+# windy-signup-canary, and "canary silent" looks the same as "login down". So every run sends
+# ONE row, whatever the probes found: platform windy-git, service login-canary, service.health,
+# ok + failed check NAMES (never URLs, emails or text). DARK until Windy Git's own ingest token
+# exists (WINDY_ADMIN_INGEST_TOKEN__WINDY_GIT, minted by Admin): no token, no send, never another
+# token. A failed send never fails the probe run.
+HQ_URL = os.environ.get("CANARY_HQ_URL", "https://admin.windyword.ai/v1/events")
+
+
+def hq_row(results: list[Result], run: str | None, now: float, event_id: str) -> dict:
+    failed = [r.name for r in results if r.status != "ok"]       # unknown is NOT ok (never green unproven)
+    return {"events": [{
+        "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)),
+        "platform": "windy-git", "service": "login-canary", "event_type": "service.health",
+        "actor_type": "system",
+        "metadata": {"ok": not failed, "checks": len(results), "failed": failed,
+                     "run": int(run) if run and run.isdigit() else None,
+                     "synthetic": True, "population": "synthetic", "event_id": event_id},
+    }]}
+
+
+def send_hq_row(results: list[Result]) -> str:
+    token = os.environ.get("WINDY_GIT_HQ_INGEST_TOKEN", "").strip()
+    if not token:
+        return "hq row: dark (no ingest token yet)"
+    import uuid
+    body = hq_row(results, os.environ.get("GITHUB_RUN_NUMBER"), time.time(), uuid.uuid4().hex)
+    req = urllib.request.Request(HQ_URL, data=json.dumps(body).encode(), method="POST", headers={
+        "Authorization": f"Bearer {token}", "Content-Type": "application/json",
+        "User-Agent": "windy-git-canary/1.0", "X-Windy-Synthetic": "1"})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            reply = json.loads(r.read() or b"{}")
+            if r.status == 202 and reply.get("accepted") == 1:
+                return "hq row: sent (accepted 1)"
+            return f"hq row: NOT accepted (HTTP {r.status}, accepted={reply.get('accepted')})"
+    except (urllib.error.URLError, TimeoutError, ValueError) as e:
+        return f"hq row: send failed ({type(e).__name__})"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--no-alert", action="store_true")
@@ -349,6 +390,7 @@ def main() -> int:
     ]
 
     save_state(results)
+    print(send_hq_row(results))
 
     if not args.no_alert:
         if newly_bad:
