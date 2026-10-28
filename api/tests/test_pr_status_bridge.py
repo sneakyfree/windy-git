@@ -930,6 +930,7 @@ def test_a_pass_is_skipped_below_the_budget_floor(monkeypatch, capsys, tmp_path)
 
 def test_a_full_pass_resets_the_skip_count(monkeypatch, tmp_path):
     monkeypatch.setattr(bridge, "SKIPS_FILE", tmp_path / "skips")
+    monkeypatch.setattr(bridge, "STATE_FILE", tmp_path / "state.json")
     (tmp_path / "skips").write_text("2\n")
     monkeypatch.setattr(bridge, "github", lambda m, p, body=None:
                         (200, {"resources": {"core": {"remaining": 4000}}}) if p == "/rate_limit" else (404, {}))
@@ -941,6 +942,8 @@ def test_a_full_pass_resets_the_skip_count(monkeypatch, tmp_path):
 
 def test_a_pass_runs_at_the_floor_and_when_the_budget_is_unreadable(monkeypatch, tmp_path):
     monkeypatch.setattr(bridge, "SKIPS_FILE", tmp_path / "skips")
+    monkeypatch.setattr(bridge, "STATE_FILE", tmp_path / "state.json")
+    monkeypatch.setattr(bridge, "job_signatures", lambda r, shas: {})
     for budget_reply in ((200, {"resources": {"core": {"remaining": 1500}}}), (500, {})):
         calls = []
 
@@ -954,3 +957,96 @@ def test_a_pass_runs_at_the_floor_and_when_the_budget_is_unreadable(monkeypatch,
         monkeypatch.setattr(bridge, "GITHUB_TOKEN", "x")
         bridge.main()
         assert len(calls) > 1, budget_reply                 # it went on to the repos
+
+
+# ── step 2: the cross-pass state file (Boss 10-28) ──────────────────────────────────────────
+SHA_A = "a" * 40
+
+
+def _cache_world(monkeypatch, tmp_path, sigs, post_ok=True):
+    """One repo with one PR head; records which heads were processed this pass."""
+    processed = []
+    monkeypatch.setattr(bridge, "STATE_FILE", tmp_path / "state.json")
+    monkeypatch.setattr(bridge, "SKIPS_FILE", tmp_path / "skips")
+    monkeypatch.setattr(bridge, "REPOS", ["repo-x"])
+    monkeypatch.setattr(bridge, "GITEA_TOKEN", "x")
+    monkeypatch.setattr(bridge, "GITHUB_TOKEN", "x")
+    monkeypatch.setattr(bridge, "sync_prs", lambda r: [SHA_A])
+    monkeypatch.setattr(bridge, "job_signatures", lambda r, shas: dict(sigs))
+    monkeypatch.setattr(bridge, "fetched", lambda r, s: True)
+
+    def github(method, path, body=None):
+        if path == "/rate_limit":
+            return 200, {"resources": {"core": {"remaining": 4000}}}
+        if path == "/repos/sneakyfree/repo-x":
+            return 200, {"default_branch": "main"}
+        if path.endswith("/branches/main"):
+            return 200, {"commit": {"sha": SHA_A}}
+        return 404, None
+    monkeypatch.setattr(bridge, "github", github)
+
+    def post_statuses(repo, sha):
+        processed.append(sha)
+        bridge._STATUSES_CACHE[(repo, sha)] = []                # the GET worked
+        if not post_ok:
+            bridge.POST_FAILS[0] += 1
+    monkeypatch.setattr(bridge, "post_statuses", post_statuses)
+    for f in ("post_autorerun_note", "post_compute_guard", "post_ci_hygiene", "post_birth_terms", "post_secret_guard"):
+        monkeypatch.setattr(bridge, f, lambda *a, **k: None)
+    return processed
+
+
+def test_an_unchanged_head_is_read_once_and_then_skipped(monkeypatch, tmp_path):
+    sigs = {SHA_A: "1:1:1:100"}
+    processed = _cache_world(monkeypatch, tmp_path, sigs)
+    bridge.main()
+    bridge.main()
+    assert processed == [SHA_A]                                  # 2nd pass: cached
+
+
+def test_a_job_change_or_a_rules_change_forces_a_re_read(monkeypatch, tmp_path):
+    sigs = {SHA_A: "1:6:1:100"}
+    processed = _cache_world(monkeypatch, tmp_path, sigs)
+    bridge.main()
+    sigs[SHA_A] = "1:1:1:160"                                    # the job finished
+    monkeypatch.setattr(bridge, "job_signatures", lambda r, shas: dict(sigs))
+    bridge.main()
+    assert processed == [SHA_A, SHA_A]
+    monkeypatch.setattr(bridge, "rules_fingerprint", lambda: "deployed-new-rules")
+    bridge.main()
+    assert processed == [SHA_A] * 3
+
+
+def test_the_hourly_backstop_re_reads_an_unchanged_head(monkeypatch, tmp_path):
+    processed = _cache_world(monkeypatch, tmp_path, {SHA_A: "1:1:1:100"})
+    clock = [1_000_000.0]
+    monkeypatch.setattr(bridge.time, "time", lambda: clock[0])
+    bridge.main()
+    clock[0] += 49 * 60
+    bridge.main()                                                # inside 50 min: cached
+    clock[0] += 12 * 60
+    bridge.main()                                                # 61 min: past every key's backstop
+    assert processed == [SHA_A, SHA_A]
+
+
+def test_a_failed_post_or_an_unreadable_signature_is_never_cached(monkeypatch, tmp_path):
+    processed = _cache_world(monkeypatch, tmp_path, {SHA_A: "1:1:1:100"}, post_ok=False)
+    bridge.main()
+    bridge.main()
+    assert processed == [SHA_A, SHA_A]                           # retried, not cached
+    processed2 = _cache_world(monkeypatch, tmp_path / "b", {SHA_A: "1:1:1:100"})
+    (tmp_path / "b").mkdir()
+    monkeypatch.setattr(bridge, "job_signatures", lambda r, shas: None)   # the DB was unreadable
+    bridge.main()
+    bridge.main()
+    assert processed2 == [SHA_A, SHA_A]
+
+
+def test_the_default_branch_name_is_cached_for_a_day(monkeypatch, tmp_path):
+    _cache_world(monkeypatch, tmp_path, {SHA_A: "1:1:1:100"})
+    calls = []
+    inner = bridge.github
+    monkeypatch.setattr(bridge, "github", lambda m, p, body=None: calls.append(p) or inner(m, p, body))
+    bridge.main()
+    bridge.main()
+    assert calls.count("/repos/sneakyfree/repo-x") == 1
