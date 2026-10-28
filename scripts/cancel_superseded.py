@@ -4,7 +4,10 @@
 The queue was 150 deep and 23 of them (15%) were for PR commits nobody would ever read: the
 bridge posts only on a PR's CURRENT head. This is GitHub's "cancel-in-progress", for pending only:
   - PR refs only (refs/pull/N/head), events pull_request / pull_request_sync;
-  - the job is WAITING (status 5) and unclaimed (task_id 0). NEVER a running job;
+  - the job is WAITING (status 5) or BLOCKED on its `needs:` (status 7), and unclaimed
+    (task_id 0). NEVER a running job. Blocked jobs too (Hub #94 LOW): this cancel writes the DB
+    directly, so Gitea never re-resolves a cancelled job's dependents, and they would sit
+    blocked forever;
   - its run's commit is not the commit of the NEWEST run on that same repo + PR ref;
   - never a default-branch push, a tag, a schedule (the canary) or a dispatch.
 ONE SQL statement selects and cancels together and RETURNS what it cancelled, so a job a runner
@@ -33,14 +36,14 @@ with newest as (
   select j.id from action_run_job j
   join action_run r on r.id = j.run_id
   join newest n on n.repo_id = r.repo_id and n.ref = r.ref
-  where j.status = 5 and j.task_id = 0
+  where j.status in (5, 7) and j.task_id = 0
     and r.ref like 'refs/pull/%/head' and r.event in ('pull_request', 'pull_request_sync')
     and r.commit_sha <> n.commit_sha
   for update of j skip locked
 ), done as (
   update action_run_job j set status = 3, stopped = extract(epoch from now())::bigint,
          updated = extract(epoch from now())::bigint
-  from victims v where j.id = v.id and j.status = 5 and j.task_id = 0
+  from victims v where j.id = v.id and j.status in (5, 7) and j.task_id = 0
   returning j.id, j.run_id, j.repo_id, j.commit_sha, j.name
 )
 select d.id, p.name, r.ref, substr(d.commit_sha, 1, 8), d.name, d.run_id
@@ -105,7 +108,7 @@ def main(query=psql, post=board) -> int:
     per_repo: dict[str, int] = {}
     for r in rows:
         per_repo[r[1]] = per_repo.get(r[1], 0) + 1
-    post(f"[Windy Git] cancel-superseded: {len(rows)} WAITING PR jobs on replaced commits cancelled ("
+    post(f"[Windy Git] cancel-superseded: {len(rows)} waiting/blocked PR jobs on replaced commits cancelled ("
          + ", ".join(f"{k} {v}" for k, v in sorted(per_repo.items())) + f"). Log: {LOG}")
     return 0
 
