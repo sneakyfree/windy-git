@@ -214,6 +214,10 @@ if ! python3 "$(dirname "$0")/pr_status_bridge.py"; then
   log "FAILED pr status bridge"; FAILED=1
 fi
 
+# Cancel WAITING PR jobs whose commit a newer push replaced (Boss 10-28 08:44Z): never running,
+# main, tag or schedule. Never fails the sync.
+timeout -k 5 90 python3 "$(dirname "$0")/cancel_superseded.py" || log "cancel-superseded failed or timed out (non-fatal)"
+
 # Runner guard (Boss 10-01): PUBLIC sneakyfree repos have self-hosted GitHub runners on Veron.
 # A PR that changes a workflow so a stranger's code could reach one gets a red
 # windy-git/runner-guard status. Each status is posted once; never fails the sync.
