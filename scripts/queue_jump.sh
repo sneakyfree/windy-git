@@ -42,24 +42,27 @@ end=$(( $(date +%s) + WAIT ))
 # was CANCELLED (Gitea drops a waiting scheduled run when the next schedule fires): a FAILURE,
 # never an OK (10-28: a canary job read as "picked second" had been cancelled).
 state() { q "select status || ':' || task_id from action_run_job where id=$job;"; }
-while [ "$(date +%s)" -lt "$end" ]; do
-  st=$(state)
+# One read of the job, then exit with the verdict, or return while it is still waiting.
+# An empty or malformed read (the row is gone, a garbled reply) is a FAILURE: an empty task_id
+# once compared "!= 0" and read as picked (Hub #97 LOW).
+settle() {
+  local st; st=$(state)
+  if ! [[ "$st" =~ ^[0-9]+:[0-9]+$ ]]; then
+    trap - EXIT; revert; echo "FAILED: job $job's state is unreadable (${st:-empty}): NOT counted as picked ($(date -u +%TZ))"; exit 1
+  fi
   if [ "${st#*:}" != 0 ]; then
-    trap - EXIT; echo "OK: job $job was picked: task ${st#*:} ($(date -u +%TZ))"; exit 0
+    trap - EXIT; echo "OK: job $job $1: task ${st#*:} ($(date -u +%TZ))"; exit 0
   fi
   if [ "${st%%:*}" != 5 ]; then
     trap - EXIT; echo "FAILED: job $job left the queue WITHOUT a task: cancelled, not picked ($(date -u +%TZ))"; exit 1
   fi
+}
+while [ "$(date +%s)" -lt "$end" ]; do
+  settle "was picked"
   first=$(q "select job_id from action_task where id > $last_task order by id limit 1;")
   if [ -n "$first" ] && [ "$first" != "$job" ]; then
     sleep 1                                           # two runners in the same instant: give ours its turn
-    st=$(state)
-    if [ "${st#*:}" != 0 ]; then
-      trap - EXIT; echo "OK: job $job was picked second, right after job $first (task ${st#*:}) ($(date -u +%TZ))"; exit 0
-    fi
-    if [ "${st%%:*}" != 5 ]; then
-      trap - EXIT; echo "FAILED: job $job left the queue WITHOUT a task: cancelled, not picked ($(date -u +%TZ))"; exit 1
-    fi
+    settle "was picked second, right after job $first"
     trap - EXIT; revert; echo "REVERTED: job $first was picked first; job $job back to updated=$old"; exit 1
   fi
   sleep "$POLL"
