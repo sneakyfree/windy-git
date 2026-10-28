@@ -37,6 +37,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 import yaml
 
@@ -676,9 +677,54 @@ def post_autorerun_note(repo: str, sha: str) -> None:
     print(f"  {repo}@{sha[:7]} {AUTORERUN_CTX} noted -> {st}")
 
 
+# The sync token is the SAME GitHub user quota Boss's stamps and every lane's gh calls use (until
+# the windy-git-ci-status App lands). A pass costs about 345 calls; when fewer than this many are
+# left, the pass is skipped, so the bridge never takes the last of the budget (10-28: it hit 0
+# and blocked status posts and stamps).
+MIN_BUDGET = int(os.environ.get("BRIDGE_MIN_BUDGET", "1500"))
+# Skips in a row. At SKIP_WARN (15 min with no statuses posted) the pass FAILS, so the sync's
+# windy-job heartbeat alerts (Boss 10-28: a quiet CI must never pass for a calm one).
+SKIPS_FILE = Path(os.environ.get("BRIDGE_SKIPS_FILE", "/var/lib/windygit/bridge-skips"))
+SKIP_WARN = 3
+
+
+def _write_skips(n: int) -> None:
+    try:
+        SKIPS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        SKIPS_FILE.write_text(f"{n}\n")
+    except OSError:
+        pass  # a counter that can't be saved must not stop the statuses
+
+
+def api_budget() -> int | None:
+    """Calls left on the token (GET /rate_limit itself is free); None when it can't be read."""
+    st, body = github("GET", "/rate_limit")
+    try:
+        return int(body["resources"]["core"]["remaining"]) if st == 200 else None
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 def main() -> int:
     if not (GITEA_TOKEN and GITHUB_TOKEN):
         sys.exit("GITEA_SYNC_TOKEN and GITHUB_TOKEN are required")
+    budget = api_budget()
+    try:
+        skips = int(SKIPS_FILE.read_text().strip() or 0)
+    except (OSError, ValueError):
+        skips = 0
+    if budget is not None and budget < MIN_BUDGET:
+        skips += 1
+        _write_skips(skips)
+        print(f"  bridge pass SKIPPED: GitHub API budget {budget} < {MIN_BUDGET} (kept for stamps and lanes); "
+              f"{skips} in a row")
+        if skips >= SKIP_WARN:
+            print(f"  WARN: the bridge has skipped {skips} passes in a row; NO CI statuses posted for "
+                  f"{skips * 5}+ min (WARN to Boss and Windy Git)")
+            return 1
+        return 0
+    if skips:
+        _write_skips(0)
     failed = 0
     _STATUSES_CACHE.clear()
     for repo in REPOS:
