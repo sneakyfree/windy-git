@@ -122,4 +122,66 @@ def test_it_refuses_under_the_budget_floor_and_reads_nothing(monkeypatch, tmp_pa
     monkeypatch.setattr(sg, "STATE", tmp_path / "s.json")
     sg.main()
     assert calls == ["/rate_limit"]
-    assert "status gaps: skipped (GitHub API budget 1499 < 1500" in capsys.readouterr().out
+    assert "status gaps: deferred (GitHub API budget 1499 < 1500" in capsys.readouterr().out
+
+
+def test_budget_skips_are_deferred_twice_then_warn_and_a_real_pass_resets_the_count(monkeypatch, tmp_path, capsys):
+    """Hub #90 LOW: a budget skip must not alarm every 30 min, but a long run of them must."""
+    import re as _re
+    expect = _re.compile(r"^status gaps: (none|deferred .*)$")      # the service's --expect
+    monkeypatch.setattr(sg, "STATE", tmp_path / "s.json")
+    calls: list[str] = []
+    _fake_bridge(monkeypatch, calls, budget=1000)
+    lines = []
+    for _ in range(3):
+        sg.main()
+        lines.append(capsys.readouterr().out.strip().splitlines()[-1])
+    assert [bool(expect.search(x)) for x in lines] == [True, True, False], lines
+    assert lines[2].startswith("status gaps: SKIPPED 3 passes in a row"), lines[2]
+    _fake_bridge(monkeypatch, calls, budget=5000)
+    sg.main()
+    assert "status gaps: none" in capsys.readouterr().out
+    _fake_bridge(monkeypatch, calls, budget=1000)
+    sg.main()
+    assert "1 in a row" in capsys.readouterr().out                      # the good pass reset it
+
+
+def _pages(monkeypatch, pages, status=200):
+    def github(method, path, body=None):
+        n = int(path.rsplit("page=", 1)[1])
+        return (status, pages[n - 1]) if n <= len(pages) else (200, [])
+    monkeypatch.setattr(sg.b, "github", github)
+
+
+def test_pr_files_are_read_past_the_first_100(monkeypatch):
+    """Hub #90 LOW: a paths match on file 101 once read as "skipped"."""
+    page1 = [{"filename": f"docs/{i}.md"} for i in range(100)]
+    _pages(monkeypatch, [page1, [{"filename": "src/app.py"}]])
+    files = sg.changed_files("/repos/o/r/pulls/1/files?per_page=100", "pull_request")
+    assert len(files) == 101 and files[-1] == "src/app.py"
+    on = {"pull_request": {"paths-ignore": ["docs/**"]}}
+    assert sg.triggers(on, "pull_request", files) is True
+    assert sg.triggers(on, "pull_request", files[:100]) is False         # what page 1 alone said
+
+
+def test_an_unreadable_or_capped_file_list_is_unknown_and_expects_a_run(monkeypatch):
+    full = [{"filename": f"docs/{i}.md"} for i in range(100)]
+    _pages(monkeypatch, [full] * 30)                                     # GitHub's 3,000 cap
+    assert sg.changed_files("/x/files?per_page=100", "pull_request") is None
+    _pages(monkeypatch, [full], status=502)
+    assert sg.changed_files("/x/files?per_page=100", "pull_request") is None
+    monkeypatch.setattr(sg.b, "github", lambda m, p, body=None: (200, {"files": [{"filename": "a"}] * 300}))
+    assert sg.changed_files("/repos/o/r/commits/abc", "push") is None    # a commit lists at most 300
+    monkeypatch.setattr(sg.b, "github", lambda m, p, body=None: (200, {"files": [{"filename": "docs/a.md"}]}))
+    assert sg.changed_files("/repos/o/r/commits/abc", "push") == ["docs/a.md"]
+    assert sg.triggers({"push": {"paths-ignore": ["docs/**"]}}, "push", None) is True
+
+
+def test_when_gitea_ran_a_workflow_the_filter_calls_skipped_a_status_is_expected():
+    """Hub #90 LOW: a push's files are its head commit's only; Gitea filtered the whole push."""
+    warns, infos = sg.evaluate("repo-x", [], {"ci.yml": False}, _jobs({"ci.yml": ["test"]}))
+    assert warns == ["ci.yml ran on Windy Git but no windy-git/ci/* status was posted (bridge)"], warns
+    warns, infos = sg.evaluate("repo-x", ["windy-git/ci/test"], {"ci.yml": False}, _jobs({"ci.yml": ["test"]}))
+    assert warns == [] and infos == []                                   # covered: nothing to say
+    warns, infos = sg.evaluate("repo-x", [], {"ci.yml": False}, _jobs({}))
+    assert warns == [] and infos == ["ci.yml skipped by its branches/paths filter"]

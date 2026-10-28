@@ -17,10 +17,15 @@ have at least one windy-git/<workflow>/<job> status. Otherwise:
         never got a push), it ran and the bridge posted nothing, or the commit isn't on Windy Git
         at all (sync lag)
 Main commits a newer head replaced are never checked (Gitea runs a push's head only), and the
-log says so. COST: the sync token is shared with the status bridge, so a covered or explained
+log says so. Changed files for a paths filter: a PR's full list (paged, up to GitHub's 3,000); a
+push's are the HEAD commit's only (GitHub can't say where the push began), so whenever Gitea DID
+create a run for a workflow this filter calls skipped, Gitea's view (the whole push) wins and a
+status is expected. A list that can't be read whole is "unknown": a run is expected. COST: the sync token is shared with the status bridge, so a covered or explained
 head is cached and never re-read, PR files are fetched only when a paths filter needs them, and
-the run refuses when fewer than MIN_BUDGET GitHub calls are left. Output for windy-job --expect: "status gaps: none" or "status gaps: N (WARN to Boss
-and the owner)".
+the run is deferred when fewer than MIN_BUDGET GitHub calls are left. Output for windy-job
+--expect: "status gaps: none", "status gaps: deferred ..." (a budget skip; the 1st and 2nd in a
+row are not an alarm), or a WARN: "status gaps: N (WARN to Boss and the owner)" or "status gaps:
+SKIPPED N passes in a row ..." from the SKIP_ALARM-th budget skip in a row on.
 
   sudo python3 scripts/status_gap.py      (env: /etc/windygit/sync.env, as the bridge)
 """
@@ -47,6 +52,8 @@ STATE = Path(os.environ.get("STATUS_GAP_STATE", "/var/lib/windygit/status-gap.js
 # The sync token is SHARED with the status bridge, whose posts the whole fleet waits on. A run
 # needs about 100 calls; below this budget it refuses (10-28: dry runs emptied the quota once).
 MIN_BUDGET = int(os.environ.get("STATUS_GAP_MIN_BUDGET", "1500"))
+SKIP_ALARM = 3            # budget skips in a row before it WARNs (Hub #90 LOW: not every 30 min)
+FILES_PAGES = 30          # 30 x 100 = GitHub's 3,000-file limit for a PR's file list
 
 
 def _glob_re(pat: str) -> re.Pattern[str]:
@@ -81,7 +88,7 @@ def _matches(path: str, patterns: list[str]) -> bool:
     return hit
 
 
-def triggers(on, event: str, files: list[str], branch: str = "main") -> bool | None:
+def triggers(on, event: str, files: list[str] | None, branch: str = "main") -> bool | None:
     """True/False: does a workflow with this `on:` run for `event` (push to `branch`, or a PR
     into `branch`) on these changed files? None: it doesn't listen to `event` at all."""
     if isinstance(on, str):
@@ -95,7 +102,7 @@ def triggers(on, event: str, files: list[str], branch: str = "main") -> bool | N
         return False
     if "branches-ignore" in spec and _matches(branch, [str(x) for x in spec["branches-ignore"]]):
         return False
-    if not files:
+    if not files:              # None = unknown (unreadable or capped): expect a run
         return True
     if "paths" in spec:
         return any(_matches(f, list(spec["paths"])) for f in files)
@@ -156,6 +163,27 @@ def has_path_filter(on, event: str) -> bool:
     return False
 
 
+def changed_files(path: str, event: str) -> list[str] | None:
+    """The changed files, or None when the list can't be read WHOLE (an error, or at GitHub's cap):
+    None means "unknown", and triggers() then expects a run (Hub #90 LOW: a paths match past file
+    100 once read as skipped)."""
+    if event != "pull_request":
+        st, body = b.github("GET", path)
+        files = body.get("files") if st == 200 and isinstance(body, dict) else None
+        if not isinstance(files, list) or len(files) >= 300:    # a commit lists at most 300 files
+            return None
+        return [f["filename"] for f in files]
+    out: list[str] = []
+    for page in range(1, FILES_PAGES + 1):
+        st, body = b.github("GET", f"{path}&page={page}")
+        if st != 200 or not isinstance(body, list):
+            return None
+        out += [f["filename"] for f in body]
+        if len(body) < 100:
+            return out
+    return None
+
+
 def api_budget() -> int:
     """Calls left on the sync token (GET /rate_limit itself is free)."""
     st, body = b.github("GET", "/rate_limit")
@@ -170,6 +198,11 @@ def load_state() -> dict:
         return json.loads(STATE.read_text())
     except (OSError, ValueError):
         return {}
+
+
+def save_state(state: dict) -> None:
+    STATE.parent.mkdir(parents=True, exist_ok=True)
+    STATE.write_text(json.dumps(state, sort_keys=True))
 
 
 def disabled_workflows(repo: str, query=psql) -> set[str]:
@@ -198,12 +231,14 @@ def evaluate(repo: str, contexts: list[str], decisions: dict[str, bool | None], 
         if wf in disabled:
             infos.append(f"{wf} is disabled on Windy Git by design (repo Actions settings)")
             continue
-        if not runs_here:
-            infos.append(f"{wf} skipped by its branches/paths filter")
-            continue
         if any(c.startswith(f"windy-git/{stem}/") for c in contexts):
             continue
         jobs = jobs_of(wf)
+        if not runs_here and not jobs:
+            infos.append(f"{wf} skipped by its branches/paths filter")
+            continue
+        # here: it should run, or Gitea ran it although this filter says skip (a push's files are
+        # the head commit's only; Gitea saw the whole push), so a status is expected
         if jobs is None:
             warns.append(f"no Gitea run was created although {wf} should run")
         elif jobs and all(b.needs_daemon(repo, stem, j) or f"{stem}/{j}" in b.NON_BLOCKING.get(repo, ())
@@ -221,10 +256,17 @@ def _age_min(iso: str, now: float) -> float:
 def main() -> int:
     now = time.time()
     budget = api_budget()
-    if budget < MIN_BUDGET:
-        print(f"status gaps: skipped (GitHub API budget {budget} < {MIN_BUDGET}; the bridge needs it more)")
-        return 0
     state = load_state()
+    if budget < MIN_BUDGET:
+        n = int(state.get("skips", 0)) + 1
+        state["skips"] = n
+        save_state(state)
+        why = f"GitHub API budget {budget} < {MIN_BUDGET}; the bridge needs it more"
+        if n < SKIP_ALARM:
+            print(f"status gaps: deferred ({why}; {n} in a row, WARN at {SKIP_ALARM})")
+        else:
+            print(f"status gaps: SKIPPED {n} passes in a row ({why}): heads unchecked (WARN to Boss)")
+        return 0
     done: dict[str, str] = state.get("done", {})          # sha -> "ok" | "info" (never re-read)
     branches: dict[str, str] = state.get("default_branch", {})
     warns, infos, checked, seen = [], [], 0, set()
@@ -263,13 +305,11 @@ def main() -> int:
                     continue
                 contexts = [s["context"] for s in b.commit_statuses(repo, sha)]
                 ons = workflow_ons(repo, sha)
-                files: list[str] = []
                 uncovered = [w for w, on in ons.items()
                              if not any(c.startswith(f"windy-git/{w.removesuffix('.yml')}/") for c in contexts)]
+                files: list[str] | None = []
                 if any(has_path_filter(ons[w], event) for w in uncovered):   # files only when a filter decides
-                    st, body = b.github("GET", files_path)
-                    files = [f["filename"] for f in (body if event == "pull_request" else body.get("files", []))] \
-                        if st == 200 else []
+                    files = changed_files(files_path, event)
                 if off is None:
                     off = frozenset(disabled_workflows(repo))
                 decisions = {w: triggers(on, event, files, branch) for w, on in ons.items()}
@@ -280,9 +320,7 @@ def main() -> int:
                     done[sha] = "info" if i else "ok"
         except Exception as e:  # noqa: BLE001 - one repo's failure must not hide the others
             warns.append(f"{repo}: check failed ({type(e).__name__}: {str(e)[:80]})")
-    STATE.parent.mkdir(parents=True, exist_ok=True)
-    STATE.write_text(json.dumps({"done": {k: v for k, v in done.items() if k in seen},
-                                 "default_branch": branches}, sort_keys=True))
+    save_state({"done": {k: v for k, v in done.items() if k in seen}, "default_branch": branches, "skips": 0})
     for line in infos:
         print("INFO " + line)
     for line in warns:
