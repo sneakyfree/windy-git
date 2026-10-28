@@ -1,5 +1,5 @@
 # act_runner configuration for the CANARY runner only (Boss 10-28 (B)). Same as config.yaml
-# except the labels. The login canary must never wait behind builds (10-28: 8 schedules
+# except the labels, the timeout and valid_volumes (none). The login canary must never wait behind builds (10-28: 8 schedules
 # cancelled unpicked behind a 151-job queue, 07:10-08:42Z). Outside the 2-job CI cap: about 10 s
 # of work every 10 min.
 #
@@ -54,9 +54,8 @@ container:
   # fix146-contract-health failed on that alone (Word, Boss GO 10-27). Undo: empty this line.
   options: "--init"
   workdir_parent: /workspace
-  # A job may bind-mount exactly ONE daemon path: the read-only windy-pro build
-  # inputs (mounted :ro into dind itself). Per-runner, not per-repo (act_runner
-  # limit): any windyadmin repo could mount it; it is non-secret and read-only.
-  valid_volumes: ["/ci-inputs/windy-pro"]
+  # NONE (Hub #95 LOW, least privilege): the canary mounts nothing. The build runners allow the
+  # read-only windy-pro inputs; this runner never builds windy-pro.
+  valid_volumes: []
   docker_host: "-"       # do NOT expose the runner's own docker socket to jobs
   force_pull: false
