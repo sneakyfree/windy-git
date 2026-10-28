@@ -1,0 +1,14 @@
+[Unit]
+Description=Count logged CI flake retries per 7 days; over the limit = a LOW to Boss (reads only)
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/srv/windygit/src
+# GITEA_ADMIN_TOKEN (read job logs). Env only, never argv.
+EnvironmentFile=/srv/windygit/src/.env
+# windy-job: a heartbeat windy-uptime checks. "over limit: none" missing = an alert carrying the
+# LOW line (Boss rule 10-28: more than 2 logged retries of one flake in 7 days).
+ExecStart=/usr/local/bin/windy-job windygit-flake-count 26h --expect "^over limit: none$" --owner 13 -- /usr/bin/python3 /srv/windygit/src/scripts/flake_count.py
+TimeoutStartSec=1800
+Nice=10
