@@ -49,8 +49,8 @@ def _runner_picks(db: Path, job: int) -> None:
             break
         time.sleep(0.05)
     c = sqlite3.connect(db)
-    c.execute("insert into action_task (job_id) values (?)", (job,))
-    c.execute("update action_run_job set status=6 where id=?", (job,))
+    cur = c.execute("insert into action_task (job_id) values (?)", (job,))
+    c.execute("update action_run_job set status=6, task_id=? where id=?", (cur.lastrowid, job))  # one tx, like Gitea
     c.commit()
 
 
@@ -59,7 +59,7 @@ def test_the_job_jumps_and_is_kept_when_it_is_picked_next(tmp_path):
     p = subprocess.Popen(["bash", str(SCRIPT), "9"], env=env, stdout=subprocess.PIPE, text=True)
     _runner_picks(db, 9)
     out, _ = p.communicate(timeout=30)
-    assert p.returncode == 0 and "OK: job 9 was the next job picked" in out, out
+    assert p.returncode == 0 and "OK: job 9 was picked: task" in out, out
     assert _updated(db, 9) == 99  # one below the oldest waiting (100)
 
 
@@ -94,15 +94,28 @@ def test_killed_mid_watch_it_still_reverts(tmp_path):
     import signal
     db, env = _setup(tmp_path)
     p = subprocess.Popen(["bash", str(SCRIPT), "9"], env=env, stdout=subprocess.PIPE, text=True)
+    first = p.stdout.readline()                     # "...watching for the next pick": the loop is running
+    assert "watching" in first and _updated(db, 9) == 99, first
+    p.send_signal(signal.SIGTERM)
+    out, _ = p.communicate(timeout=30)
+    assert p.returncode == 130 and "REVERTED on exit" in first + out, first + out
+    assert _updated(db, 9) == 500
+
+
+def test_a_job_cancelled_while_waiting_is_a_failure_not_an_ok(tmp_path):
+    """10-28: Gitea cancelled a waiting canary job and the script reported "picked second"."""
+    db, env = _setup(tmp_path)
+    p = subprocess.Popen(["bash", str(SCRIPT), "9"], env=env, stdout=subprocess.PIPE, text=True)
     for _ in range(200):
         if _updated(db, 9) != 500:
             break
         time.sleep(0.05)
-    assert _updated(db, 9) == 99
-    p.send_signal(signal.SIGTERM)
+    c = sqlite3.connect(db)
+    c.execute("insert into action_task (job_id) values (1)")              # another job picked
+    c.execute("update action_run_job set status=3 where id=9")            # ours CANCELLED, no task
+    c.commit()
     out, _ = p.communicate(timeout=30)
-    assert p.returncode == 130 and "REVERTED on exit" in out, out
-    assert _updated(db, 9) == 500
+    assert p.returncode == 1 and "cancelled, not picked" in out, out
 
 
 def test_picked_second_in_the_same_instant_is_reported_as_ok(tmp_path):
@@ -113,9 +126,10 @@ def test_picked_second_in_the_same_instant_is_reported_as_ok(tmp_path):
             break
         time.sleep(0.05)
     c = sqlite3.connect(db)
-    c.execute("insert into action_task (job_id) values (1)")
-    c.execute("insert into action_task (job_id) values (9)")
-    c.execute("update action_run_job set status=6 where id in (1, 9)")
+    t1 = c.execute("insert into action_task (job_id) values (1)").lastrowid
+    t9 = c.execute("insert into action_task (job_id) values (9)").lastrowid
+    c.execute("update action_run_job set status=6, task_id=? where id=1", (t1,))
+    c.execute("update action_run_job set status=6, task_id=? where id=9", (t9,))
     c.commit()
     out, _ = p.communicate(timeout=30)
-    assert p.returncode == 0 and "picked second, right after job 1" in out, out
+    assert p.returncode == 0 and "OK: job 9 was picked" in out, out          # "picked" or "picked second": it ran

@@ -37,15 +37,28 @@ q "update action_run_job set updated=$new where id=$job and status=5 and task_id
 echo "job $job: updated $old -> $new (oldest waiting was $min); watching for the next pick"
 
 end=$(( $(date +%s) + WAIT ))
+# "Picked" means Gitea set the job's task_id (it claims the job and sets status in ONE
+# transaction, so one read of the job row is atomic). A job that leaves "waiting" with task_id 0
+# was CANCELLED (Gitea drops a waiting scheduled run when the next schedule fires): a FAILURE,
+# never an OK (10-28: a canary job read as "picked second" had been cancelled).
+state() { q "select status || ':' || task_id from action_run_job where id=$job;"; }
 while [ "$(date +%s)" -lt "$end" ]; do
+  st=$(state)
+  if [ "${st#*:}" != 0 ]; then
+    trap - EXIT; echo "OK: job $job was picked: task ${st#*:} ($(date -u +%TZ))"; exit 0
+  fi
+  if [ "${st%%:*}" != 5 ]; then
+    trap - EXIT; echo "FAILED: job $job left the queue WITHOUT a task: cancelled, not picked ($(date -u +%TZ))"; exit 1
+  fi
   first=$(q "select job_id from action_task where id > $last_task order by id limit 1;")
-  if [ -n "$first" ]; then
-    if [ "$first" = "$job" ]; then
-      trap - EXIT; echo "OK: job $job was the next job picked ($(date -u +%TZ))"; exit 0
+  if [ -n "$first" ] && [ "$first" != "$job" ]; then
+    sleep 1                                           # two runners in the same instant: give ours its turn
+    st=$(state)
+    if [ "${st#*:}" != 0 ]; then
+      trap - EXIT; echo "OK: job $job was picked second, right after job $first (task ${st#*:}) ($(date -u +%TZ))"; exit 0
     fi
-    if [ "$(q "select status from action_run_job where id=$job;")" != 5 ]; then
-      # Two runners picked at once and ours came second: it still ran at the front (Hub, #87).
-      trap - EXIT; echo "OK: job $job was picked second, right after job $first ($(date -u +%TZ))"; exit 0
+    if [ "${st%%:*}" != 5 ]; then
+      trap - EXIT; echo "FAILED: job $job left the queue WITHOUT a task: cancelled, not picked ($(date -u +%TZ))"; exit 1
     fi
     trap - EXIT; revert; echo "REVERTED: job $first was picked first; job $job back to updated=$old"; exit 1
   fi
