@@ -1,0 +1,11 @@
+{
+  "what": "WINDY MOBILE MR32a (D80): the exact prebuilt the CI runner image carries for scripts/test-mirror-cipher.cjs. Windy Git bakes this folder's lock with npm ci at image-build time and checks the binary against binary_sha256; the gate downloads nothing (Windy Boss, 2026-10-28 09:16Z).",
+  "package": "better-sqlite3-multiple-ciphers",
+  "version": "11.10.0",
+  "runner": "linux x64, Node 22 (ABI node-v127)",
+  "asset": "better-sqlite3-multiple-ciphers-v11.10.0-node-v127-linux-x64.tar.gz",
+  "asset_url": "https://github.com/m4heshd/better-sqlite3-multiple-ciphers/releases/download/v11.10.0/better-sqlite3-multiple-ciphers-v11.10.0-node-v127-linux-x64.tar.gz",
+  "asset_sha256": "67b1b14333afe9ec700ed48bf58b6bb1d2852172331fd2e25b2f48ed3502d97d",
+  "binary": "build/Release/better_sqlite3.node",
+  "binary_sha256": "1fb04acc59d6c2fadd471a7defbef888aa681faae39dba16e2a113e6ae38d9d0"
+}

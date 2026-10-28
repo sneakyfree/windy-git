@@ -1,0 +1,9 @@
+{
+  "name": "windy-mirror-cipher-check",
+  "private": true,
+  "description": "WINDY MOBILE MR32a (D80): the one package CI's gates job needs to check the Mirror's encryption on the REAL module (scripts/test-mirror-cipher.cjs). Windy Git bakes exactly this lock, and the prebuilt named in prebuilt.json, into the runner image; the gate downloads nothing.",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "better-sqlite3-multiple-ciphers": "11.10.0"
+  }
+}
