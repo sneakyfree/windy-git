@@ -218,6 +218,10 @@ fi
 # main, tag or schedule. Never fails the sync.
 timeout -k 5 90 python3 "$(dirname "$0")/cancel_superseded.py" || log "cancel-superseded failed or timed out (non-fatal)"
 
+# Queue order (Boss 10-28 09:18Z): jobs of fully-approved PRs go first, oldest first, at most
+# one per runner slot per pass. Never fails the sync.
+timeout -k 5 120 python3 "$(dirname "$0")/approved_first.py" || log "approved-first failed or timed out (non-fatal)"
+
 # Runner guard (Boss 10-01): PUBLIC sneakyfree repos have self-hosted GitHub runners on Veron.
 # A PR that changes a workflow so a stranger's code could reach one gets a red
 # windy-git/runner-guard status. Each status is posted once; never fails the sync.
