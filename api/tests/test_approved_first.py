@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
 import sys
 from pathlib import Path
@@ -52,7 +53,7 @@ def test_only_fully_approved_heads_are_moved_and_approvals_are_cached(monkeypatc
     assert len(posts) == 1 and "2 job(s)" in posts[0]
     reads.clear()
     af.main(query, posts.append)
-    assert A not in reads                                         # cached: never re-read
+    assert A not in reads                                         # cached: not re-read within the TTL
 
 
 def test_windy_git_needs_only_hubs_approval():
@@ -72,3 +73,31 @@ def test_below_the_budget_floor_it_reads_nothing(monkeypatch, tmp_path):
     called = []
     af.main(lambda sql: called.append(sql) or [], lambda line: None)
     assert called == [] and reads == []
+
+
+def test_a_cached_approval_expires_and_a_withdrawn_one_leaves_the_cache():
+    """Hub #96 LOW: an approval can be withdrawn (a later failure on the same context)."""
+    import pytest
+
+    statuses = {A: _ok("windy-hub/approved")}
+    reads = []
+    mp = pytest.MonkeyPatch()
+    mp.setattr(af.b, "commit_statuses", lambda repo, sha: reads.append(sha) or statuses[sha])
+    try:
+        cache: dict = {}
+        assert af.approved("windy-git", A, cache, now=1000.0) and cache == {A: 1000.0}
+        assert af.approved("windy-git", A, cache, now=1000.0 + af.APPROVAL_TTL_S - 1) and reads == [A]
+        statuses[A] = [{"context": "windy-hub/approved", "state": "failure"}] + _ok("windy-hub/approved")
+        assert not af.approved("windy-git", A, cache, now=1000.0 + af.APPROVAL_TTL_S)    # expired: re-read
+        assert reads == [A, A] and A not in cache
+    finally:
+        mp.undo()
+
+
+def test_the_old_list_state_reads_as_expired(monkeypatch, tmp_path):
+    reads = _world(monkeypatch, tmp_path, {A: _ok("windy-hub/approved", "windy-boss/approved")})
+    (tmp_path / "approved.json").write_text(json.dumps([A]))
+    af.main(lambda sql: [["windy-pro", A, "1"]] if sql is af.WAITING_HEADS_SQL else [], lambda line: None)
+    assert reads == [A]                                           # re-read once, not trusted blindly
+    saved = json.loads((tmp_path / "approved.json").read_text())
+    assert isinstance(saved, dict) and set(saved) == {A}
