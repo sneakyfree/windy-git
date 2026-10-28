@@ -179,6 +179,22 @@ services:
       GITEA_RUNNER_NAME: veron-1-6
     volumes: [./config.yaml:/config.yaml:ro, runner-data-6:/data]
 
+  # ── Boss 10-28 (B): the login canary's own runner, outside the 2-job cap ──
+  # Registered to the windy-git REPO (repo-scoped token), offering only the `canary` label, so
+  # only windy-git's canary.yml can use it. CANARY_RUNNER_TOKEN is needed for the FIRST start
+  # only (the registration then lives in runner-data-canary).
+  runner-canary:
+    <<: *runner
+    environment:
+      DOCKER_HOST: tcp://dind:2375
+      GITEA_INSTANCE_URL: https://app.windygit.com
+      GITEA_RUNNER_REGISTRATION_TOKEN: ${CANARY_RUNNER_TOKEN:-}
+      GITEA_RUNNER_NAME: veron-1-canary
+      CONFIG_FILE: /config.yaml
+    volumes: [./config-canary.yaml:/config.yaml:ro, runner-data-canary:/data]
+    cpus: 1.0
+    mem_limit: 1g
+
 networks:
   jobs:
     # Untrusted job containers live here. No route to the forge.
@@ -193,4 +209,5 @@ volumes:
   runner-data-4:
   runner-data-5:
   runner-data-6:
+  runner-data-canary:
 

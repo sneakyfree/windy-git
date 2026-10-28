@@ -481,7 +481,8 @@ def test_g15_runner_is_cpu_and_memory_bounded():
 def test_g75_workflows_use_a_label_this_runner_actually_provides():
     """A workflow naming a label nobody provides queues forever and presents as
     a hung CI system rather than a typo."""
-    cfg = (ROOT / "deploy" / "runner" / "config.yaml").read_text()
+    # The build runners' labels plus the canary runner's own (Boss 10-28 (B)).
+    cfg = "\n".join((ROOT / "deploy" / "runner" / f).read_text() for f in ("config.yaml", "config-canary.yaml"))
     provided = {
         ln.split(":")[0].strip().strip('"- ')
         for ln in cfg.splitlines()
@@ -550,7 +551,9 @@ def test_g76_canary_does_not_run_on_kit_zero():
     """A canary hosted on the box it watches dies with that box, and reports
     nothing at the exact moment it matters."""
     wf = (ROOT / ".gitea" / "workflows" / "canary.yml").read_text()
-    assert "runs-on: veron-1" in wf
+    # Its own runner since 10-28 (Boss (B)), which is a Veron 1 compose service, never Kit 0.
+    assert "runs-on: canary" in wf
+    assert "runner-canary:" in (ROOT / "deploy" / "runner" / "docker-compose.yml").read_text()
     assert "72.60.118.54" not in wf
 
 
