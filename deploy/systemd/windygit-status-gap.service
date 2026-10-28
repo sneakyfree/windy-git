@@ -1,0 +1,13 @@
+[Unit]
+Description=Every open PR head and default-branch head gets Windy Git CI statuses within 30 min (reads only)
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/srv/windygit/src
+EnvironmentFile=/etc/windygit/sync.env
+# windy-job: a heartbeat windy-uptime checks; "status gaps: none" missing = an alert carrying the
+# WARN lines (Boss 10-28: a head with no windy-git statuses after 30 min = WARN to Boss and the owner).
+ExecStart=/usr/local/bin/windy-job windygit-status-gap 2h --expect "^status gaps: none$" --owner 13 -- /usr/bin/python3 /srv/windygit/src/scripts/status_gap.py
+TimeoutStartSec=900
+Nice=10

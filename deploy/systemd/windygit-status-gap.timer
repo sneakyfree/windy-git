@@ -1,0 +1,9 @@
+[Unit]
+Description=Status-gap check, every 30 minutes
+
+[Timer]
+OnBootSec=20min
+OnUnitActiveSec=30min
+
+[Install]
+WantedBy=timers.target
