@@ -1,0 +1,17 @@
+# windy-git's own workflow rules (Boss 10-28), enforced by api/tests/test_workflow_guard.py.
+#  (a) 07:26Z: a workflow that runs tests or a suite gate has NO paths / paths-ignore filter.
+#  (b) 07:36Z: a job that reaches a live host (uses CI secrets, or deploys / publishes / uploads)
+#      runs only by hand (workflow_dispatch-only workflow, or `if: false`), never on push, tag,
+#      schedule or PR. 08:27Z: a READ-ONLY probe or monitor that needs a schedule may be a NAMED
+#      exception here, if its login is a lab account and its rows are synthetic in HQ.
+# Exceptions are named by workflow FILE and JOB, each with its reason. Nothing else may appear.
+path_filter_exceptions: []
+live_host_exceptions:
+  - workflow: canary.yml
+    job: probe
+    reason: >-
+      The fleet canary (G7.6), every 10 min: a READ-ONLY live sign-in probe of account.windyword.ai
+      (POST login then logout, as a dedicated probe account on probe.windyword.ai: lockbox
+      WINDYGIT_PROBE_*), every request sends X-Windy-Synthetic: 1, and an alert email goes out via
+      Resend only on a state change. It deploys, publishes and uploads nothing. A schedule is the
+      point: it is the login monitor for the 08-12 class of outage. Boss 10-28 08:27Z, option A.
