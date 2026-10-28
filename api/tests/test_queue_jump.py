@@ -11,8 +11,9 @@ import time
 from pathlib import Path
 
 SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "queue_jump.sh"
-FAKE_WGQ = """#!{py}
-import os, sqlite3, sys
+# The fake is run through /bin/sh so an interpreter path with a space still works (a shebang
+# line can't hold one: a checkout under ".../Windy Git/..." failed every test here).
+FAKE_WGQ = """import os, sqlite3, sys
 db = sqlite3.connect(os.environ["FAKE_DB"])
 cur = db.execute(sys.stdin.read())
 rows = cur.fetchall() if cur.description else []
@@ -31,8 +32,9 @@ def _setup(tmp_path: Path) -> tuple[Path, dict]:
                   [(1, 5, 0, 100), (2, 5, 0, 110), (3, 6, 77, 90), (4, 5, 78, 95), (9, 5, 0, 500)])
     c.execute("insert into action_task values (77, 3)")
     c.commit()
+    (tmp_path / "wgq.py").write_text(FAKE_WGQ)
     wgq = tmp_path / "wg-q"
-    wgq.write_text(FAKE_WGQ.format(py=sys.executable))
+    wgq.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{tmp_path / "wgq.py"}"\n')
     wgq.chmod(0o755)
     env = {**os.environ, "WGQ": str(wgq), "FAKE_DB": str(db), "QUEUE_JUMP_POLL": "0.1", "QUEUE_JUMP_WAIT": "20"}
     return db, env
@@ -133,3 +135,18 @@ def test_picked_second_in_the_same_instant_is_reported_as_ok(tmp_path):
     c.commit()
     out, _ = p.communicate(timeout=30)
     assert p.returncode == 0 and "OK: job 9 was picked" in out, out          # "picked" or "picked second": it ran
+
+
+def test_an_unreadable_state_is_a_failure_not_an_ok(tmp_path):
+    """Hub #97 LOW: if the job row vanishes, the empty task_id must not read as "picked"."""
+    db, env = _setup(tmp_path)
+    p = subprocess.Popen(["bash", str(SCRIPT), "9"], env=env, stdout=subprocess.PIPE, text=True)
+    for _ in range(200):
+        if _updated(db, 9) != 500:
+            break
+        time.sleep(0.05)
+    c = sqlite3.connect(db)
+    c.execute("delete from action_run_job where id=9")
+    c.commit()
+    out, _ = p.communicate(timeout=30)
+    assert p.returncode == 1 and "unreadable" in out and "OK:" not in out, out
