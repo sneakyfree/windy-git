@@ -204,8 +204,14 @@ def gitea(method, path, body=None):
     return _call(GITEA + "/api/v1", f"token {GITEA_TOKEN}", method, path, body)
 
 
+POST_FAILS = [0]  # failed status POSTs this pass: a head with one is never cached (step 2, 10-28)
+
+
 def github(method, path, body=None):
-    return _call("https://api.github.com", f"Bearer {GITHUB_TOKEN}", method, path, body)
+    st, out = _call("https://api.github.com", f"Bearer {GITHUB_TOKEN}", method, path, body)
+    if method == "POST" and not 200 <= st < 300:
+        POST_FAILS[0] += 1
+    return st, out
 
 
 # One GET of a head's statuses per sync, shared by post_statuses and the three
@@ -705,6 +711,90 @@ def api_budget() -> int | None:
         return None
 
 
+# ── Step 2 (Boss 10-28): a cross-pass state file ───────────────────────────────────────────
+# Every pass used to re-read every open head's statuses (234 GETs/pass, ~4,100 calls/h on the
+# user quota shared with stamps and lanes). What the bridge posts for a head depends only on
+# Windy Git's side: its jobs (id, status, attempt, updated), whether the sync has fetched it,
+# whether it is the default head, and the rules (scripts, allow-lists, guard modes). So a head
+# whose signature is unchanged is skipped, with an hourly backstop re-read (Boss), staggered by
+# key so they don't all land on one pass. A head is cached only after a pass whose GET worked
+# and whose POSTs all succeeded. Default-branch names are cached for a day.
+STATE_FILE = Path(os.environ.get("BRIDGE_STATE_FILE", "/var/lib/windygit/bridge-state.json"))
+SYNC_WORK = Path(os.environ.get("SYNC_WORK", "/srv/windygit/sync"))
+BACKSTOP_S = 3600
+BRANCH_TTL_S = 86400
+
+
+def rules_fingerprint() -> str:
+    """Anything that changes what a guard or the bridge decides, without a job changing."""
+    import hashlib
+    h = hashlib.sha256()
+    root = Path(__file__).resolve().parents[1]
+    for f in sorted(list((root / "scripts").glob("*.py")) + list((root / "ci").glob("*.yml"))):
+        h.update(f.name.encode() + b"\0" + f.read_bytes())
+    for k in sorted(os.environ):
+        if k.endswith(("_GUARD_MODE", "_WARN_KINDS")) or k.startswith("BRIDGE_"):
+            h.update(f"{k}={os.environ[k]}".encode())
+    return h.hexdigest()[:16]
+
+
+def job_signatures(repo: str, shas: list[str]) -> dict[str, str] | None:
+    """{sha: "id:status:attempt:updated,..."} for every job of these commits; None if unreadable."""
+    good = [x for x in shas if SAFE_SHA.match(x)]
+    if not (good and SAFE_NAME.match(repo)):
+        return {}
+    sql = ("select j.commit_sha, string_agg(j.id || ':' || j.status || ':' || j.attempt || ':' || j.updated, ','"
+           " order by j.id) from action_run_job j join repository r on r.id = j.repo_id"
+           f" join \"user\" o on o.id = r.owner_id where o.lower_name = '{WG_OWNER.lower()}'"
+           f" and r.lower_name = '{repo.lower()}' and j.commit_sha in ({','.join(repr(x) for x in good)})"
+           " group by j.commit_sha;")
+    try:
+        out = subprocess.run(
+            ["docker", "exec", "-i", "windy-git-db-1", "sh", "-c",
+             'psql -U "$POSTGRES_USER" -d gitea -At -F "|" -v ON_ERROR_STOP=1'],
+            input=sql, capture_output=True, text=True, check=True, timeout=60).stdout
+    except (subprocess.SubprocessError, OSError):
+        return None
+    return dict(line.split("|", 1) for line in out.splitlines() if "|" in line)
+
+
+def fetched(repo: str, sha: str) -> bool:
+    """Has the sync's work copy got this commit? (A guard posts nothing until it has.)"""
+    try:
+        return subprocess.run(["git", "-C", str(SYNC_WORK / f"{repo}.git"), "cat-file", "-e", f"{sha}^{{commit}}"],
+                              capture_output=True, timeout=30).returncode == 0
+    except (subprocess.SubprocessError, OSError):
+        return False
+
+
+def _backstop(key: str) -> int:
+    import zlib
+    return BACKSTOP_S - zlib.crc32(key.encode()) % 600       # 50-60 min, spread across passes
+
+
+def load_state(fp: str) -> dict:
+    try:
+        st = json.loads(STATE_FILE.read_text())
+    except (OSError, ValueError):
+        st = {}
+    if st.get("fp") != fp:                                    # rules changed: re-read every head once
+        st["heads"] = {}
+    st["fp"] = fp
+    st.setdefault("heads", {})
+    st.setdefault("branches", {})
+    return st
+
+
+def save_state(st: dict) -> None:
+    try:
+        STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = STATE_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(st, sort_keys=True))
+        tmp.replace(STATE_FILE)
+    except OSError as e:
+        print(f"  bridge state not saved ({type(e).__name__}); next pass re-reads every head")
+
+
 def main() -> int:
     if not (GITEA_TOKEN and GITHUB_TOKEN):
         sys.exit("GITEA_SYNC_TOKEN and GITHUB_TOKEN are required")
@@ -727,27 +817,56 @@ def main() -> int:
         _write_skips(0)
     failed = 0
     _STATUSES_CACHE.clear()
+    now = time.time()
+    state = load_state(rules_fingerprint())
+    seen: set[str] = set()
+    skipped = processed = 0
     for repo in REPOS:
         try:
             shas = sync_prs(repo)
-            default_branch, default_head = "main", None
-            st, br = github("GET", f"/repos/{GH_OWNER}/{repo}")
-            if st == 200:
-                default_branch = br["default_branch"]
-                st, b = github("GET", f"/repos/{GH_OWNER}/{repo}/branches/{default_branch}")
+            default_head = None
+            cached = state["branches"].get(repo)
+            if cached and now - cached["read"] < BRANCH_TTL_S:
+                default_branch = cached["name"]
+            else:
+                default_branch = "main"
+                st, br = github("GET", f"/repos/{GH_OWNER}/{repo}")
                 if st == 200:
-                    default_head = b["commit"]["sha"]
-                    shas.append(default_head)
-            for sha in dict.fromkeys(shas):
+                    default_branch = br["default_branch"]
+                    state["branches"][repo] = {"name": default_branch, "read": now}
+            st, b = github("GET", f"/repos/{GH_OWNER}/{repo}/branches/{default_branch}")
+            if st == 200:
+                default_head = b["commit"]["sha"]
+                shas.append(default_head)
+            heads = list(dict.fromkeys(shas))
+            sigs = job_signatures(repo, heads)
+            for sha in heads:
+                key = f"{repo}|{sha}"
+                seen.add(key)
+                sig = None if sigs is None else (f"{sigs.get(sha, '')}|default={sha == default_head}"
+                                                 f"|fetched={fetched(repo, sha)}")
+                prev = state["heads"].get(key)
+                if sig is not None and prev and prev["sig"] == sig and now - prev["read"] < _backstop(key):
+                    skipped += 1
+                    continue
+                fails = POST_FAILS[0]
                 post_statuses(repo, sha)
                 post_autorerun_note(repo, sha)
                 post_compute_guard(repo, sha, default_branch, sha == default_head)
                 post_ci_hygiene(repo, sha, default_branch, sha == default_head)
                 post_birth_terms(repo, sha, default_branch, sha == default_head)
                 post_secret_guard(repo, sha, default_branch, sha == default_head)
+                processed += 1
+                if sig is not None and POST_FAILS[0] == fails and (repo, sha) in _STATUSES_CACHE:
+                    state["heads"][key] = {"sig": sig, "read": now}
+                else:
+                    state["heads"].pop(key, None)
         except Exception as e:  # one repo's failure must not hide the others'
             print(f"  FAILED {repo}: {e}")
             failed = 1
+    state["heads"] = {k: v for k, v in state["heads"].items() if k in seen}
+    save_state(state)
+    print(f"  bridge: {processed} heads read, {skipped} unchanged (cached)")
     return failed
 
 
