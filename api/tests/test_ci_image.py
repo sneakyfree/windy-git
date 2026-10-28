@@ -123,3 +123,22 @@ def test_job_containers_get_an_init_as_pid_1():
     """act's job entrypoint is `sleep` with no init, so orphans stayed zombies (Boss GO 10-27, Word)."""
     opts = yaml.safe_load((RUNNER / "config.yaml").read_text())["container"]["options"] or ""
     assert "--init" in opts.split(), opts
+
+
+def test_the_mirror_cipher_module_is_pinned_twice_and_vendored_exactly():
+    """Boss 10-28 MUST (Windy Mobile MR32a): the gate downloads nothing; the image carries the
+    exact prebuilt, checked by the release asset's sha256 AND the binary's sha256."""
+    import json
+    df = (RUNNER / "ci-image" / "Dockerfile").read_text()
+    pre = json.loads((RUNNER / "ci-image" / "mirror-cipher" / "prebuilt.json").read_text())
+    assert f"ARG CIPHER_ASSET_SHA256={pre['asset_sha256']}" in df
+    assert f"ARG CIPHER_BINARY_SHA256={pre['binary_sha256']}" in df
+    assert pre["asset"] in df and "npm ci --ignore-scripts" in df
+    assert 'echo "${CIPHER_ASSET_SHA256}  /tmp/cipher.tar.gz" | sha256sum -c -' in df
+    assert "ENV WINDY_CI_MIRROR_CIPHER=/opt/windy-ci/mirror-cipher" in df
+    lock = json.loads((RUNNER / "ci-image" / "mirror-cipher" / "package-lock.json").read_text())
+    pkgs = {k: v for k, v in lock["packages"].items() if k}
+    assert pkgs["node_modules/better-sqlite3-multiple-ciphers"]["version"] == pre["version"] == "11.10.0"
+    assert all(v.get("integrity") for v in pkgs.values()), "every locked package is integrity-checked by npm ci"
+    build = (RUNNER / "build-ci-image.sh").read_text()
+    assert "mirror-cipher/package-lock.json" in build and pre["binary_sha256"] in build

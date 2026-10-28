@@ -54,5 +54,25 @@ RUN npm install -g --no-fund --no-audit "playwright@${PLAYWRIGHT_VERSION}" \
  && playwright install --with-deps chromium \
  && npm uninstall -g playwright && rm -rf /var/lib/apt/lists/* /root/.npm
 
+# The Mirror's cipher module for windy-pro's required gates (Boss 10-28 09:16Z MUST; Windy Mobile
+# MR32a): better-sqlite3-multiple-ciphers 11.10.0, baked in so the gate downloads NOTHING.
+# mirror-cipher/ = windy-pro scripts/mirror-cipher at 5292eb00 (package.json, package-lock.json
+# with an integrity hash on all 38 packages, prebuilt.json). npm ci --ignore-scripts installs the
+# JS exactly as locked. The native prebuilt for Node 22 (ABI node-v127, linux-x64) is fetched
+# directly and pinned TWICE: the release asset's sha256 and the extracted binary's sha256. Either
+# mismatch fails the image build. The gate reads it via WINDY_CI_MIRROR_CIPHER.
+ARG CIPHER_ASSET_SHA256=67b1b14333afe9ec700ed48bf58b6bb1d2852172331fd2e25b2f48ed3502d97d
+ARG CIPHER_BINARY_SHA256=1fb04acc59d6c2fadd471a7defbef888aa681faae39dba16e2a113e6ae38d9d0
+COPY mirror-cipher/package.json mirror-cipher/package-lock.json /opt/windy-ci/mirror-cipher/
+RUN cd /opt/windy-ci/mirror-cipher \
+ && npm ci --ignore-scripts --no-audit --no-fund \
+ && curl -fsSL -o /tmp/cipher.tar.gz \
+      "https://github.com/m4heshd/better-sqlite3-multiple-ciphers/releases/download/v11.10.0/better-sqlite3-multiple-ciphers-v11.10.0-node-v127-linux-x64.tar.gz" \
+ && echo "${CIPHER_ASSET_SHA256}  /tmp/cipher.tar.gz" | sha256sum -c - \
+ && tar -xzf /tmp/cipher.tar.gz -C node_modules/better-sqlite3-multiple-ciphers \
+ && echo "${CIPHER_BINARY_SHA256}  node_modules/better-sqlite3-multiple-ciphers/build/Release/better_sqlite3.node" | sha256sum -c - \
+ && rm -f /tmp/cipher.tar.gz && rm -rf /root/.npm
+ENV WINDY_CI_MIRROR_CIPHER=/opt/windy-ci/mirror-cipher
+
 LABEL windy-git.keep="1" \
       windy-git.base="catthehacker/ubuntu:act-22.04@sha256:3488f78aa97770c8d5d835f2913c1a782d3121ad3f2aafb17054fb1d554ea4e1"
