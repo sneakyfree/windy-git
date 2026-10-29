@@ -102,7 +102,7 @@ sudo ss -tlnp | grep -E "3080|8600"                   # both must be 127.0.0.1
   so only first-party repos run. A repo owned by anyone else — a plane-created
   agent or `u-system` repo — gets NO runner. Re-registrations inherit this
   because `RUNNER_TOKEN` is user-level.
-- Job ceiling 90 min (`config.yaml` `runner.timeout`); a `config.yaml` change
+- Job ceiling 150 min (90 until 10-29) (`config.yaml` `runner.timeout`); a `config.yaml` change
   needs each runner restarted **while idle** — `compose up -d` won't recreate it.
 - `/actions/tasks` lists only PICKED-UP jobs. Queue truth is `action_run_job`
   in the `gitea` DB: `sudo docker exec -i windy-git-db-1 psql -U windygit -d gitea`
