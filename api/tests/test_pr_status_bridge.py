@@ -1058,7 +1058,8 @@ def test_a_task_cut_at_the_runner_ceiling_says_ceiling_not_runner_lost(monkeypat
     90 min ceiling cut. Same marks; the task's run time tells them apart."""
     _fake_hint_row(monkeypatch, "6||6|7|1|56593|cd account-server && npm test")
     monkeypatch.setattr(bridge, "_task_seconds", lambda tid: bridge.RUNNER_CEILING_S + 840)
-    assert bridge.failure_hint(5) == "(job 56593) hit the 90 min runner ceiling (too slow or hung): step 6/7 '(unnamed step)'"
+    mins = bridge.RUNNER_CEILING_S // 60
+    assert bridge.failure_hint(5) == f"(job 56593) hit the {mins} min runner ceiling (too slow or hung): step 6/7 '(unnamed step)'"
     monkeypatch.setattr(bridge, "_task_seconds", lambda tid: 1200)
     assert bridge.failure_hint(5) == "(job 56593) runner lost, re-run it: step 6/7 '(unnamed step)'"
     monkeypatch.setattr(bridge, "_task_seconds", lambda tid: 0)                      # unknown: old words
@@ -1070,7 +1071,7 @@ def test_the_ceiling_comes_from_the_runner_config(tmp_path):
     spec = iu.spec_from_file_location("runner_ceiling", ROOT / "scripts" / "runner_ceiling.py")
     rc = iu.module_from_spec(spec)
     spec.loader.exec_module(rc)
-    assert rc.ceiling_s() == bridge.RUNNER_CEILING_S == 90 * 60
+    assert rc.ceiling_s() == bridge.RUNNER_CEILING_S                                # the live config's value
     f = tmp_path / "c.yaml"
     f.write_text("log:\n  level: info\nrunner:\n  capacity: 1\n  timeout: 150m\n")
     assert rc.ceiling_s(f) == 150 * 60

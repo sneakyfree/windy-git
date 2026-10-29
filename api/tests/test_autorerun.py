@@ -369,7 +369,7 @@ def test_a_task_cut_at_the_runner_ceiling_is_a_real_red_never_rerun():
     db = DB()
     db.job(db.run(), 2, lost_steps(NOW - 60), secs=ar.RUNNER_CEILING_S - 60)
     assert judge(db) == (None, "", "a real red at the commit")
-    assert ar.RUNNER_CEILING_S == 90 * 60          # read from deploy/runner/config.yaml today
+    assert ar.RUNNER_CEILING_S >= 60 * 60          # read from deploy/runner/config.yaml (90 min on 10-29)
 
 
 def test_dead_before_step_with_green_siblings_from_the_same_push():
