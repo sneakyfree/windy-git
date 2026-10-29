@@ -55,3 +55,13 @@ def test_only_canary_yml_may_run_on_the_canary_runner():
             if "canary" in labels:
                 users.append(wf.name)
     assert users == ["canary.yml"], users
+
+
+def test_the_ci_slice_weight_is_50_persistently():
+    """Boss 10-29 16:00Z: CPUWeight 50 (was 20) persists in the installed unit, not only as a runtime
+    set-property that a reboot drops. Still below the lanes' 100, so the journeys stay ahead."""
+    import configparser
+    cp = configparser.ConfigParser(strict=False)
+    cp.read_string((RUNNER / "windygitci.slice").read_text())
+    assert cp["Slice"].getint("CPUWeight") == 50
+    assert not cp.has_option("Slice", "CPUQuota"), "CI is weighted, never capped: idle CPU stays usable"
