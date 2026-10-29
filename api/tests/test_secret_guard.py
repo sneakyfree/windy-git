@@ -178,3 +178,17 @@ def test_contracts_indexnow_placeholder_is_allowed_by_hash_only():
     (kind, h), = ss.find(f'KEY = "{ph}"')
     assert kind == "32-hex secret assignment" and h == "3eb1bd43"
     assert h in sg.load_allow()["windy-contracts"]["hashes"]
+
+
+def test_the_authenticator_golden_vector_allow_is_exactly_one_file():
+    """Eternitas 10-28: the published cosign TEST key in eternitas-authenticator is allowed in that ONE
+    file only; a key block anywhere else (a sibling, a subfolder copy, another repo) still blocks."""
+    F = sg.cg.Finding
+    hdr = "private key block #" + ss.h8("-----BEGIN EC PRIVATE KEY-----")
+    allow = sg.load_allow()
+    ok = F("shared/golden-vectors/cosign/es256_v1.json", 13, "private key block", hdr)
+    still = [F(p, 1, "private key block", hdr) for p in (
+        "shared/golden-vectors/cosign/es256_v2.json", "shared/golden-vectors/cosign/x/es256_v1.json",
+        "shared/golden-vectors/es256_v1.json", "app/src/main/res/raw/key.pem")]
+    assert sg._drop_allowed("eternitas-authenticator", [ok, *still], allow) == still
+    assert sg._drop_allowed("eternitas-site", [ok], allow) == [ok]
