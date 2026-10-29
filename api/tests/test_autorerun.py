@@ -359,8 +359,17 @@ def test_runner_lost_marks_on_a_3h_task_are_the_endless_cleanup_not_a_lost_runne
     db.job(db.run(), 2, lost_steps(NOW - 60), secs=ar.ENDLESS_S)
     assert judge(db) == (None, "", "a real red at the commit")
     db2 = DB()
-    j = db2.job(db2.run(), 2, lost_steps(NOW - 60), secs=ar.ENDLESS_S - 1)
+    j = db2.job(db2.run(), 2, lost_steps(NOW - 60), secs=ar.RUNNER_CEILING_S - 61)
     assert judge(db2) == ("runner-lost", str(j), "ok")
+
+
+def test_a_task_cut_at_the_runner_ceiling_is_a_real_red_never_rerun():
+    """windy-admin #821 run 86 (10-28): Gitea stopped it after the 90 min ceiling with the same marks
+    as a lost runner. It was too slow, not lost: an automatic re-run would burn another 90 min."""
+    db = DB()
+    db.job(db.run(), 2, lost_steps(NOW - 60), secs=ar.RUNNER_CEILING_S - 60)
+    assert judge(db) == (None, "", "a real red at the commit")
+    assert ar.RUNNER_CEILING_S == 90 * 60          # read from deploy/runner/config.yaml today
 
 
 def test_dead_before_step_with_green_siblings_from_the_same_push():

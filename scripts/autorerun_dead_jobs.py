@@ -21,7 +21,8 @@ pull_request_sync; scheduled runs never count):
     then be re-run into green);
   - no job in ANY CI run at the commit is a real red (a failure that is neither kind above,
     or a cancel), so a newer dead run never hides an older real red; no pull_request_target run;
-  - a runner-lost task ran under 3 h (Gitea's endless-task cleanup leaves the same marks);
+  - a runner-lost task ran under the runner's per-job ceiling (a task cut AT the ceiling was too
+    slow or hung, a real red) and under 3 h (Gitea's endless-task cleanup leaves the same marks);
   - at least one job is dead-before-step or runner-lost.
 The commit must still be its branch's head (else it is skipped and keeps its one try); both
 the judgement and the head are checked again from fresh rows right before rerun_ci.sh.
@@ -46,6 +47,9 @@ from pathlib import Path
 
 import yaml
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import runner_ceiling  # noqa: E402  (the ceiling, from deploy/runner/config.yaml)
+
 STATE = Path(os.environ.get("AUTORERUN_STATE", "/var/lib/windygit/autorerun.json"))
 COUNTS = Path(os.environ.get("AUTORERUN_COUNTS", "/var/lib/windygit/autorerun_counts.json"))
 LOCK = Path(os.environ.get("AUTORERUN_LOCK", "/run/windygit-autorerun.lock"))
@@ -56,6 +60,10 @@ MAX_PER_PASS = 1
 EVENTS = ("push", "pull_request", "pull_request_sync")
 TERMINAL = {1, 2, 3, 4}  # success, failure, cancelled, skipped
 ENDLESS_S = 3 * 3600   # Gitea's endless-task cleanup leaves the same marks as a lost runner
+# The runner's hard per-job ceiling (deploy/runner/config.yaml runner.timeout): a task Gitea
+# stopped after running it out was CUT for being too slow or hung, not lost. Never auto re-run
+# it: that burns another full ceiling for the same result (windy-admin #821, 10-28).
+RUNNER_CEILING_S = runner_ceiling.ceiling_s()
 KINDS = ("dead-before-step", "runner-lost")
 _SHA = re.compile(r"^[0-9a-f]{40}$")
 _BRANCH = re.compile(r"^[A-Za-z0-9._/+-]{1,200}$")
@@ -201,7 +209,7 @@ def judge(repo: str, rows: list[list[str]], allow: dict,
     def infra(j: dict) -> str | None:
         if j["st"] != 2 or j["task"] <= 0:
             return None
-        if j["lost"] > 0 and j["secs"] < ENDLESS_S:
+        if j["lost"] > 0 and j["secs"] < min(ENDLESS_S, RUNNER_CEILING_S - 60):
             return "runner-lost"
         if j["ran"] == 0:
             return "dead-before-step"
