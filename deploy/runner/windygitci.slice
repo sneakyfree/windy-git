@@ -4,8 +4,12 @@
 # Why top-level, not a weight on the dind scope: CPU weights only compete between siblings.
 # dind's scope sat in system.slice and the journeys are user units in user.slice, so a weight
 # on one never met the other; what decided CI vs. everyone was system.slice 100 : user.slice 100.
-# As a sibling of those two at weight 20, CI gets at most ~20/220 (~9%) of the box when
-# everything is busy, and still runs at full speed (up to dind's own cpus: 12 cap) when idle.
+# Weight 50 since 2026-10-28 (Boss GO 20:04Z runtime, 10-29 16:00Z persistent): at 20, a busy
+# spike left CI about 4 cores for 2-3 jobs and load-timeout flakes followed. As a sibling of
+# system/user/windy (100 each), CI's floor is now 50/150 (~33%, ~8 cores) when only the lanes
+# compete, still 2:1 behind user.slice, where the journey VMs (1000) live, and it runs at full
+# speed (up to dind's own cpus: 12 cap) when idle. Measured 10-28 20:02Z..10-29 16:00Z: CI cpu
+# some avg10 p95 2.8% (5.4% in busy minutes), user.slice some p95 22%, unchanged from before.
 # CI gets slower under load; it never stops.
 #
 # No IOWeight: the main disk (nvme0n1) runs the "none" scheduler, where io weights do nothing.
@@ -20,4 +24,4 @@ Description=Windy Git CI (dind + runners): yields CPU to everything else under c
 Before=slices.target
 
 [Slice]
-CPUWeight=20
+CPUWeight=50
