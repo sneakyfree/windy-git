@@ -14,7 +14,9 @@ runner:
   capacity: 1          # per runner; parallelism = runners started by default (2, Boss 10-27). See docker-compose.yml
   timeout: 150m         # hard ceiling per job (90 -> 150 min, 10-29, Admin's ask): windy-admin's
                         # serial suite runs 53-104 min on this box (fsync-bound), eternitas's ~50.
-                        # Keep timeout-minutes in each workflow; a hang still reads as a hang
+                        # THE ONLY JOB LIMIT HERE: act_runner 0.6.1 does NOT enforce a job's
+                        # timeout-minutes (verified 10-29: Gitea delivers "45" in the job payload,
+                        # windy-admin jobs ran 45-61 min and passed). A hang runs to this ceiling.
   shutdown_timeout: 3m
   insecure: false
   fetch_timeout: 5s
