@@ -41,6 +41,9 @@ from pathlib import Path
 
 import yaml
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import runner_ceiling  # noqa: E402  (the ceiling, from deploy/runner/config.yaml)
+
 GITEA = os.environ.get("BRIDGE_GITEA_URL", "http://localhost:3080").rstrip("/")
 PUBLIC = "https://app.windygit.com"
 # Narrow token (write:repository) first; the admin token is for humans and only
@@ -440,6 +443,11 @@ def _is_named_step(name: str, payload_b64: str) -> bool:
     return name in _explicit_step_names(payload_b64)
 
 
+# The runner's hard per-job ceiling, read from deploy/runner/config.yaml `runner.timeout`. A task
+# Gitea stopped at or past it was CUT for running too long, not lost.
+RUNNER_CEILING_S = runner_ceiling.ceiling_s()
+
+
 def hint_sql(task_id: int) -> str:
     """One row: ran | payload | failed-step number | step count | lost marks | job id | name.
     The NAME IS LAST: a `run:` step is named after its command, which may contain '|', and the
@@ -462,12 +470,31 @@ def hint_sql(task_id: int) -> str:
     )
 
 
+def _task_seconds(task_id: int) -> int:
+    """How long the task ran (stopped - started), 0 when unknown. Asked only for a runner-lost
+    shape, so the common path stays one query; any failure reads 0 (= the old wording)."""
+    try:
+        out = subprocess.run(
+            ["docker", "exec", "-i", "windy-git-db-1", "sh", "-c",
+             'psql -U "$POSTGRES_USER" -d gitea -At -v ON_ERROR_STOP=1'],
+            input=f"select coalesce(stopped - started, 0) from action_task where id = {int(task_id)} "
+                  "and started > 0 and stopped > 0;",
+            capture_output=True, text=True, check=True, timeout=15,
+        ).stdout.strip()
+        return int(out) if out.isdigit() else 0
+    except (subprocess.SubprocessError, OSError, ValueError):
+        return 0
+
+
 def failure_hint(task_id: int) -> str | None:
     """Where a failed job died, so a reader can tell infra from a real failure without log access.
 
     "at step 6/9 'npm ci'" = a step ran and failed (read the code); "before any step ran" = the
     job container never started (runner/docker infra: re-run); "runner lost" = the runner
-    vanished mid-step (host restart, 10-17 18:56Z) and Gitea stopped the task itself. Gitea's
+    vanished mid-step (host restart, 10-17 18:56Z) and Gitea stopped the task itself; "hit the N min
+    runner ceiling" = the same marks on a task that ran the full RUNNER_CEILING_S: it was cut for
+    running too long (too slow or hung), so a blind re-run just burns another 90 min (windy-admin
+    #821, 10-28: it said "runner lost, re-run it"). Gitea's
     own stop marks every unfinished step failed with no log, at the task's stop time; a runner
     that reports a real failure marks the later steps skipped. Known rare false positive,
     accepted: a real failure whose later `if: always()` step also fails with an empty log in the
@@ -497,6 +524,8 @@ def failure_hint(task_id: int) -> str | None:
     # (docs/RUNBOOK-VERON.md, "Reading a CI job log").
     job_tag = f"(job {job}) " if job.isdigit() and job != "0" else ""
     if name and lost.isdigit() and int(lost) > 0:
+        if _task_seconds(task_id) >= RUNNER_CEILING_S - 60:
+            return f"{job_tag}hit the {RUNNER_CEILING_S // 60} min runner ceiling (too slow or hung): {where or 'a step'} '{name}'"
         return f"{job_tag}runner lost, re-run it: {where or 'a step'} '{name}'"
     if name:
         return job_tag + (f"at {where} '{name}'" if where else f"at step '{name}'")
@@ -532,8 +561,10 @@ def post_statuses(repo: str, sha: str) -> None:
         return
 
     current: dict[str, str] = {}
+    current_text: dict[str, str] = {}
     for s in commit_statuses(repo, sha):  # newest first
         current.setdefault(s["context"], s["state"])
+        current_text.setdefault(s["context"], s.get("description") or "")
 
     for ctx, (path, problem) in sorted(bad.items()):
         if current.get(ctx) == "error":
@@ -552,7 +583,11 @@ def post_statuses(repo: str, sha: str) -> None:
 
     for ctx, r in sorted(latest.items()):
         state = STATE.get(r["status"])
-        if state is None or current.get(ctx) == state:
+        if state is None:
+            continue
+        # waiting / running / blocked all map to `pending`: compare the words too, or a job that
+        # got picked kept saying "waiting" on GitHub for its whole run (windy-admin #829, 10-29).
+        if current.get(ctx) == state and (state != "pending" or current_text.get(ctx) == _verdict_text(r)[:140]):
             continue
         st, _ = github(
             "POST",

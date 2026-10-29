@@ -1050,3 +1050,52 @@ def test_the_default_branch_name_is_cached_for_a_day(monkeypatch, tmp_path):
     bridge.main()
     bridge.main()
     assert calls.count("/repos/sneakyfree/repo-x") == 1
+
+
+
+def test_a_task_cut_at_the_runner_ceiling_says_ceiling_not_runner_lost(monkeypatch):
+    """windy-admin #821 (10-28): the bridge said "runner lost, re-run it" for a job the runner's
+    90 min ceiling cut. Same marks; the task's run time tells them apart."""
+    _fake_hint_row(monkeypatch, "6||6|7|1|56593|cd account-server && npm test")
+    monkeypatch.setattr(bridge, "_task_seconds", lambda tid: bridge.RUNNER_CEILING_S + 840)
+    mins = bridge.RUNNER_CEILING_S // 60
+    assert bridge.failure_hint(5) == f"(job 56593) hit the {mins} min runner ceiling (too slow or hung): step 6/7 '(unnamed step)'"
+    monkeypatch.setattr(bridge, "_task_seconds", lambda tid: 1200)
+    assert bridge.failure_hint(5) == "(job 56593) runner lost, re-run it: step 6/7 '(unnamed step)'"
+    monkeypatch.setattr(bridge, "_task_seconds", lambda tid: 0)                      # unknown: old words
+    assert "runner lost" in bridge.failure_hint(5)
+
+
+def test_the_ceiling_comes_from_the_runner_config(tmp_path):
+    import importlib.util as iu
+    spec = iu.spec_from_file_location("runner_ceiling", ROOT / "scripts" / "runner_ceiling.py")
+    rc = iu.module_from_spec(spec)
+    spec.loader.exec_module(rc)
+    assert rc.ceiling_s() == bridge.RUNNER_CEILING_S                                # the live config's value
+    f = tmp_path / "c.yaml"
+    f.write_text("log:\n  level: info\nrunner:\n  capacity: 1\n  timeout: 150m\n")
+    assert rc.ceiling_s(f) == 150 * 60
+    f.write_text("runner:\n  timeout: soon\n")
+    assert rc.ceiling_s(f) == rc.DEFAULT_S                                           # unreadable: 90 min
+    assert rc.ceiling_s(tmp_path / "missing.yaml") == rc.DEFAULT_S
+
+
+def test_a_picked_job_replaces_waiting_on_github(monkeypatch):
+    """windy-admin #829 (10-29): waiting -> running is pending -> pending, and the description
+    stayed "waiting" for the whole 80 min run. The words are compared for pending states."""
+    sha = "c" * 40
+    posts = []
+    monkeypatch.setattr(bridge, "_repo_runs", lambda repo: [
+        {"id": 9, "head_sha": sha, "workflow_id": "ci.yml", "name": "test", "status": "running", "run_number": 108}])
+    monkeypatch.setattr(bridge, "queued_jobs", lambda repo, s: [])
+    monkeypatch.setattr(bridge, "invalid_workflows", lambda repo, s: {})
+    monkeypatch.setattr(bridge, "needs_daemon", lambda *a: False)
+    current = [{"context": "windy-git/ci/test", "state": "pending", "description": "Windy Git CI on Veron 1: waiting"}]
+    monkeypatch.setattr(bridge, "commit_statuses", lambda repo, s: current)
+    monkeypatch.setattr(bridge, "github", lambda m, p, body=None: posts.append(body) or (201, {}))
+    bridge.post_statuses("windy-admin", sha)
+    assert [p["description"] for p in posts] == ["Windy Git CI on Veron 1: running"]
+    posts.clear()
+    current[0]["description"] = "Windy Git CI on Veron 1: running"
+    bridge.post_statuses("windy-admin", sha)
+    assert posts == []                                                               # same words: no POST
