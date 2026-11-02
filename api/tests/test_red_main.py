@@ -144,18 +144,65 @@ def test_first_sight_backfills_the_red_from_older_commits():
     assert len(due) == 1 and "(312 h)" in due[0][1]
 
 
-def test_history_from_github_stops_at_the_last_green(monkeypatch):
-    commits = [{"sha": c * 40} for c in "abcd"]
-    status = {"a": "failure", "b": "error", "c": "success", "d": "failure"}           # c: the red began after it
-    created = {"a": T0, "b": T0 - 5 * H, "c": T0 - 9 * H, "d": T0 - 20 * H}
-
+def _history(monkeypatch, commits, status, created):
     def github(method, path, body=None):
         if "/commits?sha=" in path:
             return 200, commits
         k = path.split("/commits/")[1][0]
         return 200, {"statuses": [_st("ci/x", status[k], created[k])]}
     monkeypatch.setattr(rm.b, "github", github)
-    assert rm.history_from_github("r", "main")("r", "ci/x") == T0 - 5 * H
+    return rm.history_from_github("r", "main")("r", "ci/x")
+
+
+def _c(sha, *parents):
+    return {"sha": sha * 40, "parents": [{"sha": p * 40} for p in parents]}
+
+
+def test_a_squash_main_stops_at_the_last_green(monkeypatch):
+    """Linear main (squash merges): a <- b <- c(green) <- d. The red began after c."""
+    commits = [_c("a", "b"), _c("b", "c"), _c("c", "d"), _c("d")]
+    status = {"a": "failure", "b": "error", "c": "success", "d": "failure"}
+    created = {"a": T0, "b": T0 - 5 * H, "c": T0 - 9 * H, "d": T0 - 20 * H}
+    assert _history(monkeypatch, commits, status, created) == (T0 - 5 * H, True)
+
+
+def test_a_merge_whose_pr_side_is_green_does_not_reset_the_clock(monkeypatch):
+    """Boss 11-02, windy-pro-mobile a1aeb83a: merge m has parents [p (main, red), q (PR head, green in
+    PR mode)]. GitHub lists q between m and p; first-parent history skips it."""
+    commits = [_c("m", "p", "q"), _c("q", "o"), _c("p", "o"), _c("o", "n"), _c("n")]
+    status = {"m": "failure", "q": "success", "p": "failure", "o": "failure", "n": "success"}
+    created = {"m": T0, "q": T0 - 1 * H, "p": T0 - 30 * H, "o": T0 - 60 * H, "n": T0 - 90 * H}
+    assert rm.first_parent_chain(commits, "m" * 40, 30) == ["m" * 40, "p" * 40, "o" * 40, "n" * 40]
+    assert _history(monkeypatch, commits, status, created) == (T0 - 60 * H, True)  # from o, not reset by q
+
+
+def test_the_chain_continues_onto_the_next_page_when_a_pr_branch_fills_this_one(monkeypatch):
+    """windy-pro-mobile (live, 11-02): the first-parent chain left page 1 after 8 commits, all red."""
+    page1 = [_c("m", "p", "q"), _c("q", "x"), _c("p", "o")]                         # o's commit is not on page 1
+    page2 = [_c("o", "n"), _c("n")]
+    status = {"m": "failure", "q": "success", "p": "failure", "o": "failure", "n": "success", "x": "success"}
+    created = {"m": T0, "q": T0, "p": T0 - 10 * H, "o": T0 - 50 * H, "n": T0 - 99 * H, "x": T0}
+    asked = []
+
+    def github(method, path, body=None):
+        if "/commits?sha=" in path:
+            asked.append(path.split("sha=")[1].split("&")[0][:1])
+            return 200, (page1 if path.split("sha=")[1].startswith("main") else page2)
+        k = path.split("/commits/")[1][0]
+        return 200, {"statuses": [_st("ci/x", status[k], created[k])]}
+    monkeypatch.setattr(rm.b, "github", github)
+    assert rm.history_from_github("r", "main")("r", "ci/x") == (T0 - 50 * H, True)
+    assert asked == ["m", "o"]                                                          # page 2 starts at o
+
+
+def test_a_walk_ended_by_a_limit_is_a_lower_bound_and_says_at_least(monkeypatch):
+    monkeypatch.setattr(rm, "HISTORY_MAX", 2)
+    commits = [_c("a", "b"), _c("b", "c"), _c("c")]
+    got = _history(monkeypatch, commits, {"a": "failure", "b": "failure", "c": "failure"},
+                   {"a": T0, "b": T0 - 40 * H, "c": T0 - 80 * H})
+    assert got == (T0 - 40 * H, False)
+    due = rm.step({}, "r", SHA, [_st("ci/x", "failure", T0)], T0 + H, history=lambda repo, ctx: got)
+    assert "since at least" in due[0][1]
 
 
 def test_a_corrupt_state_file_says_so(monkeypatch, tmp_path, capsys):

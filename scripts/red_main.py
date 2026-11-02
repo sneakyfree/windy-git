@@ -8,9 +8,11 @@ clock, persisted per repo + context as first_red_at and kept across new head com
 THRESHOLD_S, ONE BOARD line names the repo, context, owner lane and how long; then once a day while
 it stays red. Success clears it; pending keeps the clock (a re-run that fails again is the same red).
 
-First sight of a red: the clock is backfilled from the branch's recent commits (up to HISTORY_MAX,
+First sight of a red: the clock is backfilled along main's FIRST-PARENT history (up to HISTORY_MAX,
 newest first): first_red_at = the oldest consecutive red status for that context, stopping at the
-first commit where it was success or absent. So a red that started 13 commits ago counts from there.
+first commit where it was success or absent; if a limit ends the walk first, the line says "since at
+least". A merged PR's own commits are never read: their
+PR-mode scans can be green while main is red (Boss 11-02). So a red that started 13 commits ago counts from there.
 
 No silent loss (Hub #112): a line's last_post is stored only after the BOARD write is confirmed. A
 failed write prints "BOARD post FAILED", is retried next run, and the run ends on a line windy-job's
@@ -96,15 +98,18 @@ def step(state: dict, repo: str, sha: str, statuses: list[dict], now: float,
             except ValueError:
                 since = now
             back = history(repo, ctx)
+            exact = True
             if back is not None:
-                since = min(since, back)
-            r = reds[key] = {"since": since, "last_post": 0.0}
+                when, exact = back if isinstance(back, tuple) else (back, True)
+                since = min(since, when)
+            r = reds[key] = {"since": since, "last_post": 0.0, "exact": exact}
         r["sha"], r["seen"], r["red_now"] = sha, now, True
         age = now - r["since"]
         if age > THRESHOLD_S and now - r.get("last_post", 0.0) >= REPEAT_S:
             day = time.strftime("%Y-%m-%d %H:%MZ", time.gmtime(r["since"]))
             note = NOTES.get((repo, ctx))
-            due.append((key, f"[Windy Git] RED MAIN: {repo} default branch, {ctx} = {st} since {day} "
+            at_least = "" if r.get("exact", True) else "at least "
+            due.append((key, f"[Windy Git] RED MAIN: {repo} default branch, {ctx} = {st} since {at_least}{day} "
                              f"({age / 3600:.0f} h), head {sha[:8]}. Owner: {OWNERS.get(repo, 'unknown (Boss routes)')}. "
                              + (f"{note} " if note else "") + "Daily until green (Boss 11-02)."))
     return due
@@ -133,24 +138,53 @@ def load() -> dict:
         return {}
 
 
+def first_parent_chain(commits: list[dict], head: str, limit: int) -> list[str]:
+    """main's own line of commits, newest first: the parents[0] chain from `head`, within the
+    listed commits. GitHub's commit list also holds the commits a merge brought in from a PR branch;
+    their PR-mode statuses say nothing about main (Boss 11-02: windy-pro-mobile's merge a1aeb83a)."""
+    by_sha = {c.get("sha"): c for c in commits if isinstance(c, dict)}
+    chain, sha = [], head
+    while sha in by_sha and len(chain) < limit:
+        chain.append(sha)
+        parents = by_sha[sha].get("parents") or []
+        sha = parents[0].get("sha") if parents else None
+    return chain
+
+
+HISTORY_PAGES = 3
+
+
 def history_from_github(repo: str, branch: str):
-    def first_red(_repo: str, ctx: str) -> float | None:
-        code, commits = b.github("GET", f"/repos/{b.GH_OWNER}/{repo}/commits?sha={branch}&per_page={HISTORY_MAX}")
-        if code != 200 or not isinstance(commits, list):
-            return None
-        oldest = None
-        for c in commits:                                   # newest first
-            code, comb = b.github("GET", f"/repos/{b.GH_OWNER}/{repo}/commits/{c['sha']}/status?per_page=100")
-            if code != 200:
-                break
-            s = newest_by_context(comb.get("statuses") or []).get(ctx)
-            if not s or s.get("state") not in RED:
-                break                                       # success, pending or absent: the red began after
-            try:
-                oldest = _ts(s["created_at"])
-            except (KeyError, ValueError):
-                break
-        return oldest
+    """first_red(repo, ctx) -> (first_red_at, exact). Walks main's first-parent chain, fetching more
+    pages when the chain leaves the listed commits (a busy PR branch can fill a page). exact=False
+    when the walk ended on a limit or an unreadable page, not on a non-red commit: the time is then a
+    lower bound and the line says "since at least"."""
+    def first_red(_repo: str, ctx: str):
+        oldest, walked, pages, start = None, 0, 0, branch
+        while pages < HISTORY_PAGES and walked < HISTORY_MAX:
+            code, commits = b.github("GET", f"/repos/{b.GH_OWNER}/{repo}/commits?sha={start}&per_page=100")
+            pages += 1
+            if code != 200 or not isinstance(commits, list) or not commits:
+                return (oldest, False) if oldest is not None else None
+            chain = first_parent_chain(commits, commits[0].get("sha"), HISTORY_MAX - walked)
+            for sha in chain:                               # newest first
+                code, comb = b.github("GET", f"/repos/{b.GH_OWNER}/{repo}/commits/{sha}/status?per_page=100")
+                if code != 200:
+                    return (oldest, False) if oldest is not None else None
+                s = newest_by_context(comb.get("statuses") or []).get(ctx)
+                if not s or s.get("state") not in RED:
+                    return (oldest, True) if oldest is not None else None   # the red began after this one
+                try:
+                    oldest = _ts(s["created_at"])
+                except (KeyError, ValueError):
+                    return (oldest, False) if oldest is not None else None
+                walked += 1
+            by_sha = {c.get("sha"): c for c in commits if isinstance(c, dict)}
+            parents = (by_sha.get(chain[-1]) or {}).get("parents") or [] if chain else []
+            if not parents:
+                return (oldest, True) if oldest is not None else None       # the first commit: exact
+            start = parents[0].get("sha")
+        return (oldest, False) if oldest is not None else None              # a limit: a lower bound
     return first_red
 
 
