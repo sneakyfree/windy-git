@@ -1,0 +1,9 @@
+[Unit]
+Description=Windy Git - re-assert and re-prove the CI egress filter every 15 min
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=15min
+
+[Install]
+WantedBy=timers.target
