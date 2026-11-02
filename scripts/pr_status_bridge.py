@@ -250,12 +250,19 @@ def heads_query(repos) -> str:
 def prefetch(repos) -> dict | None:
     """{repo: {"prs": [REST-shaped PR dicts], "default_branch": name, "default_head": sha}} for
     EVERY repo, or None. None on ANY doubt: a non-200, an `errors` key, a missing or null repo,
-    a missing default branch, or more open PRs than one page holds. The caller then runs the
-    whole pass on today's REST path; a partial answer is never used (Boss 11-02)."""
+    a missing default branch, more open PRs than one page holds, or ANY exception from the call or
+    the parse (a malformed body, a node missing a field: Hub #124). It runs outside the per-repo
+    try, so it must never raise. The caller then runs the whole pass on today's REST path; a
+    partial answer is never used (Boss 11-02)."""
     try:
-        st, out = graphql(heads_query(repos))
-    except (urllib.error.URLError, TimeoutError, ConnectionError):
+        return _prefetch(repos)
+    except Exception as e:  # noqa: BLE001 - any surprise means "no prefetch", never a dead pass
+        print(f"  bridge: GraphQL prefetch raised {type(e).__name__}: REST this pass")
         return None
+
+
+def _prefetch(repos) -> dict | None:
+    st, out = graphql(heads_query(repos))
     if st != 200 or not isinstance(out, dict) or out.get("errors") or not isinstance(out.get("data"), dict):
         return None
     got = {}

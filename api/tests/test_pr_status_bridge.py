@@ -1231,3 +1231,31 @@ def test_github_and_graphql_each_count_their_calls(monkeypatch):
     bridge.github("GET", "/y")
     bridge.graphql("query { x }")
     assert bridge.CALLS == {"rest": 2, "graphql": 1}
+
+
+def test_any_exception_in_the_call_or_the_parse_is_none_never_a_dead_pass(monkeypatch, capsys):
+    """Hub #124: a 200 with a node missing a field, or a malformed body, must fall back to REST."""
+    bad = _gql_repo([(7, SHA_A, "sneakyfree/windy-pro")])
+    del bad["pullRequests"]["nodes"][0]["headRefOid"]
+    monkeypatch.setattr(bridge, "graphql", lambda q: (200, {"data": {"r0": bad}}))
+    assert bridge.prefetch(["windy-pro"]) is None
+    assert "GraphQL prefetch raised KeyError: REST this pass" in capsys.readouterr().out
+
+    def malformed(q):
+        raise ValueError("Expecting value: line 1 column 1")     # json.loads inside _call
+    monkeypatch.setattr(bridge, "graphql", malformed)
+    assert bridge.prefetch(["windy-pro"]) is None
+    nodes_not_dicts = {"data": {"r0": {"defaultBranchRef": {"name": "main", "target": {"oid": SHA_B}},
+                                        "pullRequests": {"totalCount": 1, "nodes": ["oops"]}}}}
+    monkeypatch.setattr(bridge, "graphql", lambda q: (200, nodes_not_dicts))
+    assert bridge.prefetch(["windy-pro"]) is None
+
+
+def test_a_raising_prefetch_still_lets_the_pass_run_on_rest(monkeypatch, tmp_path, capsys):
+    rest, synced = _pass_world(monkeypatch, tmp_path, (200, {"data": {"r0": "not-a-dict-at-all"}}))
+    bad = _gql_repo([(7, SHA_A, "sneakyfree/windy-pro")])
+    del bad["pullRequests"]["nodes"][0]["title"]
+    monkeypatch.setattr(bridge, "graphql", lambda q: (200, {"data": {"r0": bad, "r1": _gql_repo()}}))
+    assert bridge.main() == 0
+    assert [x for x in synced if len(x) == 2] == [("windy-pro", None), ("windy-chat", None)]
+    assert "(REST fallback)" in capsys.readouterr().out
