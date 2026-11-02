@@ -101,7 +101,8 @@ def step(state: dict, repo: str, sha: str, statuses: list[dict], now: float,
             exact = True
             if back is not None:
                 when, exact = back if isinstance(back, tuple) else (back, True)
-                since = min(since, when)
+                if when is not None:            # (None, False): the walk read nothing; since stays, marked inexact
+                    since = min(since, when)
             r = reds[key] = {"since": since, "last_post": 0.0, "exact": exact}
         r["sha"], r["seen"], r["red_now"] = sha, now, True
         age = now - r["since"]
@@ -155,7 +156,8 @@ HISTORY_PAGES = 3
 
 
 def history_from_github(repo: str, branch: str):
-    """first_red(repo, ctx) -> (first_red_at, exact). Walks main's first-parent chain, fetching more
+    """first_red(repo, ctx) -> (first_red_at, exact), or (None, False) when nothing could be read (Hub
+    #112: an unreadable walk must not read as exact). Walks main's first-parent chain, fetching more
     pages when the chain leaves the listed commits (a busy PR branch can fill a page). exact=False
     when the walk ended on a limit or an unreadable page, not on a non-red commit: the time is then a
     lower bound and the line says "since at least"."""
@@ -165,26 +167,26 @@ def history_from_github(repo: str, branch: str):
             code, commits = b.github("GET", f"/repos/{b.GH_OWNER}/{repo}/commits?sha={start}&per_page=100")
             pages += 1
             if code != 200 or not isinstance(commits, list) or not commits:
-                return (oldest, False) if oldest is not None else None
+                return (oldest, False)
             chain = first_parent_chain(commits, commits[0].get("sha"), HISTORY_MAX - walked)
             for sha in chain:                               # newest first
                 code, comb = b.github("GET", f"/repos/{b.GH_OWNER}/{repo}/commits/{sha}/status?per_page=100")
                 if code != 200:
-                    return (oldest, False) if oldest is not None else None
+                    return (oldest, False)
                 s = newest_by_context(comb.get("statuses") or []).get(ctx)
                 if not s or s.get("state") not in RED:
                     return (oldest, True) if oldest is not None else None   # the red began after this one
                 try:
                     oldest = _ts(s["created_at"])
                 except (KeyError, ValueError):
-                    return (oldest, False) if oldest is not None else None
+                    return (oldest, False)
                 walked += 1
             by_sha = {c.get("sha"): c for c in commits if isinstance(c, dict)}
             parents = (by_sha.get(chain[-1]) or {}).get("parents") or [] if chain else []
             if not parents:
                 return (oldest, True) if oldest is not None else None       # the first commit: exact
             start = parents[0].get("sha")
-        return (oldest, False) if oldest is not None else None              # a limit: a lower bound
+        return (oldest, False)              # a limit: a lower bound
     return first_red
 
 

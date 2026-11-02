@@ -215,3 +215,14 @@ def test_a_corrupt_state_file_says_so(monkeypatch, tmp_path, capsys):
 def test_a_known_false_positive_carries_its_note_but_still_posts():
     due = rm.step({}, "windytalk", SHA, [_st("windy-git/secret-guard", "failure", T0 - 30 * H)], T0)
     assert len(due) == 1 and "likely header-only" in due[0][1] and "path + kind" in due[0][1]
+
+
+
+def test_an_unreadable_backfill_is_inexact_not_exact(monkeypatch):
+    """Hub #112: GitHub 502 on the history walk -> the head's own time, but "since at least"."""
+    monkeypatch.setattr(rm.b, "github", lambda m, p, body=None: (502, {}))
+    got = rm.history_from_github("r", "main")("r", "ci/x")
+    assert got == (None, False)
+    state: dict = {}
+    due = rm.step(state, "r", SHA, [_st("ci/x", "failure", T0 - 30 * H)], T0, history=lambda repo, ctx: got)
+    assert state["reds"]["r|ci/x"]["since"] == T0 - 30 * H and "since at least" in due[0][1]
