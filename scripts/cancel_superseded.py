@@ -67,21 +67,29 @@ def psql(sql: str) -> list[list[str]]:
     return [line.split("|") for line in out.splitlines() if line and "|" in line]
 
 
-def board(line: str) -> None:
-    """One BOARD line: Windy 0 over ssh as the lane user; while Windy 0 is down, the fallback board."""
+def board(line: str) -> bool:
+    """One BOARD line: Windy 0 over ssh as the lane user; while Windy 0 is down, the fallback board.
+    True only when the line was written somewhere (ssh rc 0, or a fallback file); callers that must
+    not lose a line check it (red_main, Hub #112)."""
     stamped = f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} {line}\n"
     try:
         r = subprocess.run(["runuser", "-u", BOARD_USER, "--", "timeout", "25", "ssh", "-o", "BatchMode=yes",
                             "-o", "ConnectTimeout=8", "eth-windy0", "cat >> ~/windy-orchestra/BOARD.md"],
                            input=stamped, text=True, capture_output=True, timeout=40)
         if r.returncode == 0:
-            return
+            return True
     except (subprocess.SubprocessError, OSError):
         pass
     fallbacks = sorted(glob.glob(f"/home/{BOARD_USER}/windy-orchestra-fallback/BOARD-FALLBACK-*.md"))
     if fallbacks:
-        with open(fallbacks[-1], "a") as f:
-            f.write(stamped)
+        try:
+            with open(fallbacks[-1], "a") as f:
+                f.write(stamped)
+            print("  BOARD: Windy 0 unreachable, line written to the FALLBACK board")
+            return True
+        except OSError:
+            pass
+    return False
 
 
 def main(query=psql, post=board) -> int:
