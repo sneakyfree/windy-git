@@ -1,0 +1,75 @@
+# OFFSITE CI runners (Null 0, Boss GO 2026-11-02): a SEPARATE compose project from Veron's
+# (deploy/runner). Same isolation as Veron's, plus one rule Veron gets from its own network:
+#
+#   * REPO-SCOPED runners. Gitea hands every Actions secret of a repo to every job of that repo, and
+#     a job's labels come from ITS OWN head's workflow file (old PR heads keep old labels). So label
+#     pins alone can't keep windy-pro's / windy-admin's tokens off this box. Each runner here is
+#     registered with a token scoped to ONE secret-free repo (gitea actions generate-runner-token
+#     --scope windyadmin/<repo>) and receives only that repo's jobs, whatever labels anyone writes.
+#     Before registering: that repo must hold 0 Actions secrets (repo, owner and instance level).
+#   * labels self-hosted/linux/x64 only (config.yaml): NEVER veron-1 or linux-x64 (windy-pro and
+#     windy-admin pin veron-1 to mean "Veron"; windy-git's own jobs use veron-1/linux-x64).
+#   * dind under Sysbox (NOT privileged): a job that escapes lands as a nobody on Null 0. If Sysbox
+#     won't run on this host, STOP: no privileged dind on a box that holds a Claude login.
+#   * egress: deploy/runner/egress.sh with CI_JOBS_NET=windy-git-runner-offsite_jobs (jobs reach the
+#     internet, never the LAN, the tailnet or this host), proved by egress-probe.sh BEFORE the
+#     runners are registered.
+# Remove: docker compose down -v; delete the two runner rows in Gitea; disable the egress unit.
+
+name: windy-git-runner-offsite
+
+services:
+  dind:
+    image: docker.io/library/docker:27-dind
+    runtime: sysbox-runc   # NOT privileged
+    environment:
+      DOCKER_TLS_CERTDIR: ""   # plain TCP on an isolated network, no host route
+    command: ["dockerd", "--host=tcp://0.0.0.0:2375", "--tls=false"]
+    networks: [jobs]
+    volumes:
+      - dind-storage:/var/lib/docker
+    # Null 0 is a 4-core/8-thread laptop with 11 GB: two jobs at 2 CPUs / 4 GB each, plus dind
+    # itself, leaves ~4 threads and ~3 GB for the machine's own work.
+    cpus: 4.0
+    mem_limit: 9g
+    restart: unless-stopped
+
+  runner-1: &runner
+    image: docker.io/gitea/act_runner:0.6.1
+    depends_on: [dind]
+    environment:
+      DOCKER_HOST: tcp://dind:2375
+      GITEA_INSTANCE_URL: https://app.windygit.com
+      # First start only (the registration then lives in runner-data-1/.runner); a REPO-SCOPED
+      # token, piped into .env (0600) over ssh stdin, never typed or printed. Blank it after.
+      GITEA_RUNNER_REGISTRATION_TOKEN: ${RUNNER_1_TOKEN:-}
+      GITEA_RUNNER_NAME: null0-1
+      CONFIG_FILE: /config.yaml
+    volumes:
+      - ./config.yaml:/config.yaml:ro
+      - runner-data-1:/data
+    networks: [jobs]
+    cpus: 1.0
+    mem_limit: 1g
+    restart: unless-stopped
+
+  runner-2:
+    <<: *runner
+    environment:
+      DOCKER_HOST: tcp://dind:2375
+      GITEA_INSTANCE_URL: https://app.windygit.com
+      GITEA_RUNNER_REGISTRATION_TOKEN: ${RUNNER_2_TOKEN:-}
+      GITEA_RUNNER_NAME: null0-2
+      CONFIG_FILE: /config.yaml
+    volumes:
+      - ./config.yaml:/config.yaml:ro
+      - runner-data-2:/data
+
+networks:
+  jobs:
+    internal: false   # jobs legitimately fetch dependencies; egress.sh keeps them off private ranges
+
+volumes:
+  dind-storage:
+  runner-data-1:
+  runner-data-2:
