@@ -66,6 +66,9 @@ def test_register_refuses_a_repo_with_secrets_and_scopes_the_token_to_one_repo()
     assert 'generate-runner-token --scope "windyadmin/$repo"' in REGISTER
     assert REGISTER.index('[ "$secrets" = 0 ]') < REGISTER.index("generate-runner-token")
     assert '"sudo -n $DIR/store-token.sh $n"' in REGISTER                 # token only on stdin
+    # Gitea prints a log line on stdout before the token: only the last line goes on (11-02)
+    gen = REGISTER.index("generate-runner-token")
+    assert REGISTER.index("| tail -n 1", gen) < REGISTER.index("| runuser", gen)
 
 
 def test_store_token_reads_stdin_only_and_writes_a_0600_file(tmp_path):
