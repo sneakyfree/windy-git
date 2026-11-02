@@ -37,8 +37,8 @@ add() {      # ip port label; --with-host-check: only targets the host itself re
   if [ "$HOST_CHECK" = 1 ] && ! host_open "$1" "$2"; then return; fi
   targets+=("$1 $2 $3")
 }
-TAILNET="${CI_PROBE_TAILNET:-null-zero kit-0c3-dell kit-0c4-lenovo kit-0c5-imac}"
-WG="${CI_PROBE_WG:-10.10.0.3 10.10.0.4}"
+TAILNET="${CI_PROBE_TAILNET-null-zero kit-0c3-dell kit-0c4-lenovo kit-0c5-imac}"   # set but empty = none
+WG="${CI_PROBE_WG-10.10.0.3 10.10.0.4}"   # Null 0 has no WireGuard: CI_PROBE_WG=""
 for name in $TAILNET; do
   case "$name" in kit-0-alpha|windy-0) continue;; esac          # never, whatever the env says
   ip=$(tailscale status --json 2>/dev/null | python3 -c '
@@ -81,9 +81,15 @@ counters() {
   iptables -L "$(gen_of WG-CI-EGRESS)" -n -v -x 2>/dev/null | awk '$3 == "DROP" {print $9, $1}'
   iptables -L "$(gen_of WG-CI-INPUT)" -n -v -x 2>/dev/null | awk '$3 == "DROP" {print "input", $1}'
 }
+lan_key() {      # the private range the LAN gateway sits in (Hub #118: never assume 192.168)
+  case "$1" in
+    10.*) echo 10.0.0.0/8;; 192.168.*) echo 192.168.0.0/16;;
+    172.1[6-9].*|172.2[0-9].*|172.3[01].*) echo 172.16.0.0/12;; *) echo unknown;;
+  esac
+}
 family_key() {   # target label -> counter key
   case "$1" in
-    tailnet:*) echo 100.64.0.0/10;; wireguard:*) echo 10.0.0.0/8;; lan:*) echo 192.168.0.0/16;; host:*) echo input;;
+    tailnet:*) echo 100.64.0.0/10;; wireguard:*) echo 10.0.0.0/8;; lan:*) lan_key "$gw";; host:*) echo input;;
   esac
 }
 before=$(counters)
@@ -114,4 +120,4 @@ if [ -n "$leaks" ] || [ -n "$dead" ] || [ -n "$unproved" ]; then
   echo
   exit 1
 fi
-echo "egress probe: PASS (${#targets[@]} private targets closed BY our drop rules, counters rose; controls open; $([ "$HOST_CHECK" = 1 ] && echo with || echo no) host-side check)"
+echo "egress probe: PASS (${#targets[@]} private targets closed BY our drop rules, counters rose per FAMILY (tailnet/wireguard/lan/host), not per target; controls open; $([ "$HOST_CHECK" = 1 ] && echo with || echo no) host-side check)"

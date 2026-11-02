@@ -76,7 +76,8 @@ def test_the_probe_fails_loudly_and_proves_the_block_by_our_drop_counters():
     assert 'if [ -z "$a" ] || [ "${a:-0}" -le "${b:-0}" ]; then unproved+=' in PROBE
     assert '[ -n "$unproved" ]' in PROBE
     for fam, key in (("tailnet", "100.64.0.0/10"), ("wireguard", "10.0.0.0/8"), ("lan", "192.168.0.0/16"), ("host", "input")):
-        assert f"{fam}:*) echo {key};;" in PROBE
+        if fam != "lan":
+            assert f"{fam}:*) echo {key};;" in PROBE
     assert "$3 == \"DROP\" {print $9, $1}" in PROBE and '$3 == "DROP" {print "input", $1}' in PROBE
     assert "for port in" not in PROBE                              # one fixed port per family, never 53
     assert 'add "$gw" 80 "lan:gateway"' in PROBE
@@ -96,8 +97,8 @@ def test_the_recurring_probe_never_connects_from_the_host():
 def test_the_probe_touches_an_explicit_fleet_list_only():
     """Boss 11-02: never 'any online peer' (it touched a person's Mac and Grant's PC); never Kit 0,
     Windy 0, personal devices or phones."""
-    assert 'TAILNET="${CI_PROBE_TAILNET:-null-zero kit-0c3-dell kit-0c4-lenovo kit-0c5-imac}"' in PROBE
-    assert 'WG="${CI_PROBE_WG:-10.10.0.3 10.10.0.4}"' in PROBE
+    assert 'TAILNET="${CI_PROBE_TAILNET-null-zero kit-0c3-dell kit-0c4-lenovo kit-0c5-imac}"' in PROBE
+    assert 'WG="${CI_PROBE_WG-10.10.0.3 10.10.0.4}"' in PROBE
     assert 'case "$name" in kit-0-alpha|windy-0) continue;; esac' in PROBE
     assert 'case "$ip" in 10.10.0.1) continue;; esac' in PROBE
     assert 'p.get("HostName") == want' in PROBE                   # a peer is used only when NAMED
@@ -130,3 +131,48 @@ def test_never_an_empty_or_half_built_filter_while_hooked():
 def test_one_run_at_a_time():
     assert "exec 9>/run/windygit-ci-egress.lock" in EGRESS and "flock -w 120 9 ||" in EGRESS
     assert EGRESS.index("flock -w 120 9") < EGRESS.index("swap WG-CI-EGRESS <<EOF")
+
+
+def _lan_key(ip: str) -> str:
+    fn = PROBE[PROBE.index("lan_key() {"):PROBE.index("family_key() {")]
+    return subprocess.run(["bash", "-c", fn + f'\nlan_key "{ip}"'], capture_output=True, text=True).stdout.strip()
+
+
+def test_the_lan_counter_key_follows_the_gateways_real_range():
+    """Hub #118: a gateway in 10/8 or 172.16/12 must not FAIL against the 192.168 counter."""
+    assert 'lan:*) lan_key "$gw";;' in PROBE
+    assert _lan_key("192.168.1.254") == "192.168.0.0/16"
+    assert _lan_key("10.0.0.1") == "10.0.0.0/8"
+    assert _lan_key("172.16.0.1") == "172.16.0.0/12" and _lan_key("172.31.255.1") == "172.16.0.0/12"
+    assert _lan_key("172.32.0.1") == "unknown" and _lan_key("100.64.0.1") == "unknown"
+
+
+def test_pass_says_per_family_not_per_target():
+    assert "counters rose per FAMILY (tailnet/wireguard/lan/host), not per target" in PROBE
+
+
+def test_an_empty_target_list_means_none_not_the_default():
+    for var, default in (("CI_PROBE_TAILNET", "null-zero"), ("CI_PROBE_WG", "10.10.0.3")):
+        line = next(ln for ln in PROBE.splitlines() if f"${{{var}-" in ln).split("#")[0]
+        assert subprocess.run(["bash", "-c", f'{var}=""; {line}; echo "[${{{line.split("=")[0]}}}]"'],
+                              capture_output=True, text=True).stdout.strip() == "[]"
+        assert default in subprocess.run(["bash", "-c", f'unset {var}; {line}; echo "${{{line.split("=")[0]}}}"'],
+                                         capture_output=True, text=True).stdout
+
+
+def test_null0_egress_unit_uses_the_offsite_network_and_an_explicit_list():
+    off = configparser.ConfigParser(strict=False, interpolation=None)
+    off.optionxform = str
+    off.read_string((RUNNER.parent / "runner-offsite" / "windygit-ci-egress-offsite.service").read_text())
+    env = off["Service"]["Environment"]
+    text = (RUNNER.parent / "runner-offsite" / "windygit-ci-egress-offsite.service").read_text()
+    assert "Environment=CI_JOBS_NET=windy-git-runner-offsite_jobs" in text
+    assert "Environment=CI_DIND=windy-git-runner-offsite-dind-1" in text
+    assert 'Environment="CI_PROBE_TAILNET=kit-0c1-veron kit-0c3-dell kit-0c4-lenovo kit-0c5-imac"' in text
+    assert "Environment=CI_PROBE_WG=\n" in text
+    for never in ("kit-0-alpha", "windy-0", "grantw", "rulon-mac"):
+        assert never not in env and never not in text.split("[Service]")[1]
+    assert "tailscaled.service" in off["Unit"]["After"] and "tailscaled.service" in off["Install"]["WantedBy"]
+    assert off["Service"].get("RemainAfterExit", "no") == "no"
+    t = (RUNNER.parent / "runner-offsite" / "windygit-ci-egress-offsite.timer").read_text()
+    assert "OnUnitActiveSec=15min" in t
