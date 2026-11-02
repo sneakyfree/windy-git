@@ -1,13 +1,18 @@
 [Unit]
-Description=Windy Git - CI egress filter (jobs reach the internet, never the LAN/host)
-After=docker.service
+Description=Windy Git - CI egress filter + proof (jobs reach the internet, never the LAN, tailnet or host)
+# After tailscaled: it puts its own ts-forward chain first in FORWARD on every start, which once
+# let CI reach every tailnet machine (11-02). WantedBy=tailscaled.service below re-runs this after
+# each tailscaled (re)start; windygit-ci-egress.timer re-asserts it every 15 min.
+After=docker.service tailscaled.service
 Requires=docker.service
 
 [Service]
+# NOT RemainAfterExit: the timer and tailscaled must be able to start it again.
 Type=oneshot
-RemainAfterExit=yes
-# The jobs network exists once the runner compose project is up; retry until it does.
-ExecStart=/bin/bash -c 'for i in $(seq 1 60); do /srv/windygit/src/deploy/runner/egress.sh && exit 0; sleep 5; done; exit 1'
+# The jobs network exists once the runner compose project is up; retry until it does. Then PROVE
+# it from a CI container. Under windy-job, a FAIL reaches windy-uptime's heartbeat alert (HQ).
+ExecStart=/usr/local/bin/windy-job windygit-ci-egress 45m --expect "^egress probe: PASS" --owner 13 -- /bin/bash -c 'for i in $(seq 1 60); do /srv/windygit/src/deploy/runner/egress.sh && exec /srv/windygit/src/deploy/runner/egress-probe.sh; sleep 5; done; echo "egress probe: FAIL egress.sh never applied"; exit 1'
+TimeoutStartSec=600
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=multi-user.target tailscaled.service
