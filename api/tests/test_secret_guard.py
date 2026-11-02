@@ -192,3 +192,17 @@ def test_the_authenticator_golden_vector_allow_is_exactly_one_file():
         "shared/golden-vectors/es256_v1.json", "app/src/main/res/raw/key.pem")]
     assert sg._drop_allowed("eternitas-authenticator", [ok, *still], allow) == still
     assert sg._drop_allowed("eternitas-site", [ok], allow) == [ok]
+
+
+
+def test_the_windytalk_release_script_allow_is_exactly_one_file():
+    """Windy Talk 11-02 (red main since 10-21): publish-release.sh echoes only the PEM header/footer
+    around a key fetched at run time. Allowed in that ONE file; a key block anywhere else still blocks."""
+    F = sg.cg.Finding
+    hdr = "private key block #" + ss.h8("-----BEGIN PRIVATE KEY-----")
+    allow = sg.load_allow()
+    ok = F("scripts/publish-release.sh", 50, "private key block", hdr)
+    still = [F(p, 1, "private key block", hdr) for p in (
+        "scripts/publish-release.sh.bak", "scripts/other.sh", "release/publish-release.sh", "keys/update.pem")]
+    assert sg._drop_allowed("windytalk", [ok, *still], allow) == still
+    assert sg._drop_allowed("windy-pro", [ok], allow) == [ok]
