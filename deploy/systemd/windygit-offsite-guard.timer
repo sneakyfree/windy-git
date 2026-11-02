@@ -1,0 +1,9 @@
+[Unit]
+Description=Offsite runner guard every 10 min (Hub #121: at least hourly)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=10min
+
+[Install]
+WantedBy=timers.target

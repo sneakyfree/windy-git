@@ -1,0 +1,11 @@
+[Unit]
+Description=Offsite runner guard: Null 0's runners stay repo-scoped + secret-free, else cut off at once (Hub #121)
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/srv/windygit/src
+# windy-job: a CUT OFF line does not match --expect, so windy-uptime's heartbeats-veron alerts HQ
+# as well as the BOARD line the guard posts itself.
+ExecStart=/usr/local/bin/windy-job windygit-offsite-guard 45m --expect "^offsite guard: ok [(]" --owner 13 -- /usr/bin/python3 /srv/windygit/src/scripts/offsite_secret_guard.py
+TimeoutStartSec=300

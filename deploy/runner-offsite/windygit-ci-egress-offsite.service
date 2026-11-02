@@ -1,0 +1,22 @@
+[Unit]
+Description=Windy Git OFFSITE (Null 0) - CI egress filter + proof (jobs reach the internet, never the LAN, tailnet or host)
+# Same scripts as Veron's (deploy/runner/egress.sh + egress-probe.sh, copied into the offsite dir).
+# Runs after tailscaled and on each tailscaled (re)start, plus the 15-min timer. Veron's offsite
+# guard (scripts/offsite_secret_guard.py) asks `systemctl is-failed` on THIS unit and cuts the
+# runners off if it failed: a broken filter here can't silently keep serving jobs.
+After=docker.service tailscaled.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+Environment=CI_JOBS_NET=windy-git-runner-offsite_jobs
+Environment=CI_DIND=windy-git-runner-offsite-dind-1
+# Probe targets FROM Null 0 (explicit fleet list, never Kit 0 / Windy 0 / personal devices):
+# Veron + OC3/OC4/OC5 over the tailnet; Null 0 has no WireGuard; plus its LAN gateway + own IPs.
+Environment="CI_PROBE_TAILNET=kit-0c1-veron kit-0c3-dell kit-0c4-lenovo kit-0c5-imac"
+Environment=CI_PROBE_WG=
+ExecStart=/bin/bash -c 'for i in $(seq 1 60); do /opt/windygit-runner-offsite/egress.sh && exec /opt/windygit-runner-offsite/egress-probe.sh; sleep 5; done; echo "egress probe: FAIL egress.sh never applied"; exit 1'
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target tailscaled.service
