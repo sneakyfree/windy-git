@@ -13,7 +13,7 @@ so no temp file ever exists (Boss rule 10-22: secrets via stdin only, no temp fi
   ssh host 'lockbox-put NEW_KEY -' < /run/user/$UID/dir/f   # pipe from tmpfs over ssh
 
 Stdin rules: a TTY is REFUSED (typing would echo the secret on screen and into scrollback
-and transcripts: pipe it in); at most 4096 bytes are read and longer input is refused;
+and transcripts: pipe it in); at most 8192 bytes are read and longer input is refused;
 empty input is refused; surrounding whitespace/newline is stripped exactly as for FILE; the
 same value rules apply. Do NOT put the value in argv (`echo $VAL`, `printf %s $VAL` from a
 non-builtin, `env VAL=...`): argv is visible in ps to every user on the box. A bash
@@ -44,8 +44,10 @@ from pathlib import Path
 REPO = os.environ.get("LOCKBOX_PUT_REPO", "https://github.com/sneakyfree/kit-army-config.git")
 SLUG = "sneakyfree/kit-army-config"
 KEY_RE = re.compile(r"^[A-Z][A-Z0-9_]{2,63}$")
-VAL_RE = re.compile(r"^[A-Za-z0-9._~+/=:@%,-]{8,512}$")  # no backtick, quote, space or newline
-STDIN_MAX = 4096  # bytes; longer stdin is refused unprocessed
+VAL_RE = re.compile(r"^[A-Za-z0-9._~+/=:@%,-]{8,4096}$")  # no backtick, quote, space or newline
+# 4096 (was 512, which had no stated reason): one value can hold a base64 RSA-2048 PEM (~2,272) or a refreshed
+# EPT (~609) (Boss 2026-11-02). STDIN_MAX leaves room for the newline a pipe adds (Hub): 4,096 chars + "\n" fit.
+STDIN_MAX = 8192  # bytes; longer stdin is refused unprocessed
 
 
 def die(msg: str, code: int = 2):
@@ -147,7 +149,7 @@ def main(argv=None) -> int:
         die("FILE is required (or '-' / --stdin to read a piped value)")
     value = read_stdin_value() if (a.stdin or a.file == "-") else read_file_value(a.file)
     if not VAL_RE.match(value):
-        die("value must be one line of 8-512 chars from [A-Za-z0-9._~+/=:@%,-] (no spaces, quotes, backticks)")
+        die("value must be one line of 8-4096 chars from [A-Za-z0-9._~+/=:@%,-] (no spaces, quotes, backticks)")
     note = re.sub(r"[`\n\r]", " ", a.note)[:160]
     lane = re.sub(r"[^A-Za-z0-9 ._-]", "", a.lane)[:40]
     tmp = tempfile.mkdtemp(prefix="lockbox-put-", dir=work_dir())
