@@ -1,9 +1,9 @@
 [Unit]
-Description=Veron free disk in Windy Git's uptime beat; under 10% free = WARN to Boss (reads only)
+Description=Veron free disk in Windy Git's uptime beat; under 150 GB = one BOARD line + one line to Windy Boss per crossing, under 50 GB = bold (Boss 11-02)
 
 [Service]
 Type=oneshot
-# windy-job: a heartbeat windy-uptime checks; "disk: ok" missing = an alert carrying the WARN line.
+# windy-job: a heartbeat windy-uptime checks; "disk: ok" missing = an alert carrying the LOW or CRITICAL line. The crossing lines (BOARD + fleet-say to Boss) are posted by disk_free.py itself; state in /var/lib/windygit/disk-free.json.
 ExecStart=/usr/local/bin/windy-job windygit-disk-free 2h30m --expect "^disk: ok$" --owner 13 -- /usr/bin/python3 /srv/windygit/src/scripts/disk_free.py
 TimeoutStartSec=60
 Nice=10
