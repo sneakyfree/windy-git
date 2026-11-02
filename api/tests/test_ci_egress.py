@@ -38,6 +38,7 @@ def test_the_hook_goes_first_in_forward_and_the_script_fails_if_it_is_not():
 def test_every_private_range_is_dropped_and_dns_stays_the_only_allowance():
     for cidr in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "169.254.0.0/16"):
         assert cidr in EGRESS
+    assert 'iptables -A WG-CI-EGRESS -d "$cidr" -j DROP' in EGRESS
     assert "--dport 53 -j RETURN" in EGRESS
     assert re.findall(r"--dport (\d+) -j RETURN", EGRESS) == ["53", "53"]
 
@@ -67,7 +68,10 @@ def test_the_timer_reasserts_every_15_minutes():
 def test_the_probe_fails_loudly_and_only_counts_targets_the_host_reaches():
     assert PROBE.count('echo "egress probe: PASS') == 1
     assert "exit 1" in PROBE and "egress probe: FAIL" in PROBE
-    assert 'host_open "$ip" 22 && targets+=' in PROBE          # a shut port proves nothing
+    # a shut port proves nothing: every target family is gated on the HOST reaching it
+    assert '[ -n "${ip:-}" ] && host_open "$ip" 22 && targets+=("$ip 22 tailnet:$name")' in PROBE
+    assert 'if host_open "$1" "$port"; then targets+=("$1 $port $2"); return; fi' in PROBE
+    assert 'host_open "$ip" 22 && targets+=("$ip 22 host:$ip")' in PROBE
     assert "for port in 22 80 443 8080" in PROBE and " 53 " not in PROBE.split("for port in")[1].split(";")[0]
     assert "control:public" in PROBE and "control:forge" in PROBE
     assert 'grep -v \'control:\'' in PROBE                      # any private OPEN fails the run
