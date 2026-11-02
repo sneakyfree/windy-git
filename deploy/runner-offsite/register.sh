@@ -18,6 +18,9 @@ secrets=$(printf "select count(*) from secret s, repository p where p.owner_id =
 exists=$(printf "select count(*) from repository where owner_id = (select id from \"user\" where lower_name = 'windyadmin') and lower_name = lower('%s');\n" "$repo" | "$WGQ")
 [ "$exists" = 1 ] || { echo "REFUSED: repo windyadmin/$repo not found"; exit 1; }
 [ "$secrets" = 0 ] || { echo "REFUSED: windyadmin/$repo holds $secrets Actions secret(s) (repo/owner/instance): it must stay on Veron"; exit 1; }
+# Gitea 1.24.7 prints a log line on STDOUT before the token (the DEFAULT_ACTIONS_URL warning), so
+# only the LAST line is the token; store-token.sh still refuses anything that isn't one plain token.
 docker exec -u git windy-git-gitea-1 gitea actions generate-runner-token --scope "windyadmin/$repo" 2>/dev/null \
+  | tail -n 1 \
   | runuser -u user1-gpu -- ssh -o BatchMode=yes "$NULL0" "sudo -n $DIR/store-token.sh $n"
 echo "next on Null 0: sudo docker compose -p windy-git-runner-offsite up -d runner-$n; then blank RUNNER_${n}_TOKEN in .env; then read back scope + labels in Gitea (action_runner.repo_id, agent_labels)"
