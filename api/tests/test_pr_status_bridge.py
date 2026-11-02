@@ -83,6 +83,8 @@ class Fake:
 def _fresh_cache(monkeypatch):
     bridge._RUNS_CACHE.clear()
     bridge._STATUSES_CACHE.clear()
+    # Never the network: GraphQL "unavailable" unless a test says otherwise (-> today's REST path).
+    monkeypatch.setattr(bridge, "graphql", lambda query: (503, None))
     monkeypatch.setattr(bridge, "failure_hint", lambda task_id: None)
 
 
@@ -1099,3 +1101,133 @@ def test_a_picked_job_replaces_waiting_on_github(monkeypatch):
     current[0]["description"] = "Windy Git CI on Veron 1: running"
     bridge.post_statuses("windy-admin", sha)
     assert posts == []                                                               # same words: no POST
+
+
+# ── GraphQL prefetch (Boss 11-02: ~950 fewer shared REST calls/h) ─────────────────────────────
+SHA_B = "b" * 40
+
+
+def _gql_repo(prs=(), default_oid=SHA_B, total=None, dbr=True):
+    nodes = [{"number": n, "title": f"t{n}", "url": f"https://github.com/sneakyfree/r/pull/{n}",
+              "headRefName": f"b{n}", "headRefOid": sha, "baseRefName": "main",
+              "headRepository": ({"nameWithOwner": full} if full else None)} for n, sha, full in prs]
+    return {"defaultBranchRef": {"name": "main", "target": {"oid": default_oid}} if dbr else None,
+            "pullRequests": {"totalCount": len(nodes) if total is None else total, "nodes": nodes}}
+
+
+def test_the_query_names_every_bridged_repo_explicitly_and_nothing_wider():
+    q = bridge.heads_query(["windy-pro", "windy-chat", 'evil") { x } #'])
+    assert 'r0: repository(owner: "sneakyfree", name: "windy-pro")' in q
+    assert 'r1: repository(owner: "sneakyfree", name: "windy-chat")' in q
+    assert 'name: "evil\\") { x } #"' in q                         # names are JSON-quoted, never raw
+    for wide in ("search(", "organization(", "viewer", "repositories("):
+        assert wide not in q
+    assert q.count("repository(") == 3 and "pullRequests(states: OPEN, first: 100)" in q
+
+
+def test_a_full_answer_becomes_rest_shaped_prs_and_default_heads(monkeypatch):
+    data = {"r0": _gql_repo([(7, SHA_A, "sneakyfree/windy-pro"), (8, SHA_A, None)]), "r1": _gql_repo()}
+    monkeypatch.setattr(bridge, "graphql", lambda q: (200, {"data": data}))
+    got = bridge.prefetch(["windy-pro", "windy-chat"])
+    pr = got["windy-pro"]["prs"][0]
+    assert pr["number"] == 7 and pr["head"] == {"ref": "b7", "sha": SHA_A, "repo": {"full_name": "sneakyfree/windy-pro"}}
+    assert pr["base"] == {"ref": "main"} and pr["html_url"].endswith("/pull/7") and pr["title"] == "t7"
+    assert got["windy-pro"]["prs"][1]["head"]["repo"] is None          # a deleted fork: never mirrored
+    assert got["windy-chat"] == {"prs": [], "default_branch": "main", "default_head": SHA_B}
+
+
+@pytest.mark.parametrize("answer", [
+    (502, None),                                                        # not 200
+    (200, {"errors": [{"message": "x"}], "data": {}}),                  # GraphQL errors
+    (200, {"errors": [{"message": "x"}], "data": {"r0": _gql_repo(), "r1": _gql_repo()}}),  # errors + full data
+    (200, {"data": {"r0": _gql_repo()}}),                               # a repo missing
+    (200, {"data": {"r0": _gql_repo(), "r1": None}}),                   # a repo null (renamed, no access)
+    (200, {"data": {"r0": _gql_repo(), "r1": _gql_repo(dbr=False)}}),   # no default branch
+    (200, {"data": {"r0": _gql_repo(), "r1": _gql_repo([(1, SHA_A, "sneakyfree/windy-chat")], total=101)}}),
+    (200, None),
+])
+def test_any_partial_or_failed_answer_is_none(monkeypatch, answer):
+    monkeypatch.setattr(bridge, "graphql", lambda q: answer)
+    assert bridge.prefetch(["windy-pro", "windy-chat"]) is None
+
+
+def test_a_transport_failure_is_none(monkeypatch):
+    def boom(q):
+        raise bridge.urllib.error.URLError("down")
+    monkeypatch.setattr(bridge, "graphql", boom)
+    assert bridge.prefetch(["windy-pro"]) is None
+
+
+def _pass_world(monkeypatch, tmp_path, gql_answer):
+    """Two repos; records REST paths, which repos got a prefetched PR list, and the log."""
+    rest, synced = [], []
+    monkeypatch.setattr(bridge, "STATE_FILE", tmp_path / "state.json")
+    monkeypatch.setattr(bridge, "SKIPS_FILE", tmp_path / "skips")
+    monkeypatch.setattr(bridge, "REPOS", ["windy-pro", "windy-chat"])
+    monkeypatch.setattr(bridge, "GITEA_TOKEN", "x")
+    monkeypatch.setattr(bridge, "GITHUB_TOKEN", "x")
+    monkeypatch.setattr(bridge, "job_signatures", lambda r, shas: {})
+    monkeypatch.setattr(bridge, "fetched", lambda r, s: True)
+
+    def graphql(q):
+        bridge.CALLS["graphql"] += 1
+        return gql_answer
+
+    def github(method, path, body=None):
+        bridge.CALLS["rest"] += 1
+        rest.append(path)
+        if path == "/rate_limit":
+            return 200, {"resources": {"core": {"remaining": 4000}}}
+        if path.startswith("/repos/sneakyfree/") and path.count("/") == 3:
+            return 200, {"default_branch": "main"}
+        if path.endswith("/branches/main"):
+            return 200, {"commit": {"sha": SHA_B}}
+        return 404, None
+
+    def sync_prs(repo, gh_prs=None):
+        synced.append((repo, gh_prs))
+        return []
+    monkeypatch.setattr(bridge, "graphql", graphql)
+    monkeypatch.setattr(bridge, "github", github)
+    monkeypatch.setattr(bridge, "sync_prs", sync_prs)
+    monkeypatch.setattr(bridge, "post_statuses", lambda repo, sha: None)
+    monkeypatch.setattr(bridge, "post_autorerun_note", lambda *a, **k: None)
+    for f in ("post_compute_guard", "post_ci_hygiene", "post_birth_terms", "post_secret_guard"):
+        monkeypatch.setattr(bridge, f, lambda repo, sha, branch, is_default, _f=f: synced.append((_f, repo, branch)))
+    return rest, synced
+
+
+def test_a_full_prefetch_replaces_the_per_repo_rest_calls(monkeypatch, tmp_path, capsys):
+    full = (200, {"data": {"r0": _gql_repo([(7, SHA_A, "sneakyfree/windy-pro")]), "r1": _gql_repo()}})
+    rest, synced = _pass_world(monkeypatch, tmp_path, full)
+    bridge.main()
+    assert rest == ["/rate_limit"]                                     # no PR lists, no branch reads
+    syncs = [x for x in synced if len(x) == 2]
+    assert [r for r, prs in syncs] == ["windy-pro", "windy-chat"] and syncs[0][1][0]["number"] == 7
+    guards = [x for x in synced if len(x) == 3]
+    assert guards and all(branch == "main" for _f, _r, branch in guards)   # the guards get the default branch
+    out = capsys.readouterr().out
+    assert "FAILED" not in out
+    assert "GitHub calls this pass: REST 1, GraphQL 1 (GraphQL prefetch)" in out
+
+
+def test_a_partial_prefetch_falls_back_to_rest_and_uses_none_of_it(monkeypatch, tmp_path, capsys):
+    partial = (200, {"data": {"r0": _gql_repo([(7, SHA_A, "sneakyfree/windy-pro")])}})   # windy-chat missing
+    rest, synced = _pass_world(monkeypatch, tmp_path, partial)
+    bridge.main()
+    assert [x for x in synced if len(x) == 2] == [("windy-pro", None), ("windy-chat", None)]   # nothing from it
+    assert "/repos/sneakyfree/windy-pro/branches/main" in rest and "/repos/sneakyfree/windy-chat/branches/main" in rest
+    out = capsys.readouterr().out
+    assert "GraphQL prefetch unavailable or partial: this pass uses REST" in out
+    assert "(REST fallback)" in out and "GraphQL 1" in out
+
+
+def test_github_and_graphql_each_count_their_calls(monkeypatch):
+    monkeypatch.setattr(bridge, "_call", lambda *a, **k: (200, {}))
+    monkeypatch.undo()                                                   # drop the autouse graphql stub
+    monkeypatch.setattr(bridge, "_call", lambda *a, **k: (200, {}))
+    bridge.CALLS.update(rest=0, graphql=0)
+    bridge.github("GET", "/x")
+    bridge.github("GET", "/y")
+    bridge.graphql("query { x }")
+    assert bridge.CALLS == {"rest": 2, "graphql": 1}
