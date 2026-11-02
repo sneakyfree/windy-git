@@ -5,11 +5,15 @@
 # reaches windy-uptime's heartbeat alert, not just a log).
 #
 # A "closed" only counts if the HOST itself can reach that target: otherwise the port is simply
-# shut and proves nothing about the filter. Targets, found fresh each run:
-#   * up to 4 online tailnet peers (tailscale status --json), port 22;
-#   * up to 3 LAN neighbours (ip neigh) and up to 2 WireGuard peers, the first of 22/80/443/8080
-#     the host reaches (port 53 is NOT a target: egress.sh allows DNS on purpose, Docker's
-#     embedded resolver forwards to the LAN router);
+# shut and proves nothing about the filter. Targets are an EXPLICIT FLEET LIST, never "whatever
+# answers" (11-02: picking any online tailnet peer touched a person's Mac and Grant's PC; never
+# again). Never Kit 0, Windy 0, a person's own device or a phone:
+#   * tailnet: CI_PROBE_TAILNET host names (default null-zero kit-0c3-dell kit-0c4-lenovo
+#     kit-0c5-imac), resolved via tailscale status, port 22;
+#   * WireGuard: CI_PROBE_WG IPs (default 10.10.0.3 = OC3, 10.10.0.4 = OC4), port 22. Never
+#     10.10.0.1 (Kit 0) or Veron's own 10.10.0.6 (that one is covered as a host IP below);
+#   * LAN: the default gateway only, the first of 80/443/8080 the host reaches (port 53 is NOT a
+#     target: egress.sh allows DNS on purpose, Docker's resolver forwards to the LAN router);
 #   * this host's own LAN, WireGuard and tailnet IPs, port 22.
 # Controls that must stay OPEN: 1.1.1.1:443 and https://app.windygit.com (jobs fetch the forge).
 # Output for windy-job --expect: "egress probe: PASS ..." or "egress probe: FAIL ...". Exit 1 on FAIL.
@@ -22,36 +26,30 @@ D=(docker exec -i "$DIND" docker -H tcp://127.0.0.1:2375)
 host_open() { timeout 3 bash -c "</dev/tcp/$1/$2" 2>/dev/null; }
 
 targets=()   # "ip port label", only ones the HOST reaches
-peers=$(tailscale status --json 2>/dev/null | python3 -c '
+TAILNET="${CI_PROBE_TAILNET:-null-zero kit-0c3-dell kit-0c4-lenovo kit-0c5-imac}"
+WG="${CI_PROBE_WG:-10.10.0.3 10.10.0.4}"
+for name in $TAILNET; do
+  case "$name" in kit-0-alpha|windy-0) continue;; esac          # never, whatever the env says
+  ip=$(tailscale status --json 2>/dev/null | python3 -c '
 import json, sys
+want = sys.argv[1]
 try:
     d = json.load(sys.stdin)
 except ValueError:
     sys.exit(0)
-n = 0
 for p in (d.get("Peer") or {}).values():
     ips = [i for i in p.get("TailscaleIPs") or [] if "." in i]
-    if p.get("Online") and ips and n < 4:
-        print(ips[0], p.get("HostName", "?").replace(" ", "_")); n += 1')
-while read -r ip name; do
-  [ -n "${ip:-}" ] && host_open "$ip" 22 && targets+=("$ip 22 tailnet:$name")
-done <<< "$peers"
-first_open() {   # ip label: add the first port the host reaches
-  local port
-  for port in 22 80 443 8080; do
-    if host_open "$1" "$port"; then targets+=("$1 $port $2"); return; fi
-  done
-}
-dev=$(ip -4 route show default | awk '{print $5; exit}')
-n=0
-for ip in $(ip -4 neigh show dev "$dev" 2>/dev/null | awk '$NF ~ /REACHABLE|STALE|DELAY/ {print $1}'); do
-  [ $n -ge 3 ] && break
-  before=${#targets[@]}; first_open "$ip" "lan:$ip"; [ ${#targets[@]} -gt "$before" ] && n=$((n + 1))
+    if p.get("HostName") == want and p.get("Online") and ips:
+        print(ips[0]); break' "$name")
+  [ -n "$ip" ] && host_open "$ip" 22 && targets+=("$ip 22 tailnet:$name")
 done
-n=0
-for ip in $(wg show all allowed-ips 2>/dev/null | grep -oE '([0-9]+\.){3}[0-9]+/32' | cut -d/ -f1); do
-  [ $n -ge 2 ] && break
-  before=${#targets[@]}; first_open "$ip" "wireguard:$ip"; [ ${#targets[@]} -gt "$before" ] && n=$((n + 1))
+for ip in $WG; do
+  case "$ip" in 10.10.0.1) continue;; esac                       # Kit 0 on WireGuard: never
+  host_open "$ip" 22 && targets+=("$ip 22 wireguard:$ip")
+done
+gw=$(ip -4 route show default | awk '{print $3; exit}')
+for port in 80 443 8080; do
+  if [ -n "$gw" ] && host_open "$gw" "$port"; then targets+=("$gw $port lan-gateway"); break; fi
 done
 for ip in $(ip -4 -o addr show scope global | awk '{split($4, a, "/"); print a[1]}'); do
   case "$ip" in 172.*) continue;; esac          # docker bridges: not a route a job has

@@ -70,12 +70,27 @@ def test_the_probe_fails_loudly_and_only_counts_targets_the_host_reaches():
     assert PROBE.count('echo "egress probe: PASS') == 1
     assert "exit 1" in PROBE and "egress probe: FAIL" in PROBE
     # a shut port proves nothing: every target family is gated on the HOST reaching it
-    assert '[ -n "${ip:-}" ] && host_open "$ip" 22 && targets+=("$ip 22 tailnet:$name")' in PROBE
-    assert 'if host_open "$1" "$port"; then targets+=("$1 $port $2"); return; fi' in PROBE
+    assert '[ -n "$ip" ] && host_open "$ip" 22 && targets+=("$ip 22 tailnet:$name")' in PROBE
+    assert 'host_open "$ip" 22 && targets+=("$ip 22 wireguard:$ip")' in PROBE
+    assert 'if [ -n "$gw" ] && host_open "$gw" "$port"; then targets+=' in PROBE
     assert 'host_open "$ip" 22 && targets+=("$ip 22 host:$ip")' in PROBE
-    assert "for port in 22 80 443 8080" in PROBE and " 53 " not in PROBE.split("for port in")[1].split(";")[0]
+    assert "for port in 80 443 8080; do" in PROBE                  # never 53: DNS is allowed on purpose
     assert "control:public" in PROBE and "control:forge" in PROBE
     assert 'grep -v \'control:\'' in PROBE                      # any private OPEN fails the run
+
+
+def test_the_probe_touches_an_explicit_fleet_list_only():
+    """Boss 11-02: never 'any online peer' (it touched a person's Mac and Grant's PC); never Kit 0,
+    Windy 0, personal devices or phones."""
+    assert 'TAILNET="${CI_PROBE_TAILNET:-null-zero kit-0c3-dell kit-0c4-lenovo kit-0c5-imac}"' in PROBE
+    assert 'WG="${CI_PROBE_WG:-10.10.0.3 10.10.0.4}"' in PROBE
+    assert 'case "$name" in kit-0-alpha|windy-0) continue;; esac' in PROBE
+    assert 'case "$ip" in 10.10.0.1) continue;; esac' in PROBE
+    assert 'p.get("HostName") == want' in PROBE                   # a peer is used only when NAMED
+    assert "ip neigh" not in PROBE.split("set -uo pipefail")[1]    # no LAN-neighbour sweep
+    assert "n < 4" not in PROBE and "wg show" not in PROBE
+    for personal in ("grantw", "rulon-mac", "iOS", "macmini"):
+        assert personal not in PROBE.split("set -uo pipefail")[1]
 
 
 def _after(text: str, first: str, then: str) -> bool:
