@@ -210,11 +210,81 @@ def gitea(method, path, body=None):
 POST_FAILS = [0]  # failed status POSTs this pass: a head with one is never cached (step 2, 10-28)
 
 
+# Calls per pass, for the pass's log line (Boss 11-02: measured, not estimated). REST and GraphQL
+# are separate GitHub budgets (5,000/h each); the fleet shares the REST one.
+CALLS = {"rest": 0, "graphql": 0}
+
+
 def github(method, path, body=None):
+    CALLS["rest"] += 1
     st, out = _call("https://api.github.com", f"Bearer {GITHUB_TOKEN}", method, path, body)
     if method == "POST" and not 200 <= st < 300:
         POST_FAILS[0] += 1
     return st, out
+
+
+def graphql(query: str):
+    """One GraphQL call (its own 5,000/h budget, not the fleet's REST one)."""
+    CALLS["graphql"] += 1
+    return _call("https://api.github.com", f"Bearer {GITHUB_TOKEN}", "POST", "/graphql", {"query": query})
+
+
+GQL_PRS_MAX = 100  # one page: a repo with more open PRs makes the whole answer partial (-> REST)
+
+
+def heads_query(repos) -> str:
+    """ONE query for every bridged repo, each NAMED explicitly under its own alias (Boss 11-02:
+    never an org-wide repo list or a search). Per repo: the default branch + head, and the open
+    PRs with exactly the fields sync_prs uses."""
+    parts = []
+    for i, repo in enumerate(repos):
+        parts.append(
+            f'r{i}: repository(owner: {json.dumps(GH_OWNER)}, name: {json.dumps(repo)}) {{ '
+            "defaultBranchRef { name target { oid } } "
+            f"pullRequests(states: OPEN, first: {GQL_PRS_MAX}) {{ totalCount nodes {{ "
+            "number title url headRefName headRefOid baseRefName headRepository { nameWithOwner } "
+            "} } }")
+    return "query { " + " ".join(parts) + " }"
+
+
+def prefetch(repos) -> dict | None:
+    """{repo: {"prs": [REST-shaped PR dicts], "default_branch": name, "default_head": sha}} for
+    EVERY repo, or None. None on ANY doubt: a non-200, an `errors` key, a missing or null repo,
+    a missing default branch, more open PRs than one page holds, or ANY exception from the call or
+    the parse (a malformed body, a node missing a field: Hub #124). It runs outside the per-repo
+    try, so it must never raise. The caller then runs the whole pass on today's REST path; a
+    partial answer is never used (Boss 11-02)."""
+    try:
+        return _prefetch(repos)
+    except Exception as e:  # noqa: BLE001 - any surprise means "no prefetch", never a dead pass
+        print(f"  bridge: GraphQL prefetch raised {type(e).__name__}: REST this pass")
+        return None
+
+
+def _prefetch(repos) -> dict | None:
+    st, out = graphql(heads_query(repos))
+    if st != 200 or not isinstance(out, dict) or out.get("errors") or not isinstance(out.get("data"), dict):
+        return None
+    got = {}
+    for i, repo in enumerate(repos):
+        node = out["data"].get(f"r{i}")
+        if not isinstance(node, dict):
+            return None
+        dbr, prs = node.get("defaultBranchRef"), node.get("pullRequests")
+        if not isinstance(dbr, dict) or not (dbr.get("target") or {}).get("oid") or not isinstance(prs, dict):
+            return None
+        nodes = prs.get("nodes")
+        if not isinstance(nodes, list) or prs.get("totalCount") != len(nodes):
+            return None
+        rest = []
+        for n in nodes:
+            hr = n.get("headRepository")
+            rest.append({"number": n["number"], "title": n["title"], "html_url": n["url"],
+                         "head": {"ref": n["headRefName"], "sha": n["headRefOid"],
+                                  "repo": {"full_name": hr["nameWithOwner"]} if hr else None},
+                         "base": {"ref": n["baseRefName"]}})
+        got[repo] = {"prs": rest, "default_branch": dbr["name"], "default_head": dbr["target"]["oid"]}
+    return got
 
 
 # One GET of a head's statuses per sync, shared by post_statuses and the three
@@ -255,11 +325,13 @@ def gitea_open_pulls(repo: str) -> list:
             return out
     raise RuntimeError(f"{repo}: Windy Git PR list longer than {GITEA_MAX_PAGES} pages")
 
-def sync_prs(repo: str) -> list[str]:
-    """Mirror open same-repo GitHub PRs into Windy Git. Returns their head shas."""
-    st, gh_prs = github("GET", f"/repos/{GH_OWNER}/{repo}/pulls?state=open&per_page=100")
-    if st != 200:
-        raise RuntimeError(f"{repo}: GitHub PR list -> {st}")
+def sync_prs(repo: str, gh_prs: list | None = None) -> list[str]:
+    """Mirror open same-repo GitHub PRs into Windy Git. Returns their head shas. `gh_prs` is this
+    pass's GraphQL prefetch (REST-shaped); without it, today's REST list call."""
+    if gh_prs is None:
+        st, gh_prs = github("GET", f"/repos/{GH_OWNER}/{repo}/pulls?state=open&per_page=100")
+        if st != 200:
+            raise RuntimeError(f"{repo}: GitHub PR list -> {st}")
     wg_prs = gitea_open_pulls(repo)
     ours = {p["title"].split("]")[0] + "]": p for p in wg_prs if p["title"].startswith(MIRROR_TAG)}
 
@@ -833,6 +905,7 @@ def save_state(st: dict) -> None:
 def main() -> int:
     if not (GITEA_TOKEN and GITHUB_TOKEN):
         sys.exit("GITEA_SYNC_TOKEN and GITHUB_TOKEN are required")
+    CALLS.update(rest=0, graphql=0)   # this pass's count includes the budget check itself
     budget = api_budget()
     try:
         skips = int(SKIPS_FILE.read_text().strip() or 0)
@@ -852,27 +925,35 @@ def main() -> int:
         _write_skips(0)
     failed = 0
     _STATUSES_CACHE.clear()
+    pre = prefetch(REPOS)
+    if pre is None:
+        print("  bridge: GraphQL prefetch unavailable or partial: this pass uses REST (nothing taken from it)")
     now = time.time()
     state = load_state(rules_fingerprint())
     seen: set[str] = set()
     skipped = processed = 0
     for repo in REPOS:
         try:
-            shas = sync_prs(repo)
+            shas = sync_prs(repo, pre[repo]["prs"]) if pre else sync_prs(repo)
             default_head = None
-            cached = state["branches"].get(repo)
-            if cached and now - cached["read"] < BRANCH_TTL_S:
-                default_branch = cached["name"]
-            else:
-                default_branch = "main"
-                st, br = github("GET", f"/repos/{GH_OWNER}/{repo}")
-                if st == 200:
-                    default_branch = br["default_branch"]
-                    state["branches"][repo] = {"name": default_branch, "read": now}
-            st, b = github("GET", f"/repos/{GH_OWNER}/{repo}/branches/{default_branch}")
-            if st == 200:
-                default_head = b["commit"]["sha"]
+            if pre:
+                default_branch = pre[repo]["default_branch"]
+                default_head = pre[repo]["default_head"]
                 shas.append(default_head)
+            else:
+                cached = state["branches"].get(repo)
+                if cached and now - cached["read"] < BRANCH_TTL_S:
+                    default_branch = cached["name"]
+                else:
+                    default_branch = "main"
+                    st, br = github("GET", f"/repos/{GH_OWNER}/{repo}")
+                    if st == 200:
+                        default_branch = br["default_branch"]
+                        state["branches"][repo] = {"name": default_branch, "read": now}
+                st, b = github("GET", f"/repos/{GH_OWNER}/{repo}/branches/{default_branch}")
+                if st == 200:
+                    default_head = b["commit"]["sha"]
+                    shas.append(default_head)
             heads = list(dict.fromkeys(shas))
             sigs = job_signatures(repo, heads)
             for sha in heads:
@@ -901,7 +982,8 @@ def main() -> int:
             failed = 1
     state["heads"] = {k: v for k, v in state["heads"].items() if k in seen}
     save_state(state)
-    print(f"  bridge: {processed} heads read, {skipped} unchanged (cached)")
+    print(f"  bridge: {processed} heads read, {skipped} unchanged (cached); GitHub calls this pass: "
+          f"REST {CALLS['rest']}, GraphQL {CALLS['graphql']} ({'GraphQL prefetch' if pre else 'REST fallback'})")
     return failed
 
 
