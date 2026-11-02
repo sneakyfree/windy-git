@@ -2,13 +2,20 @@
 """Red-main alarm (Boss 11-02): a default-branch status that stays red for more than a day gets said.
 
 windy-pro-mobile's main failed windy-git/secret-guard on every commit from at least 10-20 and nobody
-saw it for 13 days. Now, every RUN_EVERY (systemd timer), for each repo the bridge serves: read the
+saw it for 13 days. Now, every 2 h (systemd timer), for each repo the bridge serves: read the
 default-branch head and its statuses (the newest per context). A context in failure/error starts a
-clock (persisted per repo + context, across new head commits). Past THRESHOLD_S, ONE BOARD line names
-the repo, context, owner lane and how long; then once a day while it stays red. Success clears it;
-pending keeps the clock (a re-run that fails again is the same red). On FIRST sight the clock starts
-at the current head's failing status (GitHub keeps no per-context history across commits), so a red
-that already spans older commits is undercounted once, by at most a day. Reads only; budget floor like the
+clock, persisted per repo + context as first_red_at and kept across new head commits. Past
+THRESHOLD_S, ONE BOARD line names the repo, context, owner lane and how long; then once a day while
+it stays red. Success clears it; pending keeps the clock (a re-run that fails again is the same red).
+
+First sight of a red: the clock is backfilled from the branch's recent commits (up to HISTORY_MAX,
+newest first): first_red_at = the oldest consecutive red status for that context, stopping at the
+first commit where it was success or absent. So a red that started 13 commits ago counts from there.
+
+No silent loss (Hub #112): a line's last_post is stored only after the BOARD write is confirmed. A
+failed write prints "BOARD post FAILED", is retried next run, and the run ends on a line windy-job's
+--expect does not accept. Only contexts seen THIS run count; a stored clock not seen for
+GHOST_S (renamed, removed, repo unbridged) is dropped and printed. Reads only; budget floor like the
 bridge. Output for windy-job --expect: "red main: none" or "red main: N red > 24 h (BOARD)".
 
   sudo python3 scripts/red_main.py      (env: /etc/windygit/sync.env, as the bridge)
@@ -32,18 +39,26 @@ STATE = Path(os.environ.get("RED_MAIN_STATE", "/var/lib/windygit/red-main.json")
 MIN_BUDGET = int(os.environ.get("RED_MAIN_MIN_BUDGET", "1500"))
 THRESHOLD_S = 24 * 3600
 REPEAT_S = 24 * 3600 - 15 * 60      # "once a day" with room for timer jitter
+GHOST_S = 7 * 86400
 BRANCH_TTL_S = 86400
+HISTORY_MAX = 30
 RED = ("failure", "error")
 
 # guards_report.OWNERS routes guard findings; it doesn't cover every bridged repo, so the alarm adds
 # the rest (lane session names). An owner not known for sure says so instead of guessing.
 OWNERS = {**gr.OWNERS,
+          "windy-mind": "Windy Mind",   # gr.OWNERS spells it "WIndy Mind"; lanes grep BOARD for their name
           "windy-text": "Windy Text", "windy-text-site": "Windy Text", "windy-hand-site": "Windy Hand",
           "windy-calendar-site": "Windy Calender", "windy-vault": "Windy Vault", "windy-uptime": "Windy Git",
           "windy-pro-mobile": "Windy Mobile (mini)", "windy-mind-acp": "Windy Mind", "windy-mind-site": "Windy Mind",
           "windy-admin": "Windy Admin Panel", "Windy-Clone-site": "Windy Clone", "windyword-site": "Windy Word",
           "windy-mobile": "Windy Mobile (Cell Phone)", "windycloud-site": "Windy Cloud",
           "eternitas-site": "Eternitas", "eternitas-authenticator": "Eternitas"}
+
+# A known reading of a red, appended to its line (Boss's read, dated). Never hides the line.
+NOTES = {("windytalk", "windy-git/secret-guard"):
+         "Boss 11-02: likely header-only (publish-release.sh echoes the BEGIN/END lines around a key "
+         "fetched at run time); fix = a secret-guard allow entry for that file (path + kind, with a reason)."}
 
 
 def _ts(iso: str) -> float:
@@ -58,41 +73,85 @@ def newest_by_context(statuses: list[dict]) -> dict[str, dict]:
     return out
 
 
-def step(state: dict, repo: str, sha: str, statuses: list[dict], now: float) -> list[str]:
-    """Update the clocks for one repo's default head; return the BOARD lines due now."""
+def step(state: dict, repo: str, sha: str, statuses: list[dict], now: float,
+         history=lambda repo, ctx: None) -> list[tuple[str, str]]:
+    """Update the clocks for one repo's default head; return (key, BOARD line) pairs due now.
+    `history(repo, ctx)` gives the backfilled first_red_at (or None) on first sight."""
     reds = state.setdefault("reds", {})
-    lines = []
+    due = []
     for ctx, s in sorted(newest_by_context(statuses).items()):
         key = f"{repo}|{ctx}"
         st = s.get("state")
         if st == "success":
             reds.pop(key, None)
             continue
-        if st not in RED:
-            continue                     # pending: keep any clock as it is
         r = reds.get(key)
+        if st not in RED:
+            if r is not None:
+                r["seen"], r["red_now"] = now, False      # pending: keep the clock, not red right now
+            continue
         if r is None:
             try:
                 since = min(_ts(s.get("created_at") or ""), now)
             except ValueError:
                 since = now
+            back = history(repo, ctx)
+            if back is not None:
+                since = min(since, back)
             r = reds[key] = {"since": since, "last_post": 0.0}
-        r["sha"] = sha
+        r["sha"], r["seen"], r["red_now"] = sha, now, True
         age = now - r["since"]
         if age > THRESHOLD_S and now - r.get("last_post", 0.0) >= REPEAT_S:
-            r["last_post"] = now
             day = time.strftime("%Y-%m-%d %H:%MZ", time.gmtime(r["since"]))
-            lines.append(f"[Windy Git] RED MAIN: {repo} default branch, {ctx} = {st} since {day} "
-                         f"({age / 3600:.0f} h), head {sha[:8]}. Owner: {OWNERS.get(repo, 'unknown (Boss routes)')}. "
-                         "Daily until green (Boss 11-02).")
-    return lines
+            note = NOTES.get((repo, ctx))
+            due.append((key, f"[Windy Git] RED MAIN: {repo} default branch, {ctx} = {st} since {day} "
+                             f"({age / 3600:.0f} h), head {sha[:8]}. Owner: {OWNERS.get(repo, 'unknown (Boss routes)')}. "
+                             + (f"{note} " if note else "") + "Daily until green (Boss 11-02)."))
+    return due
+
+
+def red_count(state: dict, now: float) -> int:
+    """Reds over the threshold that were SEEN red this run: a stored clock alone is not a red."""
+    return sum(1 for r in state.get("reds", {}).values()
+               if r.get("seen") == now and r.get("red_now") and now - r["since"] > THRESHOLD_S)
+
+
+def prune(state: dict, now: float) -> list[str]:
+    gone = [k for k, r in state.get("reds", {}).items() if now - r.get("seen", r["since"]) > GHOST_S]
+    for k in gone:
+        del state["reds"][k]
+    return gone
 
 
 def load() -> dict:
+    if not STATE.exists():
+        return {}
     try:
         return json.loads(STATE.read_text())
     except (OSError, ValueError):
+        print("  state unreadable: clocks reset (reds wait another 24 h)")
         return {}
+
+
+def history_from_github(repo: str, branch: str):
+    def first_red(_repo: str, ctx: str) -> float | None:
+        code, commits = b.github("GET", f"/repos/{b.GH_OWNER}/{repo}/commits?sha={branch}&per_page={HISTORY_MAX}")
+        if code != 200 or not isinstance(commits, list):
+            return None
+        oldest = None
+        for c in commits:                                   # newest first
+            code, comb = b.github("GET", f"/repos/{b.GH_OWNER}/{repo}/commits/{c['sha']}/status?per_page=100")
+            if code != 200:
+                break
+            s = newest_by_context(comb.get("statuses") or []).get(ctx)
+            if not s or s.get("state") not in RED:
+                break                                       # success, pending or absent: the red began after
+            try:
+                oldest = _ts(s["created_at"])
+            except (KeyError, ValueError):
+                break
+        return oldest
+    return first_red
 
 
 def main(post=cs.board) -> int:
@@ -107,7 +166,7 @@ def main(post=cs.board) -> int:
     now = time.time()
     state = load()
     branches = state.setdefault("branches", {})
-    lines, red_now, failed = [], 0, []
+    due, failed = [], []
     for repo in b.REPOS:
         try:
             c = branches.get(repo)
@@ -126,20 +185,30 @@ def main(post=cs.board) -> int:
             if code != 200:
                 failed.append(repo)
                 continue
-            lines += step(state, repo, sha, comb.get("statuses") or [], now)
+            due += step(state, repo, sha, comb.get("statuses") or [], now, history_from_github(repo, c["name"]))
         except Exception as e:  # noqa: BLE001 - one repo's failure must not hide the others
             failed.append(f"{repo} ({type(e).__name__})")
-    red_now = sum(1 for r in state.get("reds", {}).values() if now - r["since"] > THRESHOLD_S)
+    lost = 0
+    for key, line in due:
+        print("  " + line)
+        if post(line):
+            state["reds"][key]["last_post"] = now
+        else:
+            lost += 1
+            print(f"  BOARD post FAILED for {key}: retried next run")
+    for k in prune(state, now):
+        print(f"  dropped a clock not seen for {GHOST_S // 86400} d: {k}")
     STATE.parent.mkdir(parents=True, exist_ok=True)
     tmp = STATE.with_suffix(".tmp")
     tmp.write_text(json.dumps(state, sort_keys=True))
     tmp.replace(STATE)
-    for line in lines:
-        print("  " + line)
-        post(line)
     if failed:
         print(f"  unreadable this run (checked again next run): {', '.join(failed)}")
-    print("red main: none" if not red_now else f"red main: {red_now} red > 24 h (BOARD)")
+    n = red_count(state, now)
+    if lost:
+        print(f"red main: {n} red > 24 h, BOARD post failed ({lost})")   # does NOT match --expect: an alert
+    else:
+        print("red main: none" if not n else f"red main: {n} red > 24 h (BOARD)")
     return 0
 
 
