@@ -206,3 +206,15 @@ def test_the_windytalk_release_script_allow_is_exactly_one_file():
         "scripts/publish-release.sh.bak", "scripts/other.sh", "release/publish-release.sh", "keys/update.pem")]
     assert sg._drop_allowed("windytalk", [ok, *still], allow) == still
     assert sg._drop_allowed("windy-pro", [ok], allow) == [ok]
+
+
+
+def test_windy_agents_old_stripe_fixture_is_allowed_by_hash_in_that_repo_only():
+    """Windy Agent 11-02: a 20-char sk_live_-shaped fixture left in git history (#676 removed it
+    from HEAD). Allowed by its hash in windy-agent only; any other stripe-live value still flags."""
+    F = sg.cg.Finding
+    allow = sg.load_allow()
+    old = F("tests/test_vault_call_api.py", 1, "stripe live key", "stripe live key #0bb4bc4b")
+    other = F("tests/test_vault_call_api.py", 2, "stripe live key", "stripe live key #deadbeef")
+    assert sg._drop_allowed("windy-agent", [old, other], allow) == [other]
+    assert sg._drop_allowed("windy-text", [old], allow) == [old]
