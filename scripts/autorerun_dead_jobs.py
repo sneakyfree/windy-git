@@ -38,9 +38,11 @@ posts windy-git/autorerun ("re-queued once") only for exit 0 AND once a newer ru
 Repos that hold Actions secrets (Hub 11-02): ONLY dead-before-step, under six limits, because the
 docker-init container-start race (2 in 758 jobs over 24 h, windy-pro 59242 and windy-mail 59459)
 crossed Hub's 1-in-500 bar. Everything above still applies, plus:
-  1. NO step started: every action_task_step row has status not success/failure/running, no log
-     and no start time. "Set up job" is not a step row: it is the task log before step 0, and the
-     container-start death itself is written there (both jobs: 20 lines, every step cancelled empty).
+  1. NO step started. Definition (Hub 11-02, word for word): "no step started" = no
+     action_task_step row with a success/failure/running status, a log or a start time. The
+     pre-step task log (Set up job, where the container-start death is written) does NOT count
+     as a step. It means "no workflow step ran", not "no log at all". (Both real jobs: 20 lines
+     of Set up job log, every step cancelled, empty, never started.)
   2. Once per (repo, commit), ever: the ledger above (stricter than per job name); a second death
      stays red for a human. A runner-lost job is never re-run in these repos.
   3. Same commit, same ref, same event (rerun_ci.sh's rewind + sync re-push): never a dispatch,
