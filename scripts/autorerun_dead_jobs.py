@@ -16,7 +16,8 @@ over the latest run of each (workflow, event) on a CI event (push / pull_request
 pull_request_sync; scheduled runs never count):
   - every workflow (any CI run at the commit) is on the per-repo allowlist ci/autorerun-allow.yml (CI tests only: nothing
     that deploys, releases, publishes, mirrors or probes production), and the repo holds no
-    Actions secret (a step without one cannot authenticate anywhere);
+    Actions secret (a step without one cannot authenticate anywhere), or else every limit of
+    "Repos that hold Actions secrets" below holds;
   - every job is finished (a still-running workflow could finish real-red after the pick and
     then be re-run into green);
   - no job in ANY CI run at the commit is a real red (a failure that is neither kind above,
@@ -33,6 +34,27 @@ manual run beside the timer cannot double-run, and rerun_ci.sh itself refuses un
 branch is still at that sha. The ledger is written atomically BEFORE acting, with the kind,
 job id, the highest run index at the commit and, after, rerun_ci.sh's exit code: the bridge
 posts windy-git/autorerun ("re-queued once") only for exit 0 AND once a newer run exists. A corrupt ledger or allowlist = re-run nothing and exit 1.
+
+Repos that hold Actions secrets (Hub 11-02): ONLY dead-before-step, under six limits, because the
+docker-init container-start race (2 in 758 jobs over 24 h, windy-pro 59242 and windy-mail 59459)
+crossed Hub's 1-in-500 bar. Everything above still applies, plus:
+  1. NO step started. Definition (Hub 11-02, word for word): "no step started" = no
+     action_task_step row with a success/failure/running status, a log or a start time. The
+     pre-step task log (Set up job, where the container-start death is written) does NOT count
+     as a step. It means "no workflow step ran", not "no log at all". (Both real jobs: 20 lines
+     of Set up job log, every step cancelled, empty, never started.)
+  2. Once per (repo, commit), ever: the ledger above (stricter than per job name); a second death
+     stays red for a human. A runner-lost job is never re-run in these repos.
+  3. Same commit, same ref, same event (rerun_ci.sh's rewind + sync re-push): never a dispatch,
+     never pull_request_target, never a fork PR (branch_for resolves same-repo PRs only).
+  4. One line per re-run in SECRET_LOG (repo, job id, the reason's first 80 chars; built from
+     our own fields, no secrets, no BOARD) and its last-7-days count on every pass's summary.
+  5. Kill switch: AUTORERUN_SECRET_REPOS=off (or 0/false/no) turns off ONLY this path.
+  6. The whole commit re-fires, so every CI-event job at the commit (picked up or not) is read
+     from its own job definition (workflow_payload): one that can deploy or publish (a deploy /
+     release / publish / pages job, an environment, a deploy or registry action, a publish or
+     push command, a deploy/registry/release-named secret) refuses the commit, unless the job is
+     literally `if: false`. An unreadable definition refuses it too.
 """
 from __future__ import annotations
 
@@ -65,6 +87,18 @@ ENDLESS_S = 3 * 3600   # Gitea's endless-task cleanup leaves the same marks as a
 # it: that burns another full ceiling for the same result (windy-admin #821, 10-28).
 RUNNER_CEILING_S = runner_ceiling.ceiling_s()
 KINDS = ("dead-before-step", "runner-lost")
+SECRET_LOG = Path(os.environ.get("AUTORERUN_SECRET_LOG", "/var/lib/windygit/autorerun-secret.log"))
+WEEK_S = 7 * 86400
+# Limit 6: what makes a job able to deploy or publish. Read case-insensitively from the job's own
+# definition (YAML dumped back to text). Over-matching only leaves a red for a human.
+_DEPLOY_NAME = re.compile(r"(^|[^a-z])(deploy|release|publish|pages)", re.I)
+_DEPLOY_TEXT = re.compile(
+    r"deploy-pages|upload-pages-artifact|gh-pages|action-gh-release|docker/login-action|"
+    r"docker/build-push-action|pypi-publish|aws-actions/|azure/|google-github-actions/|"
+    r"npm publish|yarn publish|pnpm publish|twine upload|cargo publish|docker push|gh release|"
+    r"wrangler (deploy|publish|pages)|fly(ctl)? deploy|vercel|netlify deploy|kubectl|helm (upgrade|install)|"
+    r"\b(ssh|scp|rsync)\s|secrets\.[A-Z0-9_]*(DEPLOY|REGISTRY|DOCKER|NPM|PYPI|SSH|KUBE|VERCEL|CLOUDFLARE|"
+    r"FLY|RELEASE|PUBLISH|AWS|GCP|AZURE|PAT)", re.I)
 _SHA = re.compile(r"^[0-9a-f]{40}$")
 _BRANCH = re.compile(r"^[A-Za-z0-9._/+-]{1,200}$")
 
@@ -87,7 +121,8 @@ def commit_sql(repo_id: int, sha: str) -> str:
     """Facts only: every job of every run at the commit, with its step marks.
     Columns: run index, workflow, event, job id, job status, task id, steps that ran,
     runner-lost marks, Actions secrets the repo, its owner or the instance holds, task seconds,
-    the job's runs-on labels (JSON)."""
+    the job's runs-on labels (JSON), steps that STARTED at all (limit 1: any status but
+    cancelled/skipped/waiting/unknown, any log, any start time)."""
     return f"""
 select r."index", r.workflow_id, r.event, j.id, j.status, j.task_id,
   (select count(*) from action_task_step s where s.task_id = j.task_id and s.status in (1, 2)),
@@ -100,12 +135,62 @@ select r."index", r.workflow_id, r.event, j.id, j.status, j.task_id,
      or sec.owner_id = (select p.owner_id from repository p where p.id = r.repo_id)
      or (sec.owner_id = 0 and sec.repo_id = 0)),
   coalesce((select t.stopped - t.started from action_task t where t.id = j.task_id and t.started > 0), 0),
-  j.runs_on
+  j.runs_on,
+  (select count(*) from action_task_step s where s.task_id = j.task_id
+     and (s.status in (1, 2, 6) or s.log_length > 0 or s.started > 0))
 from action_run r
 join action_run_job j on j.run_id = r.id
 where r.repo_id = {int(repo_id)} and r.commit_sha = '{sha}'
 order by r."index", j.id;
 """
+
+
+def payload_sql(repo_id: int, sha: str) -> str:
+    """Facts only: every CI-event job's own definition at the commit, hex (no newlines or `|`)."""
+    return f"""
+select j.id, r.event, encode(j.workflow_payload, 'hex')
+from action_run r
+join action_run_job j on j.run_id = r.id
+where r.repo_id = {int(repo_id)} and r.commit_sha = '{sha}'
+  and r.event in ('push', 'pull_request', 'pull_request_sync')
+order by j.id;
+"""
+
+
+def secret_path_on() -> bool:
+    """Limit 5: AUTORERUN_SECRET_REPOS=off/0/false/no turns off ONLY the secret-repo path."""
+    return os.environ.get("AUTORERUN_SECRET_REPOS", "on").strip().lower() not in ("off", "0", "false", "no")
+
+
+def can_deploy(payload_hex: str) -> tuple[bool, str]:
+    """Limit 6: (True, why) if this job, run again, could deploy or publish. Unreadable = True."""
+    try:
+        wf = yaml.safe_load(bytes.fromhex(payload_hex).decode("utf-8"))
+        (job_id, job), = wf["jobs"].items()     # Gitea stores ONE job per payload
+        if not isinstance(job, dict):
+            raise TypeError
+    except (ValueError, TypeError, KeyError, AttributeError, yaml.YAMLError):
+        return True, "job definition unreadable"
+    cond = job.get("if")
+    if cond is False or str(cond).replace(" ", "").lower() in ("false", "${{false}}"):
+        return False, ""                          # literally never runs (windy-pro deploy, build-electron)
+    name = f"{job_id} {job.get('name', '')}"
+    if _DEPLOY_NAME.search(name):
+        return True, f"job {name.strip()!r} is named like a deploy/release"
+    if "environment" in job:
+        return True, f"job {job_id!r} uses an environment"
+    m = _DEPLOY_TEXT.search(yaml.safe_dump(job))
+    if m:
+        return True, f"job {job_id!r} has {m.group(0)!r}"
+    return False, ""
+
+
+def job_name(payload_hex: str) -> str:
+    try:
+        (job_id, job), = yaml.safe_load(bytes.fromhex(payload_hex).decode("utf-8"))["jobs"].items()
+        return str(job.get("name") or job_id)
+    except (ValueError, TypeError, KeyError, AttributeError, yaml.YAMLError):
+        return "?"
 
 
 RUNNER_LABELS_SQL = "select agent_labels from action_runner where coalesce(deleted, 0) = 0;"
@@ -166,17 +251,22 @@ def _labels(raw: str) -> frozenset | None:
     return frozenset(v) if isinstance(v, list) else None
 
 
+SECRET_OK = "ok: secret repo, no step started, nothing at the commit can deploy"
+
+
 def judge(repo: str, rows: list[list[str]], allow: dict,
-          labels: list[frozenset] | None = None) -> tuple[str | None, str, str]:
+          labels: list[frozenset] | None = None, payloads=None) -> tuple[str | None, str, str]:
     """(kind or None, job id, reason). Pure: decides from commit_sql rows (and the live
-    runners' label sets, when given) only."""
+    runners' label sets, and `payloads()` = payload_sql rows, when given) only. `payloads` is
+    called only for a repo that holds Actions secrets."""
     jobs = []
     for row in rows:
         idx, wf, ev, job, st, task, ran, lost, secrets = row[:9]
         secs = row[9] if len(row) > 9 and row[9].lstrip("-").isdigit() else "0"
         jobs.append({"idx": int(idx), "wf": wf, "ev": ev, "job": job, "st": int(st), "task": int(task),
                      "ran": int(ran), "lost": int(lost), "secrets": int(secrets), "secs": int(secs),
-                     "runs_on": _labels(row[10]) if len(row) > 10 else None})
+                     "runs_on": _labels(row[10]) if len(row) > 10 else None,
+                     "started": int(row[11]) if len(row) > 11 and row[11].isdigit() else None})
 
     def unrunnable(j: dict) -> bool:
         # Cancelled without ever being picked up, for labels NO live runner has (windy-pro's
@@ -187,9 +277,11 @@ def judge(repo: str, rows: list[list[str]], allow: dict,
             return False
         return not any(j["runs_on"] <= have for have in labels)
 
+    every = jobs                                 # limit 6 reads unrunnable jobs too
     jobs = [j for j in jobs if not unrunnable(j)]
-    if any(j["secrets"] > 0 for j in jobs):
-        return None, "", "repo holds Actions secrets"
+    secret = any(j["secrets"] > 0 for j in jobs)
+    if secret and not secret_path_on():
+        return None, "", "repo holds Actions secrets (secret-repo path off)"
     if any(j["ev"] == "pull_request_target" for j in jobs):
         return None, "", "a pull_request_target run"   # runs with base-repo rights: never touched
     ci = [j for j in jobs if j["ev"] in EVENTS]
@@ -221,11 +313,34 @@ def judge(repo: str, rows: list[list[str]], allow: dict,
         return None, "", "a real red at the commit"
     lost = [j for j in cur if infra(j) == "runner-lost"]
     dead = [j for j in cur if infra(j) == "dead-before-step"]
+    if secret:
+        return _judge_secret(lost, dead, every, payloads)
     if lost:
         return "runner-lost", min(lost, key=lambda j: int(j["job"]))["job"], "ok"
     if dead:
         return "dead-before-step", min(dead, key=lambda j: int(j["job"]))["job"], "ok"
     return None, "", "nothing infra-dead in the latest runs"
+
+
+def _judge_secret(lost: list[dict], dead: list[dict], every: list[dict], payloads) -> tuple[str | None, str, str]:
+    """The extra limits for a repo that holds Actions secrets (Hub 11-02, see the top)."""
+    if lost:
+        return None, "", "repo holds Actions secrets: a runner-lost job is never auto re-run"
+    if not dead:
+        return None, "", "nothing infra-dead in the latest runs"
+    if any(j["started"] is None or j["started"] > 0 for j in dead):            # limit 1
+        return None, "", "repo holds Actions secrets: a step of the dead job started"
+    try:
+        defs = {r[0]: r[2] for r in (payloads() if payloads else None)}
+    except (TypeError, IndexError, subprocess.SubprocessError, OSError):
+        return None, "", "repo holds Actions secrets: job definitions unreadable"
+    for j in every:                                                            # limit 6
+        if j["ev"] not in EVENTS:
+            continue
+        bad, why = can_deploy(defs.get(j["job"], ""))
+        if bad:
+            return None, "", f"repo holds Actions secrets: {why}"
+    return "dead-before-step", min(dead, key=lambda j: int(j["job"]))["job"], SECRET_OK
 
 
 def max_index(rows: list[list[str]]) -> int:
@@ -301,7 +416,8 @@ def plan(state: dict, allow: dict, now: float, query=psql) -> tuple[list[dict], 
         key = f"{repo}@{sha}"
         if key in state or not _SHA.match(sha) or not str(repo_id).isdigit():
             continue
-        kind, job, reason = judge(repo, query(commit_sql(int(repo_id), sha)), allow, labels)
+        kind, job, reason = judge(repo, query(commit_sql(int(repo_id), sha)), allow, labels,
+                                  lambda r=int(repo_id), c=sha: query(payload_sql(r, c)))
         if not kind:
             why[reason] = why.get(reason, 0) + 1
             continue
@@ -313,10 +429,38 @@ def plan(state: dict, allow: dict, now: float, query=psql) -> tuple[list[dict], 
             why["branch moved on"] = why.get("branch moved on", 0) + 1
             continue
         out.append({"repo": repo, "repo_id": int(repo_id), "sha": sha, "branch": branch,
-                    "key": key, "kind": kind, "job": job})
+                    "key": key, "kind": kind, "job": job, "secret": reason == SECRET_OK})
         if len(out) >= MAX_PER_PASS:
             break
     return out, why
+
+
+def log_secret_rerun(repo: str, job: str, reason: str, now: float) -> None:
+    """Limit 4: one line per secret-repo re-run (never the BOARD). Only our own fields: no secrets."""
+    SECRET_LOG.parent.mkdir(parents=True, exist_ok=True)
+    line = "\t".join([time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now)), str(int(now)), repo, job,
+                      reason[:80].replace("\t", " ").replace("\n", " ")])
+    with open(SECRET_LOG, "a") as f:
+        f.write(line + "\n")
+        f.flush()
+        os.fsync(f.fileno())
+    print(f"  secret-repo re-run logged: {line}")
+
+
+def week_count(now: float) -> str:
+    """Limit 4: secret-repo re-runs in the last 7 days (does the race grow with load?)."""
+    try:
+        lines = SECRET_LOG.read_text().splitlines()
+    except FileNotFoundError:
+        return "0"
+    except OSError:
+        return "unreadable"
+    n = 0
+    for ln in lines:
+        f = ln.split("\t")
+        if len(f) > 1 and f[1].isdigit() and now - int(f[1]) <= WEEK_S:
+            n += 1
+    return str(n)
 
 
 def main() -> int:
@@ -339,11 +483,14 @@ def _pass() -> int:
     todo, why = plan(state, allow, time.time(), query=psql)
     by = {k: sum(t["kind"] == k for t in todo) for k in KINDS}
     print(f"autorerun: {len(todo)} commit(s) to re-run (dead-before-step {by['dead-before-step']}, "
-          f"runner-lost {by['runner-lost']}); refused: {json.dumps(why, sort_keys=True)}")
+          f"runner-lost {by['runner-lost']}); refused: {json.dumps(why, sort_keys=True)}; "
+          f"secret-repo re-runs in 7 d: {week_count(time.time())}"
+          f"{'' if secret_path_on() else ' (secret-repo path OFF)'}")
     for t in todo:
         fresh = psql(commit_sql(t["repo_id"], t["sha"]))
-        kind, _job, reason = judge(t["repo"], fresh, allow, runner_labels(psql))
-        if kind != t["kind"]:  # fresh rows right before acting: the commit moved on
+        defs = psql(payload_sql(t["repo_id"], t["sha"])) if t["secret"] else []
+        kind, _job, reason = judge(t["repo"], fresh, allow, runner_labels(psql), lambda d=defs: d)
+        if kind != t["kind"] or (reason == SECRET_OK) != t["secret"]:  # fresh rows right before acting
             print(f"  {t['repo']}@{t['sha'][:7]}: re-check refused ({reason}); not re-run")
             continue
         if not at_head(t["repo_id"], t["branch"], t["sha"], psql):  # and the head, too
@@ -351,8 +498,14 @@ def _pass() -> int:
             continue
         state[t["key"]] = {"at": time.time(), "branch": t["branch"], "kind": t["kind"], "job": t["job"],
                            "runs_before": max_index(fresh)}
+        if t["secret"]:
+            name = next((job_name(r[2]) for r in defs if r[0] == t["job"]), "?")
+            state[t["key"]]["job_name"] = name
         save_state(state)  # record BEFORE acting: a crash must never cause a second attempt
         bump_count(t["kind"])
+        if t["secret"]:
+            log_secret_rerun(t["repo"], t["job"], f"dead-before-step ({name}) at {t['sha'][:8]}: no step "
+                             "started, the container died in Set up job", time.time())
         env = {**os.environ, "WGQ": str(HERE / "wg_sql.sh")}
         try:
             r = subprocess.run(["bash", str(HERE / "rerun_ci.sh"), t["repo"], t["branch"], t["sha"][:8]],

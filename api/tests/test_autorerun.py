@@ -22,6 +22,18 @@ NOW = 2_000_000_000
 ALLOW = {"windy-pro": {"ci.yml", "lint.yml"}, "r": {"ci.yml"}, "windycloud": {"ci.yml"}}
 
 
+PLAIN_JOB = """name: CI
+"on": {push: {branches: [main]}}
+jobs:
+  test:
+    name: test
+    runs-on: veron-1
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm test
+"""
+
+
 class DB:
     """The Gitea tables the script reads, with the columns it uses."""
 
@@ -33,17 +45,19 @@ class DB:
         create table action_run (id int, repo_id int, commit_sha text, ref text, "index" int,
                                  workflow_id text, event text);
         create table action_run_job (id int, run_id int, status int, task_id int, stopped int,
-                                     runs_on text);
+                                     runs_on text, workflow_payload blob);
         create table action_runner (agent_labels text, deleted int);
         insert into action_runner values ('["veron-1","linux-x64","self-hosted"]', 0),
                                          ('["macos-latest"]', 1);
         create table action_task (id int, started int, stopped int);
-        create table action_task_step (task_id int, "index" int, status int, log_length int, stopped int);
+        create table action_task_step (task_id int, "index" int, status int, log_length int, stopped int,
+                                       started int default 0);
         create table issue (id int, repo_id int, "index" int);
         create table pull_request (id int, issue_id int, head_branch text, head_repo_id int);
         create table branch (repo_id int, name text, commit_id text, is_deleted int);
         insert into repository values (5, 'windy-pro', 1), (6, 'r', 1), (7, 'WindyCloud', 1);
         """)
+        self.c.create_function("encode", 2, lambda b, how: (b or b"").hex() if how == "hex" else None)
         self.n = 0
 
     def q(self, sql):
@@ -60,15 +74,20 @@ class DB:
         self.c.execute("delete from branch where repo_id = ? and name = ?", (repo, name))
         self.c.execute("insert into branch values (?,?,?,?)", (repo, name, sha, deleted))
 
-    def job(self, run, status, steps=(), stopped=NOW - 60, task_stop=None, secs=900, runs_on='["veron-1"]'):
-        """steps: (status, log_length, stopped) per step, in order. No steps + status 2 = dead."""
+    def job(self, run, status, steps=(), stopped=NOW - 60, task_stop=None, secs=900, runs_on='["veron-1"]',
+            payload=None):
+        """steps: (status, log_length, stopped[, started]) per step, in order. No steps + status 2 = dead.
+        payload: the job's own workflow YAML (default: a plain test job)."""
         self.n += 1
         jid = task = self.n
-        self.c.execute("insert into action_run_job values (?,?,?,?,?,?)", (jid, run, status, task, stopped, runs_on))
+        body = (payload if payload is not None else PLAIN_JOB).encode()
+        self.c.execute("insert into action_run_job values (?,?,?,?,?,?,?)",
+                       (jid, run, status, task, stopped, runs_on, body))
         ts = task_stop if task_stop is not None else stopped
         self.c.execute("insert into action_task values (?,?,?)", (task, ts - secs, ts))
-        for i, (st, ln, sp) in enumerate(steps):
-            self.c.execute("insert into action_task_step values (?,?,?,?,?)", (task, i, st, ln, sp))
+        for i, (st, ln, sp, *started) in enumerate(steps):
+            self.c.execute("insert into action_task_step values (?,?,?,?,?,?)",
+                           (task, i, st, ln, sp, started[0] if started else (sp - 1 if st in (1, 2) else 0)))
         return jid
 
 
@@ -84,6 +103,12 @@ def real_steps(stop):
 
 def judge(db, repo="windy-pro", repo_id=5):
     return ar.judge(repo, db.q(ar.commit_sql(repo_id, SHA)), ALLOW)
+
+
+def judge_s(db, repo="windy-pro", repo_id=5):
+    """With the job definitions, as plan() and the pass give them."""
+    return ar.judge(repo, db.q(ar.commit_sql(repo_id, SHA)), ALLOW, ar.runner_labels(db.q),
+                    lambda: db.q(ar.payload_sql(repo_id, SHA)))
 
 
 def test_runner_lost_commit_is_picked():
@@ -164,15 +189,16 @@ def test_latest_run_is_per_workflow_and_event():
     assert judge(db2) == (None, "", "nothing infra-dead in the latest runs")
 
 
-def test_repo_with_actions_secrets_is_never_rerun():
-    db = DB()
-    db.job(db.run(), 2, [])
-    db.c.execute("insert into secret values (1, 5, 0)")
-    assert judge(db) == (None, "", "repo holds Actions secrets")
-    db2 = DB()
-    db2.job(db2.run(), 2, [])
-    db2.c.execute("insert into secret values (1, 0, 1)")   # owner-level
-    assert judge(db2) == (None, "", "repo holds Actions secrets")
+def test_repo_with_actions_secrets_takes_the_secret_path_repo_or_owner_level(monkeypatch):
+    off = (None, "", "repo holds Actions secrets (secret-repo path off)")
+    for sec in ((1, 5, 0), (1, 0, 1)):                    # repo-level, owner-level
+        db = DB()
+        j = db.job(db.run(), 2, [])
+        db.c.execute("insert into secret values (?,?,?)", sec)
+        assert judge_s(db) == ("dead-before-step", str(j), ar.SECRET_OK)
+        monkeypatch.setenv("AUTORERUN_SECRET_REPOS", "off")
+        assert judge_s(db) == off
+        monkeypatch.delenv("AUTORERUN_SECRET_REPOS")
 
 
 def test_candidates_sql_window_events_and_assignment():
@@ -181,7 +207,7 @@ def test_candidates_sql_window_events_and_assignment():
     db.job(db.run(sha="b" * 40), 2, [], stopped=NOW - 4000)                 # outside the window
     db.job(db.run(sha="c" * 40, wf="canary.yml", ev="schedule"), 2, [])     # not a CI event
     r = db.run(sha="d" * 40)
-    db.c.execute("insert into action_run_job values (999, ?, 2, 0, ?, ?)", (r, NOW - 60, '["veron-1"]'))  # never assigned
+    db.c.execute("insert into action_run_job values (999, ?, 2, 0, ?, ?, '')", (r, NOW - 60, '["veron-1"]'))  # never assigned
     rows = db.q(ar.candidates_sql(NOW - ar.WINDOW_S))
     assert [x[2] for x in rows] == [SHA]
 
@@ -351,7 +377,8 @@ def test_instance_wide_secrets_count():
     db = DB()
     db.job(db.run(), 2, [])
     db.c.execute("insert into secret values (1, 0, 0)")
-    assert judge(db) == (None, "", "repo holds Actions secrets")
+    assert judge(db) == (None, "", "repo holds Actions secrets: job definitions unreadable")
+    assert judge_s(db)[2] == ar.SECRET_OK
 
 
 def test_runner_lost_marks_on_a_3h_task_are_the_endless_cleanup_not_a_lost_runner():
@@ -468,7 +495,7 @@ def test_a_failed_attempt_on_the_current_head_still_uses_the_try(wired, monkeypa
 def unpicked(db, run, runs_on, status=3):
     """A job cancelled before any runner took it: task 0, no task row."""
     db.n += 1
-    db.c.execute("insert into action_run_job values (?,?,?,?,?,?)", (db.n, run, status, 0, NOW - 60, runs_on))
+    db.c.execute("insert into action_run_job values (?,?,?,?,?,?,?)", (db.n, run, status, 0, NOW - 60, runs_on, b""))
     return db.n
 
 
@@ -528,3 +555,252 @@ def test_a_deleted_runners_labels_do_not_count():
     j = db.job(r, 2)
     unpicked(db, r, '["macos-latest"]')
     assert judge_live(db) == ("dead-before-step", str(j), "ok")
+
+
+# --- Secret-holding repos (Hub 11-02): dead-before-step only, under six limits -------------------
+
+def secret_db():
+    db = DB()
+    db.c.execute("insert into secret values (1, 5, 0)")
+    return db
+
+
+def wf(job_id, body):
+    return f'name: CI\n"on": {{push: {{branches: [main]}}}}\njobs:\n  {job_id}:\n' + "".join(
+        f"    {ln}\n" for ln in body.strip().splitlines())
+
+
+DEPLOY = wf("deploy", """
+name: deploy
+runs-on: veron-1
+steps:
+  - run: ./ship.sh
+""")
+
+
+def test_secret_limit1_the_container_start_death_is_picked():
+    """windy-mail 59459 / windy-pro 59242 as Gitea stored them: every step cancelled (3), no log,
+    never started; the death is in the Set up job log, which is not a step row."""
+    db = secret_db()
+    j = db.job(db.run(), 2, [(3, 0, 0, 0), (3, 0, 0, 0)])
+    assert judge_s(db) == ("dead-before-step", str(j), ar.SECRET_OK)
+
+
+@pytest.mark.parametrize("step", [(3, 0, 0, NOW - 70),    # cancelled, but it had started
+                                  (3, 12, 0, 0),          # cancelled, but it wrote a log
+                                  (6, 0, 0, 0)])          # still marked running
+def test_secret_limit1_any_started_step_refuses(step):
+    db = secret_db()
+    db.job(db.run(), 2, [step, (3, 0, 0, 0)])
+    assert judge_s(db) == (None, "", "repo holds Actions secrets: a step of the dead job started")
+
+
+def test_secret_limit1_without_the_started_column_refuses():
+    db = secret_db()
+    db.job(db.run(), 2, [])
+    rows = [r[:11] for r in db.q(ar.commit_sql(5, SHA))]                    # an old 11-column read
+    got = ar.judge("windy-pro", rows, ALLOW, None, lambda: db.q(ar.payload_sql(5, SHA)))
+    assert got == (None, "", "repo holds Actions secrets: a step of the dead job started")
+
+
+def test_secret_runner_lost_is_never_rerun():
+    db = secret_db()
+    db.job(db.run(), 2, lost_steps(NOW - 60))
+    assert judge_s(db) == (None, "", "repo holds Actions secrets: a runner-lost job is never auto re-run")
+
+
+def test_secret_limit2_once_per_commit_ever():
+    db = secret_db()
+    db.job(db.run(), 2, [])
+    todo, _ = ar.plan({}, ALLOW, NOW, query=db.q)
+    assert [(t["kind"], t["secret"]) for t in todo] == [("dead-before-step", True)]
+    assert ar.plan({f"windy-pro@{SHA}": {"at": 1}}, ALLOW, NOW, query=db.q)[0] == []
+
+
+def test_secret_limit3_no_pull_request_target_no_fork_no_dispatch_trigger():
+    db = secret_db()
+    db.job(db.run(), 2, [])
+    db.job(db.run(wf="lint.yml", ev="pull_request_target"), 1, [(1, 5, NOW - 100)])
+    assert judge_s(db) == (None, "", "a pull_request_target run")
+    db2 = secret_db()                                       # a fork PR: its branch never resolves
+    db2.job(db2.run(ev="pull_request", ref="refs/pull/9/head"), 2, [])
+    db2.c.execute("insert into issue values (1, 5, 9)")
+    db2.c.execute("insert into pull_request values (1, 1, 'feature', 77)")
+    todo, why = ar.plan({}, ALLOW, NOW, query=db2.q)
+    assert todo == [] and why == {"branch not resolvable": 1}
+    db3 = secret_db()                                       # a dispatch-only death is not a CI event
+    db3.job(db3.run(ev="workflow_dispatch"), 2, [])
+    assert judge_s(db3) == (None, "", "no CI-event run")
+
+
+def test_secret_limit3_same_repo_pr_resolves_to_its_branch():
+    db = secret_db()
+    db.job(db.run(ev="pull_request", ref="refs/pull/9/head"), 2, [])
+    db.c.execute("insert into issue values (1, 5, 9)")
+    db.c.execute("insert into pull_request values (1, 1, 'feature', 5)")
+    db.head(5, "feature", SHA)
+    todo, _ = ar.plan({}, ALLOW, NOW, query=db.q)
+    assert [(t["branch"], t["sha"]) for t in todo] == [("feature", SHA)]
+
+
+def test_secret_limit6_a_deploy_job_at_the_commit_refuses():
+    """Hub's fixture: the dead job is a plain test, a GREEN sibling at the commit can deploy."""
+    db = secret_db()
+    db.job(db.run(), 2, [])
+    db.job(db.run(wf="lint.yml"), 1, [(1, 5, NOW - 100)], payload=DEPLOY)
+    assert judge_s(db) == (None, "", "repo holds Actions secrets: job 'deploy deploy' is named like a deploy/release")
+
+
+def test_secret_limit6_an_unpicked_unrunnable_deploy_job_still_counts():
+    db = secret_db()
+    db.job(db.run(), 2, [])
+    run = db.run(wf="lint.yml")
+    db.n += 1
+    db.c.execute("insert into action_run_job values (?,?,?,?,?,?,?)",
+                 (db.n, run, 3, 0, NOW - 60, '["ubuntu-latest"]', DEPLOY.encode()))
+    assert judge_s(db)[0] is None and "deploy" in judge_s(db)[2]
+
+
+@pytest.mark.parametrize("body,why", [
+    ("runs-on: veron-1\nenvironment: production\nsteps:\n  - run: make", "uses an environment"),
+    ("runs-on: veron-1\nsteps:\n  - uses: actions/deploy-pages@v4", "deploy-pages"),
+    ("runs-on: veron-1\nsteps:\n  - uses: docker/login-action@v3", "docker/login-action"),
+    ("runs-on: veron-1\nsteps:\n  - run: npm publish --access public", "npm publish"),
+    ("runs-on: veron-1\nsteps:\n  - run: docker push ghcr.io/x/y", "docker push"),
+    ("runs-on: veron-1\nsteps:\n  - run: gh release create v1", "gh release"),
+    ("runs-on: veron-1\nsteps:\n  - run: ssh deploy@host ./up.sh", "ssh "),
+    ("runs-on: veron-1\nsteps:\n  - run: ./x\n    env: {K: '${{ secrets.DEPLOY_HOST }}'}", "secrets.DEPLOY"),
+    ("runs-on: veron-1\nsteps:\n  - run: ./x\n    env: {T: '${{ secrets.RELEASE_PAT }}'}", "secrets.RELEASE"),
+])
+def test_secret_limit6_each_deploy_marker(body, why):
+    bad, got = ar.can_deploy(wf("build", body).encode().hex())
+    assert bad and why in got
+
+
+def test_secret_limit6_literal_if_false_is_exempt_and_nothing_else():
+    """windy-pro's ci.yml deploy and build-electron jobs are `if: false`: they never run."""
+    for cond in ("false", "${{ false }}", "${{false}}"):
+        body = f"if: {cond}\nruns-on: ubuntu-latest\nsteps:\n  - run: docker push x"
+        assert ar.can_deploy(wf("deploy", body).encode().hex()) == (False, "")
+    body = "if: github.ref == 'refs/heads/main'\nruns-on: veron-1\nsteps:\n  - run: docker push x"
+    assert ar.can_deploy(wf("deploy", body).encode().hex())[0]
+
+
+@pytest.mark.parametrize("hx", ["", "zz", b"not: [yaml".hex(), b"jobs: {a: 1, b: 2}".hex(), b"jobs: {a: 1}".hex()])
+def test_secret_limit6_an_unreadable_definition_refuses(hx):
+    assert ar.can_deploy(hx) == (True, "job definition unreadable")
+
+
+def test_secret_limit6_plain_test_job_is_not_deploy():
+    assert ar.can_deploy(PLAIN_JOB.encode().hex()) == (False, "")
+    assert ar.job_name(PLAIN_JOB.encode().hex()) == "test" and ar.job_name("zz") == "?"
+
+
+def test_secret_limit6_a_missing_definition_refuses():
+    db = secret_db()
+    db.job(db.run(), 2, [])
+    rows = db.q(ar.commit_sql(5, SHA))
+    assert ar.judge("windy-pro", rows, ALLOW, None, lambda: [])[2] == "repo holds Actions secrets: job definition unreadable"
+
+
+def test_secret_limit5_kill_switch_turns_off_only_this_path(monkeypatch):
+    for v in ("off", "0", "false", "NO", " Off "):
+        monkeypatch.setenv("AUTORERUN_SECRET_REPOS", v)
+        assert not ar.secret_path_on()
+        db = secret_db()
+        db.job(db.run(), 2, [])
+        assert judge_s(db) == (None, "", "repo holds Actions secrets (secret-repo path off)")
+        plain = DB()                                       # a repo without secrets is untouched
+        j = plain.job(plain.run(), 2, [])
+        assert judge_s(plain) == ("dead-before-step", str(j), "ok")
+    for v in ("on", "1", ""):
+        monkeypatch.setenv("AUTORERUN_SECRET_REPOS", v)
+        assert ar.secret_path_on()
+    monkeypatch.delenv("AUTORERUN_SECRET_REPOS")
+    assert ar.secret_path_on()
+
+
+def test_secret_limit4_log_line_and_weekly_count(wired, monkeypatch, capsys):
+    db, tmp, calls = wired
+    monkeypatch.setattr(ar, "SECRET_LOG", tmp / "secret.log")
+    db.c.execute("insert into secret values (1, 5, 0)")
+    j = db.job(db.run(), 2, [(3, 0, 0, 0)])
+    (tmp / "secret.log").write_text(f"old\t{NOW - 8 * 86400}\tr\t1\tx\nrecent\t{NOW - 86400}\tr\t2\tx\ngarbage\n")
+    assert ar.main() == 0 and len(calls) == 1
+    lines = (tmp / "secret.log").read_text().splitlines()
+    f = lines[-1].split("\t")
+    assert f[1:4] == [str(NOW), "windy-pro", str(j)] and len(f) == 5
+    assert f[4] == "dead-before-step (test) at aaaaaaaa: no step started, the container died in Set up job"[:80]
+    assert len(f[4]) <= 80
+    led = json.loads((tmp / "s.json").read_text())[f"windy-pro@{SHA}"]
+    assert led["job_name"] == "test" and led["exit"] == 0
+    assert ar.week_count(NOW) == "2"                     # 'recent' + this one; 'old' and 'garbage' not
+    out = capsys.readouterr().out
+    assert "secret-repo re-runs in 7 d: 1" in out and "secret-repo re-run logged" in out
+    assert "BOARD" not in out
+
+
+def test_secret_limit4_no_log_for_a_plain_repo_and_missing_log_is_zero(wired, monkeypatch):
+    db, tmp, calls = wired
+    monkeypatch.setattr(ar, "SECRET_LOG", tmp / "secret.log")
+    assert ar.week_count(NOW) == "0"
+    db.job(db.run(), 2, [])
+    assert ar.main() == 0 and len(calls) == 1 and not (tmp / "secret.log").exists()
+
+
+def test_secret_recheck_refuses_when_a_deploy_job_appears_after_the_pick(wired, monkeypatch):
+    db, tmp, calls = wired
+    monkeypatch.setattr(ar, "SECRET_LOG", tmp / "secret.log")
+    db.c.execute("insert into secret values (1, 5, 0)")
+    db.job(db.run(), 2, [])
+    real_plan = ar.plan
+
+    def plan_then_deploy(*a, **k):
+        out = real_plan(*a, **k)
+        db.job(db.run(wf="lint.yml"), 1, [(1, 5, NOW - 30)], payload=DEPLOY)
+        return out
+
+    monkeypatch.setattr(ar, "plan", plan_then_deploy)
+    assert ar.main() == 0 and calls == [] and not (tmp / "s.json").exists()
+    assert not (tmp / "secret.log").exists()
+
+
+def test_secret_recheck_refuses_when_secrets_appear_after_the_pick(wired, monkeypatch):
+    db, tmp, calls = wired
+    monkeypatch.setattr(ar, "SECRET_LOG", tmp / "secret.log")
+    db.job(db.run(), 2, [])
+    real_plan = ar.plan
+
+    def plan_then_secret(*a, **k):
+        out = real_plan(*a, **k)
+        db.c.execute("insert into secret values (1, 5, 0)")
+        return out
+
+    monkeypatch.setattr(ar, "plan", plan_then_secret)
+    assert ar.main() == 0 and calls == []
+
+
+def test_payload_sql_reads_ci_events_only_as_hex():
+    db = secret_db()
+    a = db.job(db.run(), 2, [])
+    db.job(db.run(wf="canary.yml", ev="schedule"), 1, [], payload=DEPLOY)
+    rows = db.q(ar.payload_sql(5, SHA))
+    assert [(r[0], r[1]) for r in rows] == [(str(a), "push")]
+    assert bytes.fromhex(rows[0][2]).decode() == PLAIN_JOB
+
+
+def test_secret_recheck_refuses_when_secrets_vanish_after_the_pick(wired, monkeypatch):
+    """Picked on the secret path, judged plain right before acting: the facts moved; no re-run."""
+    db, tmp, calls = wired
+    monkeypatch.setattr(ar, "SECRET_LOG", tmp / "secret.log")
+    db.c.execute("insert into secret values (1, 5, 0)")
+    db.job(db.run(), 2, [])
+    real_plan = ar.plan
+
+    def plan_then_unsecret(*a, **k):
+        out = real_plan(*a, **k)
+        db.c.execute("delete from secret")
+        return out
+
+    monkeypatch.setattr(ar, "plan", plan_then_unsecret)
+    assert ar.main() == 0 and calls == [] and not (tmp / "secret.log").exists()
