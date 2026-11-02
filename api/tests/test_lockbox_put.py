@@ -134,12 +134,12 @@ def test_stdin_refuses_a_tty(tmp_path):
 def test_stdin_rejects_invalid_empty_and_oversized(tmp_path):
     bare = make_remote(tmp_path)
     bad = "has space `Qx7mark` " + FAKE
-    for data in (bad.encode(), b"short", b"", b"\n  \n", (FAKE * 30).encode(), (FAKE * 200).encode(), b"A" * 5000 + b"\n"):
+    for data in (bad.encode(), b"short", b"", b"\n  \n", (FAKE * 200).encode(), b"A" * 5000 + b"\n"):
         rc, out = put_stdin(tmp_path, bare, "BAD_STDIN_KEY", data)
         assert rc == 2, data[:20]
         assert FAKE not in out and "Qx7mark" not in out
     assert "empty" in put_stdin(tmp_path, bare, "BAD_STDIN_KEY", b"")[1]
-    assert "longer than 4096" in put_stdin(tmp_path, bare, "BAD_STDIN_KEY", b"A" * 4097)[1]
+    assert "longer than 8192" in put_stdin(tmp_path, bare, "BAD_STDIN_KEY", b"A" * 8193)[1]
     assert not branches(bare)
 
 
@@ -188,3 +188,21 @@ def test_work_dir_prefers_ram(monkeypatch, tmp_path):
     monkeypatch.setattr(mod.os.path, "isdir", lambda d: d == "/dev/shm")
     monkeypatch.setattr(mod.os, "access", lambda d, m: d == "/dev/shm")
     assert mod.work_dir() == "/dev/shm"
+
+
+def test_value_cap_is_4096_through_the_real_stdin_path(tmp_path):
+    """Boss 2026-11-02: VAL_RE {8,4096} (was 512, no stated reason). Through a PIPE, which adds a newline (Hub):
+    4,096 chars + "\\n" is OK, 4,097 chars is refused, and a base64 RSA-2048 PEM (~2,272 chars) goes in as ONE value."""
+    import base64
+    bare = make_remote(tmp_path)
+    v4096 = ("Ab3+/=" * 700)[:4096]
+    rc, out = put_stdin(tmp_path, bare, "CAP_4096_KEY", (v4096 + "\n").encode())
+    assert rc == 0, out
+    assert f"- **`CAP_4096_KEY`**: `{v4096}`" in sh("git", "show", f"{branches(bare)[-1]}:ACCESS_LOCKBOX.md", cwd=bare).stdout
+    rc, out = put_stdin(tmp_path, bare, "CAP_4097_KEY", (v4096 + "A\n").encode())
+    assert rc == 2 and "8-4096" in out and v4096[:20] not in out
+    pem = b"-----BEGIN RSA PRIVATE KEY-----\n" + b"MIIEpAIBAAKCAQEA" * 100 + b"\n-----END RSA PRIVATE KEY-----\n"
+    b64 = base64.b64encode(pem).decode()
+    assert 2000 < len(b64) < 4096
+    rc, out = put_stdin(tmp_path, bare, "PEM_B64_KEY", (b64 + "\n").encode())
+    assert rc == 0, out
