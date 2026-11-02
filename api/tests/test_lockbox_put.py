@@ -188,3 +188,85 @@ def test_work_dir_prefers_ram(monkeypatch, tmp_path):
     monkeypatch.setattr(mod.os.path, "isdir", lambda d: d == "/dev/shm")
     monkeypatch.setattr(mod.os, "access", lambda d, m: d == "/dev/shm")
     assert mod.work_dir() == "/dev/shm"
+
+
+# ── --batch (2026-11-02, Boss: one key = one PR; lockbox-put-pem stores KEY_PART1..N + KEY_PARTS) ──
+
+V1, V2, V3 = "Ab3dEf6hIj9kLm2nOp5q", "Qr8sTu1vWx4yZa7bCd0e", "Fg2hIj5kLm8nOp1qRs4t"  # synthetic
+
+
+def batch(tmp_path, bare, stdin, extra_env=None, note="n"):
+    e = {**os.environ, "LOCKBOX_PUT_REPO": str(bare), "LOCKBOX_PUT_NO_PR": "1", "HOME": str(tmp_path / "h"), **(extra_env or {})}
+    if extra_env and extra_env.get("LOCKBOX_PUT_NO_PR") == "":
+        e.pop("LOCKBOX_PUT_NO_PR")
+    (tmp_path / "h" / ".cache").mkdir(parents=True, exist_ok=True)
+    r = subprocess.run([sys.executable, str(ROOT / "scripts" / "lockbox_put.py"), "--batch", "-", "--lane", "test", "--note", note],
+                       input=stdin, capture_output=True, text=True, env=e)
+    return r.returncode, r.stdout, r.stderr
+
+
+def test_batch_appends_all_lines_in_ONE_commit_and_never_echoes(tmp_path):
+    bare = make_remote(tmp_path)
+    rc, out, err = batch(tmp_path, bare, f"NEW_PEM_PART1\t{V1}\tpart 1 of 2\nNEW_PEM_PART2\t{V2}\tpart 2 of 2\nNEW_PEM_PARTS\tparts=02\n")
+    assert rc == 0, err
+    assert all(v not in out + err for v in (V1, V2, "parts=02")) and "3 keys" in out
+    br = branches(bare)
+    assert len(br) == 1
+    assert sh("git", "rev-list", "--count", f"main..{br[0]}", cwd=bare).stdout.strip() == "1"   # ONE commit
+    added, deleted, path = sh("git", "diff", "--numstat", f"main..{br[0]}", cwd=bare).stdout.split()
+    assert (deleted, path) == ("0", "ACCESS_LOCKBOX.md") and added == str(2 + 3 + 3)        # blank + heading, 3 keys, 3 notes (--note n for line 3)
+    content = sh("git", "show", f"{br[0]}:ACCESS_LOCKBOX.md", cwd=bare).stdout
+    for k, v in (("NEW_PEM_PART1", V1), ("NEW_PEM_PART2", V2), ("NEW_PEM_PARTS", "parts=02")):
+        assert f"- **`{k}`**: `{v}`" in content
+    assert "- **Note (NEW_PEM_PART1):** part 1 of 2" in content and "- **Note (NEW_PEM_PARTS):** n" in content
+    assert V1 not in sh("git", "show", "main:ACCESS_LOCKBOX.md", cwd=bare).stdout
+
+
+def test_batch_one_bad_value_on_line_3_writes_nothing(tmp_path):
+    bare = make_remote(tmp_path)
+    rc, out, err = batch(tmp_path, bare, f"NEW_A\t{V1}\nNEW_B\t{V2}\nNEW_C\tbad value with spaces\nNEW_D\t{V3}\n")
+    assert rc == 3 and "batch refused: line 3:" in err
+    assert branches(bare) == []
+    assert all(v not in out + err for v in (V1, V2, V3, "bad value"))
+
+
+def test_batch_refuses_duplicates_existing_keys_bad_notes_and_shapes(tmp_path):
+    bare = make_remote(tmp_path)
+    cases = [
+        (f"NEW_A\t{V1}\nNEW_A\t{V2}\n", "line 2:", "twice"),
+        (f"NEW_A\t{V1}\nEXISTING_KEY\t{V2}\n", "line 2:", "already exists"),
+        (f"NEW_A\t{V1}\nOLD_ENV_KEY\t{V2}\n", "line 2:", "already exists"),
+        (f"NEW_A\t{V1}\tnote with a `backtick`\n", "line 1:", "NOTE"),
+        (f"NEW_A\t{V1}\t{'x' * 201}\n", "line 1:", "NOTE"),
+        (f"new_lower\t{V1}\n", "line 1:", "KEY must match"),
+        (f"NEW_A {V1}\n", "line 1:", "expected KEY<TAB>VALUE"),
+        (f"NEW_A\t{V1}\tn\textra\n", "line 1:", "expected KEY<TAB>VALUE"),
+        ("".join(f"NEW_K{i:02d}\t{V1}\n" for i in range(41)), "41 lines", "at most 40"),
+        ("", "empty", "empty"),
+    ]
+    for stdin, where, why in cases:
+        rc, out, err = batch(tmp_path, bare, stdin)
+        assert rc == 3 and where in err and why in err, (where, why, err)
+        assert V1 not in out + err and V2 not in out + err
+    assert branches(bare) == []
+    # the existing-KEY refusal never says WHERE the key lives
+    rc, out, err = batch(tmp_path, bare, f"EXISTING_KEY\t{V1}\n")
+    assert "ACCESS_LOCKBOX" not in err and "secrets/" not in err
+
+
+def test_batch_refuses_more_than_64_kib(tmp_path):
+    bare = make_remote(tmp_path)
+    rc, _out, err = batch(tmp_path, bare, "A" * (64 * 1024 + 1))
+    assert rc == 3 and "65536 bytes" in err
+    assert branches(bare) == []
+
+
+def test_batch_pr_failure_deletes_the_pushed_branch(tmp_path):
+    bare = make_remote(tmp_path)
+    fakebin = tmp_path / "fakebin"
+    fakebin.mkdir()
+    (fakebin / "gh").write_text("#!/bin/sh\nexit 1\n")
+    os.chmod(fakebin / "gh", 0o755)
+    rc, out, err = batch(tmp_path, bare, f"NEW_A\t{V1}\n", {"LOCKBOX_PUT_NO_PR": "", "PATH": f"{fakebin}:{os.environ['PATH']}"})
+    assert rc == 4 and "deleted" in err
+    assert branches(bare) == []
