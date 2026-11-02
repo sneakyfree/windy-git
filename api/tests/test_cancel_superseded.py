@@ -53,9 +53,14 @@ def test_nothing_to_cancel_posts_nothing_and_a_db_error_never_fails_the_sync(tmp
 
 
 def _ssh_down(monkeypatch):
+    """Windy 0 unreachable; the lane user = whoever runs the tests (CI runs as root in a container
+    with no user1-gpu account)."""
+    import pwd as _pwd
+
     class R:
         returncode = 255
     monkeypatch.setattr(cs.subprocess, "run", lambda *a, **k: R())
+    monkeypatch.setattr(cs, "BOARD_USER", _pwd.getpwuid(cs.os.getuid()).pw_name)
 
 
 def test_board_fallback_writes_todays_file_not_the_newest_old_one(tmp_path, monkeypatch):
@@ -108,3 +113,11 @@ def test_board_fallback_refuses_a_hard_link(tmp_path, monkeypatch):
     import os
     os.link(other, today)
     assert cs.board("x") is False and other.read_text() == "keep\n"
+
+
+def test_board_fallback_unknown_lane_user_as_root_writes_nothing(tmp_path, monkeypatch):
+    """Root with no such lane user: refuse BEFORE writing, so a retry can't duplicate the line."""
+    today = _today(monkeypatch, tmp_path)
+    monkeypatch.setattr(cs, "BOARD_USER", "no-such-user-xyz")
+    monkeypatch.setattr(cs.os, "geteuid", lambda: 0)
+    assert cs.board("x") is False and not today.exists()

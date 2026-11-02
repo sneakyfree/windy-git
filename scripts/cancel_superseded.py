@@ -87,9 +87,12 @@ def board(line: str) -> bool:
     # lanes appending as user1-gpu still can (these jobs run as root).
     path = os.path.join(FALLBACK_DIR, f"BOARD-FALLBACK-{time.strftime('%Y%m%d', time.gmtime())}.md")
     try:
+        # Who will own a new file: resolved BEFORE writing, so a failure can't follow a written line
+        # (the caller would retry and write it twice).
+        owner = pwd.getpwnam(BOARD_USER) if os.geteuid() == 0 else None
         # As root: never follow a symlink, and set mode/owner on the OPEN FILE, not the path (Hub #119).
         fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o644)
-    except OSError:
+    except (OSError, KeyError):
         return False
     try:
         st = os.fstat(fd)
@@ -98,12 +101,11 @@ def board(line: str) -> bool:
         os.write(fd, stamped.encode())
         if st.st_size == 0:                     # we just created it (or it was empty): fix mode + owner
             os.fchmod(fd, 0o644)
-            if os.geteuid() == 0:
-                pw = pwd.getpwnam(BOARD_USER)
-                os.fchown(fd, pw.pw_uid, pw.pw_gid)
+            if owner is not None:
+                os.fchown(fd, owner.pw_uid, owner.pw_gid)
         print(f"  BOARD: Windy 0 unreachable, line written to the FALLBACK board {os.path.basename(path)}")
         return True
-    except (OSError, KeyError):
+    except OSError:
         return False
     finally:
         os.close(fd)
