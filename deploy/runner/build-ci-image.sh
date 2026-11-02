@@ -11,7 +11,7 @@
 set -euo pipefail
 BASE="${CI_IMAGE_BASE_TAG:-localhost/windy-git-ci/ubuntu:22.04-0}"
 TAG="${CI_IMAGE_TAG:-localhost/windy-git-ci/ubuntu:22.04-1}"
-D=(docker exec -i windy-git-runner-dind-1 docker -H tcp://127.0.0.1:2375)  # dind listens on TCP only
+D=(docker exec -i "${CI_DIND:-windy-git-runner-dind-1}" docker -H tcp://127.0.0.1:2375)  # dind listens on TCP only; Null 0: CI_DIND=windy-git-runner-offsite-dind-1
 cd "$(dirname "$0")/ci-image"
 tar -c --transform 's/Dockerfile.base/Dockerfile/' Dockerfile.base | "${D[@]}" build -q -t "$BASE" - >/dev/null
 tar -c Dockerfile mirror-cipher/package.json mirror-cipher/package-lock.json | "${D[@]}" build -q -t "$TAG" - >/dev/null
