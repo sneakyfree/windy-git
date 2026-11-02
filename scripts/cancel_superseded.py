@@ -18,8 +18,9 @@ the count is above 0. Never fails the sync.
 
 from __future__ import annotations
 
-import glob
 import os
+import pwd
+import stat
 import subprocess
 import sys
 import time
@@ -27,6 +28,7 @@ from pathlib import Path
 
 LOG = Path(os.environ.get("CANCEL_SUPERSEDED_LOG", "/var/log/windygit/superseded-cancels.log"))
 BOARD_USER = os.environ.get("BOARD_USER", "user1-gpu")
+FALLBACK_DIR = os.environ.get("BOARD_FALLBACK_DIR", f"/home/{BOARD_USER}/windy-orchestra-fallback")
 
 CANCEL_SQL = """
 with newest as (
@@ -80,16 +82,33 @@ def board(line: str) -> bool:
             return True
     except (subprocess.SubprocessError, OSError):
         pass
-    fallbacks = sorted(glob.glob(f"/home/{BOARD_USER}/windy-orchestra-fallback/BOARD-FALLBACK-*.md"))
-    if fallbacks:
-        try:
-            with open(fallbacks[-1], "a") as f:
-                f.write(stamped)
-            print("  BOARD: Windy 0 unreachable, line written to the FALLBACK board")
-            return True
-        except OSError:
-            pass
-    return False
+    # TODAY's fallback file (Boss 11-02), not the newest existing one: an old file (BOARD-FALLBACK-
+    # 20261027.md) is where nobody looks for today's lines. Created owned by the lane user, 0644, so
+    # lanes appending as user1-gpu still can (these jobs run as root).
+    path = os.path.join(FALLBACK_DIR, f"BOARD-FALLBACK-{time.strftime('%Y%m%d', time.gmtime())}.md")
+    try:
+        # Who will own a new file: resolved BEFORE writing, so a failure can't follow a written line
+        # (the caller would retry and write it twice).
+        owner = pwd.getpwnam(BOARD_USER) if os.geteuid() == 0 else None
+        # As root: never follow a symlink, and set mode/owner on the OPEN FILE, not the path (Hub #119).
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o644)
+    except (OSError, KeyError):
+        return False
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+            return False
+        os.write(fd, stamped.encode())
+        if st.st_size == 0:                     # we just created it (or it was empty): fix mode + owner
+            os.fchmod(fd, 0o644)
+            if owner is not None:
+                os.fchown(fd, owner.pw_uid, owner.pw_gid)
+        print(f"  BOARD: Windy 0 unreachable, line written to the FALLBACK board {os.path.basename(path)}")
+        return True
+    except OSError:
+        return False
+    finally:
+        os.close(fd)
 
 
 def main(query=psql, post=board) -> int:

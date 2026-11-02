@@ -804,3 +804,13 @@ def test_secret_recheck_refuses_when_secrets_vanish_after_the_pick(wired, monkey
 
     monkeypatch.setattr(ar, "plan", plan_then_unsecret)
     assert ar.main() == 0 and calls == [] and not (tmp / "secret.log").exists()
+
+
+@pytest.mark.parametrize("bad", ["", "a" * 39, "a" * 41, "A" * 40, "g" * 40, "a" * 39 + "'", "a" * 40 + "\n"])
+def test_only_a_40_hex_sha_ever_reaches_sql_text(bad):
+    """Hub #117: the SQL builders refuse anything else themselves, not only their callers."""
+    with pytest.raises(ValueError):
+        ar.commit_sql(5, bad)
+    with pytest.raises(ValueError):
+        ar.payload_sql(5, bad)
+    assert SHA in ar.commit_sql(5, SHA) and SHA in ar.payload_sql(5, SHA)
