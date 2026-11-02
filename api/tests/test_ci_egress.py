@@ -66,17 +66,31 @@ def test_the_timer_reasserts_every_15_minutes():
     assert t["Install"]["WantedBy"] == "timers.target"
 
 
-def test_the_probe_fails_loudly_and_only_counts_targets_the_host_reaches():
+def test_the_probe_fails_loudly_and_proves_the_block_by_our_drop_counters():
+    """Boss 11-02: container only; 'closed' alone could be a shut port, so each target family's DROP
+    counter must rise during the probe."""
     assert PROBE.count('echo "egress probe: PASS') == 1
     assert "exit 1" in PROBE and "egress probe: FAIL" in PROBE
-    # a shut port proves nothing: every target family is gated on the HOST reaching it
-    assert '[ -n "$ip" ] && host_open "$ip" 22 && targets+=("$ip 22 tailnet:$name")' in PROBE
-    assert 'host_open "$ip" 22 && targets+=("$ip 22 wireguard:$ip")' in PROBE
-    assert 'if [ -n "$gw" ] && host_open "$gw" "$port"; then targets+=' in PROBE
-    assert 'host_open "$ip" 22 && targets+=("$ip 22 host:$ip")' in PROBE
-    assert "for port in 80 443 8080; do" in PROBE                  # never 53: DNS is allowed on purpose
+    assert "before=$(counters)" in PROBE and "after=$(counters)" in PROBE
+    assert PROBE.index("before=$(counters)") < PROBE.index('out=$("${D[@]}" run') < PROBE.index("after=$(counters)")
+    assert 'if [ -z "$a" ] || [ "${a:-0}" -le "${b:-0}" ]; then unproved+=' in PROBE
+    assert '[ -n "$unproved" ]' in PROBE
+    for fam, key in (("tailnet", "100.64.0.0/10"), ("wireguard", "10.0.0.0/8"), ("lan", "192.168.0.0/16"), ("host", "input")):
+        assert f"{fam}:*) echo {key};;" in PROBE
+    assert "$3 == \"DROP\" {print $9, $1}" in PROBE and '$3 == "DROP" {print "input", $1}' in PROBE
+    assert "for port in" not in PROBE                              # one fixed port per family, never 53
+    assert 'add "$gw" 80 "lan:gateway"' in PROBE
     assert "control:public" in PROBE and "control:forge" in PROBE
     assert 'grep -v \'control:\'' in PROBE                      # any private OPEN fails the run
+
+
+def test_the_recurring_probe_never_connects_from_the_host():
+    """Boss 11-02: no host-side connect from the timer (fleet sshd logs); only by hand, with a flag."""
+    assert 'HOST_CHECK=0\n[ "${1:-}" = "--with-host-check" ] && HOST_CHECK=1' in PROBE
+    assert 'if [ "$HOST_CHECK" = 1 ] && ! host_open "$1" "$2"; then return; fi' in PROBE
+    assert PROBE.count("host_open") == 2                           # its definition + the flagged use
+    ex = unit("windygit-ci-egress.service")["Service"]["ExecStart"]
+    assert "egress-probe.sh;" in ex and "--with-host-check" not in ex
 
 
 def test_the_probe_touches_an_explicit_fleet_list_only():
