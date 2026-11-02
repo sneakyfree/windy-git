@@ -64,11 +64,14 @@ def test_board_fallback_writes_todays_file_not_the_newest_old_one(tmp_path, monk
     _ssh_down(monkeypatch)
     monkeypatch.setattr(cs, "FALLBACK_DIR", str(tmp_path))
     (tmp_path / "BOARD-FALLBACK-20261027.md").write_text("old\n")
+    import os
+    old_umask = os.umask(0o077)                                          # a tight umask must not make it 0600
     monkeypatch.setattr(cs.time, "gmtime", lambda *a: cs.time.struct_time((2026, 11, 2, 15, 0, 0, 0, 306, 0)))
     assert cs.board("[Windy Git] hello") is True
     today = tmp_path / "BOARD-FALLBACK-20261102.md"
     assert today.read_text() == "2026-11-02T15:00:00Z [Windy Git] hello\n"
     assert (tmp_path / "BOARD-FALLBACK-20261027.md").read_text() == "old\n"
+    os.umask(old_umask)
     assert oct(today.stat().st_mode & 0o777) == "0o644"
     assert cs.board("[Windy Git] again") is True                        # appends to the same file
     assert today.read_text().count("\n") == 2
@@ -78,3 +81,30 @@ def test_board_fallback_without_the_directory_is_a_failed_post(tmp_path, monkeyp
     _ssh_down(monkeypatch)
     monkeypatch.setattr(cs, "FALLBACK_DIR", str(tmp_path / "missing"))
     assert cs.board("x") is False and not (tmp_path / "missing").exists()
+
+
+def _today(monkeypatch, tmp_path):
+    _ssh_down(monkeypatch)
+    monkeypatch.setattr(cs, "FALLBACK_DIR", str(tmp_path))
+    monkeypatch.setattr(cs.time, "gmtime", lambda *a: cs.time.struct_time((2026, 11, 2, 15, 0, 0, 0, 306, 0)))
+    return tmp_path / "BOARD-FALLBACK-20261102.md"
+
+
+def test_board_fallback_never_follows_a_symlink(tmp_path, monkeypatch):
+    """Hub #119: runs as root; a (dangling) symlink at today's name must not make root create or
+    chown its target."""
+    today = _today(monkeypatch, tmp_path)
+    target = tmp_path / "elsewhere"
+    today.symlink_to(target)
+    assert cs.board("x") is False and not target.exists()
+    target.write_text("keep\n")
+    assert cs.board("x") is False and target.read_text() == "keep\n"
+
+
+def test_board_fallback_refuses_a_hard_link(tmp_path, monkeypatch):
+    today = _today(monkeypatch, tmp_path)
+    other = tmp_path / "other"
+    other.write_text("keep\n")
+    import os
+    os.link(other, today)
+    assert cs.board("x") is False and other.read_text() == "keep\n"

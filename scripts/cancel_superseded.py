@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import os
 import pwd
+import stat
 import subprocess
 import sys
 import time
@@ -86,18 +87,26 @@ def board(line: str) -> bool:
     # lanes appending as user1-gpu still can (these jobs run as root).
     path = os.path.join(FALLBACK_DIR, f"BOARD-FALLBACK-{time.strftime('%Y%m%d', time.gmtime())}.md")
     try:
-        new = not os.path.exists(path)
-        with open(path, "a") as f:
-            f.write(stamped)
-        if new:
-            os.chmod(path, 0o644)
+        # As root: never follow a symlink, and set mode/owner on the OPEN FILE, not the path (Hub #119).
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o644)
+    except OSError:
+        return False
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
+            return False
+        os.write(fd, stamped.encode())
+        if st.st_size == 0:                     # we just created it (or it was empty): fix mode + owner
+            os.fchmod(fd, 0o644)
             if os.geteuid() == 0:
                 pw = pwd.getpwnam(BOARD_USER)
-                os.chown(path, pw.pw_uid, pw.pw_gid)
+                os.fchown(fd, pw.pw_uid, pw.pw_gid)
         print(f"  BOARD: Windy 0 unreachable, line written to the FALLBACK board {os.path.basename(path)}")
         return True
     except (OSError, KeyError):
         return False
+    finally:
+        os.close(fd)
 
 
 def main(query=psql, post=board) -> int:
