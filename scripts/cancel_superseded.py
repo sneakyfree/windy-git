@@ -18,8 +18,8 @@ the count is above 0. Never fails the sync.
 
 from __future__ import annotations
 
-import glob
 import os
+import pwd
 import subprocess
 import sys
 import time
@@ -27,6 +27,7 @@ from pathlib import Path
 
 LOG = Path(os.environ.get("CANCEL_SUPERSEDED_LOG", "/var/log/windygit/superseded-cancels.log"))
 BOARD_USER = os.environ.get("BOARD_USER", "user1-gpu")
+FALLBACK_DIR = os.environ.get("BOARD_FALLBACK_DIR", f"/home/{BOARD_USER}/windy-orchestra-fallback")
 
 CANCEL_SQL = """
 with newest as (
@@ -80,16 +81,23 @@ def board(line: str) -> bool:
             return True
     except (subprocess.SubprocessError, OSError):
         pass
-    fallbacks = sorted(glob.glob(f"/home/{BOARD_USER}/windy-orchestra-fallback/BOARD-FALLBACK-*.md"))
-    if fallbacks:
-        try:
-            with open(fallbacks[-1], "a") as f:
-                f.write(stamped)
-            print("  BOARD: Windy 0 unreachable, line written to the FALLBACK board")
-            return True
-        except OSError:
-            pass
-    return False
+    # TODAY's fallback file (Boss 11-02), not the newest existing one: an old file (BOARD-FALLBACK-
+    # 20261027.md) is where nobody looks for today's lines. Created owned by the lane user, 0644, so
+    # lanes appending as user1-gpu still can (these jobs run as root).
+    path = os.path.join(FALLBACK_DIR, f"BOARD-FALLBACK-{time.strftime('%Y%m%d', time.gmtime())}.md")
+    try:
+        new = not os.path.exists(path)
+        with open(path, "a") as f:
+            f.write(stamped)
+        if new:
+            os.chmod(path, 0o644)
+            if os.geteuid() == 0:
+                pw = pwd.getpwnam(BOARD_USER)
+                os.chown(path, pw.pw_uid, pw.pw_gid)
+        print(f"  BOARD: Windy 0 unreachable, line written to the FALLBACK board {os.path.basename(path)}")
+        return True
+    except (OSError, KeyError):
+        return False
 
 
 def main(query=psql, post=board) -> int:

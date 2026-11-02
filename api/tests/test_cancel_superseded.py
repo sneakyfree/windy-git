@@ -50,3 +50,31 @@ def test_nothing_to_cancel_posts_nothing_and_a_db_error_never_fails_the_sync(tmp
     def boom(sql):
         raise OSError("db down")
     assert cs.main(boom, posts.append) == 0 and posts == []
+
+
+def _ssh_down(monkeypatch):
+    class R:
+        returncode = 255
+    monkeypatch.setattr(cs.subprocess, "run", lambda *a, **k: R())
+
+
+def test_board_fallback_writes_todays_file_not_the_newest_old_one(tmp_path, monkeypatch):
+    """Boss 11-02: with Windy 0 unreachable, the line goes to BOARD-FALLBACK-<today UTC>.md, created
+    if missing; an older fallback file is left alone."""
+    _ssh_down(monkeypatch)
+    monkeypatch.setattr(cs, "FALLBACK_DIR", str(tmp_path))
+    (tmp_path / "BOARD-FALLBACK-20261027.md").write_text("old\n")
+    monkeypatch.setattr(cs.time, "gmtime", lambda *a: cs.time.struct_time((2026, 11, 2, 15, 0, 0, 0, 306, 0)))
+    assert cs.board("[Windy Git] hello") is True
+    today = tmp_path / "BOARD-FALLBACK-20261102.md"
+    assert today.read_text() == "2026-11-02T15:00:00Z [Windy Git] hello\n"
+    assert (tmp_path / "BOARD-FALLBACK-20261027.md").read_text() == "old\n"
+    assert oct(today.stat().st_mode & 0o777) == "0o644"
+    assert cs.board("[Windy Git] again") is True                        # appends to the same file
+    assert today.read_text().count("\n") == 2
+
+
+def test_board_fallback_without_the_directory_is_a_failed_post(tmp_path, monkeypatch):
+    _ssh_down(monkeypatch)
+    monkeypatch.setattr(cs, "FALLBACK_DIR", str(tmp_path / "missing"))
+    assert cs.board("x") is False and not (tmp_path / "missing").exists()

@@ -117,6 +117,13 @@ order by max(j.stopped);
 """
 
 
+def _sha(sha: str) -> str:
+    """Only a 40-hex commit id ever goes into SQL text (Hub #117): anything else raises."""
+    if not _SHA.fullmatch(sha or ""):
+        raise ValueError("not a 40-hex commit sha")
+    return sha
+
+
 def commit_sql(repo_id: int, sha: str) -> str:
     """Facts only: every job of every run at the commit, with its step marks.
     Columns: run index, workflow, event, job id, job status, task id, steps that ran,
@@ -140,7 +147,7 @@ select r."index", r.workflow_id, r.event, j.id, j.status, j.task_id,
      and (s.status in (1, 2, 6) or s.log_length > 0 or s.started > 0))
 from action_run r
 join action_run_job j on j.run_id = r.id
-where r.repo_id = {int(repo_id)} and r.commit_sha = '{sha}'
+where r.repo_id = {int(repo_id)} and r.commit_sha = '{_sha(sha)}'
 order by r."index", j.id;
 """
 
@@ -151,7 +158,7 @@ def payload_sql(repo_id: int, sha: str) -> str:
 select j.id, r.event, encode(j.workflow_payload, 'hex')
 from action_run r
 join action_run_job j on j.run_id = r.id
-where r.repo_id = {int(repo_id)} and r.commit_sha = '{sha}'
+where r.repo_id = {int(repo_id)} and r.commit_sha = '{_sha(sha)}'
   and r.event in ('push', 'pull_request', 'pull_request_sync')
 order by j.id;
 """
