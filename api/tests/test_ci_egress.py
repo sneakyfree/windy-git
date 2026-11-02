@@ -36,16 +36,17 @@ def test_the_hook_goes_first_in_forward_and_the_script_fails_if_it_is_not():
 
 
 def test_every_private_range_is_dropped_and_dns_stays_the_only_allowance():
+    rules = EGRESS.split("swap WG-CI-EGRESS <<EOF\n")[1].split("\nEOF")[0].splitlines()
     for cidr in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "169.254.0.0/16"):
-        assert cidr in EGRESS
-    assert 'iptables -A WG-CI-EGRESS -d "$cidr" -j DROP' in EGRESS
-    assert "--dport 53 -j RETURN" in EGRESS
-    assert re.findall(r"--dport (\d+) -j RETURN", EGRESS) == ["53", "53"]
+        assert f"-d {cidr} -j DROP" in rules
+    assert re.findall(r"--dport (\d+) -j RETURN", "\n".join(rules)) == ["53", "53"]
+    assert rules[-1] == "-j RETURN" and rules.index("-d 10.0.0.0/8 -j DROP") > rules.index("-p tcp --dport 53 -j RETURN")
+    assert EGRESS.split("swap WG-CI-INPUT <<EOF\n")[1].split("\nEOF")[0].splitlines()[-1] == "-j DROP"
 
 
 def test_ipv6_from_the_ci_bridge_is_dropped():
     assert 'ip6tables -I "$chain" 1 -i "$BR" -j DROP' in EGRESS
-    assert "for chain in FORWARD INPUT; do\n  while ip6tables" in EGRESS
+    assert "for chain in FORWARD INPUT; do\n  ip6tables -I" in EGRESS
 
 
 def test_the_unit_reruns_after_tailscaled_and_is_restartable():
@@ -75,3 +76,28 @@ def test_the_probe_fails_loudly_and_only_counts_targets_the_host_reaches():
     assert "for port in 22 80 443 8080" in PROBE and " 53 " not in PROBE.split("for port in")[1].split(";")[0]
     assert "control:public" in PROBE and "control:forge" in PROBE
     assert 'grep -v \'control:\'' in PROBE                      # any private OPEN fails the run
+
+
+def _after(text: str, first: str, then: str) -> bool:
+    return first in text and then in text and text.index(first) < text.index(then)
+
+
+def test_never_an_empty_or_half_built_filter_while_hooked():
+    """Hub 11-02: build the idle generation complete, switch the entry's jump (insert new BEFORE
+    removing old), only then flush the old generation; hooks are inserted before old copies go."""
+    swap = EGRESS[EGRESS.index("swap() {"):EGRESS.index("swap WG-CI-EGRESS <<EOF")]
+    assert 'iptables -N "$new" 2>/dev/null || iptables -F "$new"' in swap      # only the IDLE one is flushed
+    assert _after(swap, 'iptables -A "$new" $line', 'iptables -I "$entry" 1 -j "$new"')
+    assert _after(swap, 'iptables -I "$entry" 1 -j "$new"', 'iptables -D "$entry" 2')
+    assert _after(swap, 'iptables -D "$entry" 2', 'iptables -F "$cur"')
+    assert 'iptables -F "$entry"' not in EGRESS and "iptables -F WG-CI" not in EGRESS
+    hooks = EGRESS[EGRESS.index("for chain in FORWARD DOCKER-USER INPUT"):]
+    assert _after(hooks, 'iptables -I "$chain" 1 -i "$BR" -j "$target"', 'iptables -D "$chain" "$n"')
+    assert "$1 > 1" in hooks.split("ip6tables")[0]                             # never deletes the new one
+    v6 = EGRESS[EGRESS.index("for chain in FORWARD INPUT"):]
+    assert _after(v6, 'ip6tables -I "$chain" 1 -i "$BR" -j DROP', 'ip6tables -D "$chain" "$n"')
+
+
+def test_one_run_at_a_time():
+    assert "exec 9>/run/windygit-ci-egress.lock" in EGRESS and "flock -w 120 9 ||" in EGRESS
+    assert EGRESS.index("flock -w 120 9") < EGRESS.index("swap WG-CI-EGRESS <<EOF")
