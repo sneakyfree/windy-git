@@ -1,0 +1,13 @@
+[Unit]
+Description=Red-main alarm: a default-branch status red for more than 24 h gets ONE BOARD line, then daily (reads only)
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/srv/windygit/src
+EnvironmentFile=/etc/windygit/sync.env
+# windy-job: a heartbeat windy-uptime checks. The ALARM itself is the BOARD line red_main.py posts
+# (Boss 11-02); the heartbeat proves the check ran, so "red main: N red" is still ok here.
+ExecStart=/usr/local/bin/windy-job windygit-red-main 5h --expect "^red main: (none|[0-9]+ red > 24 h)" --owner 13 -- /usr/bin/python3 /srv/windygit/src/scripts/red_main.py
+TimeoutStartSec=900
+Nice=10
