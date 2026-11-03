@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import importlib.util
+import json
 import sys
 from pathlib import Path
 
@@ -331,3 +332,80 @@ def test_pr_pass_clears_a_status_this_head_already_carries(monkeypatch, tmp_path
     rg.cmd_pr(["sneakyfree"], post=True)
     posts = [c for c in calls if "context=windy-git/birth-terms" in c]
     assert len(posts) == 1 and "description=OK: no retired agent-birth words added" in posts[0]   # once
+
+
+def test_refused_status_post_is_not_recorded_and_retries(monkeypatch, tmp_path):
+    # 11-02: gh(check=False) swallowed a refused POST and the key was recorded as posted, so #123's
+    # runner-guard status never reached GitHub and no later pass retried it.
+    state, attempts, refuse = tmp_path / "s.json", [], [True]
+    monkeypatch.setattr(rg, "STATE", str(state))
+    monkeypatch.setattr(rg, "public_repos", lambda owners: [("o/r", "main")])
+    monkeypatch.setattr(rg, "file_at", lambda *a: "")
+
+    def fake_gh(*args, check=True):
+        if args[0].startswith("repos/o/r/pulls?"):
+            return "7 abc123 o/r\n"
+        if args[0].endswith("/files?per_page=100"):
+            return '{"f": "src/a.py", "p": "@@ -0,0 +1 @@\\n+x = 1"}\n'
+        attempts.append(args[0])
+        if refuse[0] and check:
+            raise rg.GhError("gh api repos/o/r/statuses/abc123 failed")
+        return ""
+    monkeypatch.setattr(rg, "gh", fake_gh)
+    assert rg.cmd_pr(["o"], post=True) == 0
+    assert len(attempts) == 1 and json.loads(state.read_text()) == []   # refused: nothing recorded
+    refuse[0] = False
+    assert rg.cmd_pr(["o"], post=True) == 0
+    assert len(attempts) == 2 and len(json.loads(state.read_text())) == 1  # retried, then recorded
+    assert rg.cmd_pr(["o"], post=True) == 0
+    assert len(attempts) == 2                                           # posted once: now silent
+
+
+def test_post_status_false_on_gh_failure_or_timeout(monkeypatch):
+    def boom(*a, check=True):
+        raise rg.GhError("x")
+    monkeypatch.setattr(rg, "gh", boom)
+    assert rg.post_status("o/r", "abc1234", "success", "ctx", "d") is False
+    monkeypatch.setattr(rg, "gh", lambda *a, check=True: "")
+    assert rg.post_status("o/r", "abc1234", "success", "ctx", "d") is True
+
+
+def test_refused_birth_terms_post_is_not_recorded_and_retries(monkeypatch, tmp_path):
+    state, attempts, refuse = tmp_path / "s.json", [], [True]
+    monkeypatch.setattr(rg, "STATE", str(state))
+    monkeypatch.setattr(rg, "public_repos", lambda owners: [("o/r", "main")])
+    monkeypatch.setattr(rg, "file_at", lambda *a: "")
+
+    def fake_gh(*args, check=True):
+        if args[0].startswith("repos/o/r/pulls?"):
+            return "7 abc123 o/r\n"
+        if args[0].endswith("/files?per_page=100"):
+            return '{"f": "docs/a.md", "p": "@@ -0,0 +1 @@\\n+see the hub"}\n'
+        ctx = [a for a in args if a.startswith("context=")]
+        attempts.append(ctx[0])
+        if refuse[0] and ctx == ["context=windy-git/birth-terms"]:
+            raise rg.GhError("gh api statuses failed")
+        return ""
+    monkeypatch.setattr(rg, "gh", fake_gh)
+    rg.cmd_pr(["o"], post=True)
+    assert [k for k in json.loads(state.read_text()) if "birth-terms" in k] == []   # refused: not recorded
+    refuse[0] = False
+    rg.cmd_pr(["o"], post=True)
+    assert [k for k in json.loads(state.read_text()) if "birth-terms" in k] != []   # retried, recorded
+    n = attempts.count("context=windy-git/birth-terms")
+    rg.cmd_pr(["o"], post=True)
+    assert attempts.count("context=windy-git/birth-terms") == n                      # now silent
+
+
+def test_post_status_false_on_timeout_or_oserror(monkeypatch):
+    import subprocess
+
+    def slow(*a, check=True):
+        raise subprocess.TimeoutExpired("gh", 60)
+    monkeypatch.setattr(rg, "gh", slow)
+    assert rg.post_status("o/r", "abc1234", "success", "ctx", "d") is False
+
+    def gone(*a, check=True):
+        raise FileNotFoundError("gh")
+    monkeypatch.setattr(rg, "gh", gone)
+    assert rg.post_status("o/r", "abc1234", "success", "ctx", "d") is False
