@@ -116,6 +116,19 @@ def gh(*args: str, check=True) -> str:
     return r.stdout
 
 
+def post_status(full: str, sha: str, state: str, ctx: str, desc: str) -> bool:
+    """POST one commit status. True only when GitHub accepted it (gh exit 0). A refusal (rate limit,
+    5xx, a deleted sha) returns False so the caller does NOT record it as posted and the next pass
+    retries; recording a refused post hid #123's runner-guard status for hours (11-02)."""
+    try:
+        gh(f"repos/{full}/statuses/{sha}", "-f", f"state={state}", "-f", f"context={ctx}",
+           "-f", f"description={desc}")
+    except (GhError, subprocess.SubprocessError, OSError):
+        print(f"{full}@{sha[:7]} {ctx}: GitHub refused the status post; will retry next pass")
+        return False
+    return True
+
+
 class Unreadable(Exception):
     """GitHub didn't give us the bytes: never judge a file we didn't read (Hub, #53 B1)."""
 
@@ -295,9 +308,7 @@ def cmd_pr(owners, post: bool) -> int:
             prev = any(k.startswith(f"{full}@{sha}:{BT_CTX}:") for k in posted)
             if (bt or nun or prev) and bkey not in posted:
                 print(f"{full}#{num}@{sha[:7]} {BT_CTX} {bstate} {bdesc}")
-                if post:
-                    gh(f"repos/{full}/statuses/{sha}", "-f", f"state={bstate}", "-f", f"context={BT_CTX}",
-                       "-f", f"description={bdesc}", check=False)
+                if post and post_status(full, sha, bstate, BT_CTX, bdesc):
                     posted.add(bkey)
             try:
                 found = [h for f in wf for h in lint_text(f, file_at(src, f, sha))]
@@ -316,9 +327,7 @@ def cmd_pr(owners, post: bool) -> int:
             if key in posted:
                 continue
             print(f"{full}#{num}@{sha[:7]} {state} {desc}")
-            if post:
-                gh(f"repos/{full}/statuses/{sha}", "-f", f"state={state}", "-f", f"context={CTX}",
-                   "-f", f"description={desc}", check=False)
+            if post and post_status(full, sha, state, CTX, desc):
                 posted.add(key)
     if post:  # keep only keys for PRs still open, so the file never grows without bound
         os.makedirs(os.path.dirname(STATE), exist_ok=True)
