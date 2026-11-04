@@ -1,0 +1,9 @@
+[Unit]
+Description=Sign-in guard every hour
+
+[Timer]
+OnCalendar=*-*-* *:23:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
