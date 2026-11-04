@@ -226,3 +226,73 @@ def test_an_unreadable_backfill_is_inexact_not_exact(monkeypatch):
     state: dict = {}
     due = rm.step(state, "r", SHA, [_st("ci/x", "failure", T0 - 30 * H)], T0, history=lambda repo, ctx: got)
     assert state["reds"]["r|ci/x"]["since"] == T0 - 30 * H and "since at least" in due[0][1]
+
+
+# --- the known-red exemption (Boss 11-04): windy-pro's account-server-on-Postgres suite -------------------------
+
+PG = "windy-git/account-server-pg/test-account-server-pg"
+
+
+def _utc(iso):
+    from datetime import datetime
+    return datetime.fromisoformat(iso).timestamp()
+
+
+def test_the_exemption_is_exactly_one_context_with_a_pinned_expiry():
+    """The name and the date are pinned: widening the list or moving the date must fail here and be read."""
+    assert rm.EXEMPT == {("windy-pro", PG): "2026-11-30"}
+    # the bridge builds this context from the workflow FILE name (account-server-pg.yml) and the job name
+    assert PG == "windy-git/" + "account-server-pg" + "/" + "test-account-server-pg"
+
+
+def test_the_exempt_red_never_alarms_while_the_exemption_lasts_including_its_last_day():
+    state: dict = {}
+    red = [_st(PG, "failure", _utc("2026-11-03T00:00:00+00:00"))]
+    for when in ("2026-11-05T12:00:00+00:00", "2026-11-20T00:00:00+00:00", "2026-11-30T23:59:00+00:00"):
+        assert rm.step(state, "windy-pro", SHA, red, _utc(when)) == []
+    assert state.get("reds", {}) == {} and rm.red_count(state, _utc("2026-11-30T23:59:00+00:00")) == 0
+
+
+def test_the_exempt_red_alarms_again_from_the_first_day_after_the_expiry():
+    state: dict = {}
+    red = [_st(PG, "failure", _utc("2026-11-03T00:00:00+00:00"))]
+    assert rm.step(state, "windy-pro", SHA, red, _utc("2026-11-30T23:59:00+00:00")) == []
+    due = rm.step(state, "windy-pro", SHA, red, _utc("2026-12-01T00:00:00+00:00"))
+    assert len(due) == 1 and PG in due[0][1] and "RED MAIN: windy-pro" in due[0][1]
+
+
+def test_every_other_windy_pro_context_still_alarms_beside_the_exempt_one():
+    state: dict = {}
+    now = _utc("2026-11-10T12:00:00+00:00")
+    old = _utc("2026-11-03T00:00:00+00:00")
+    statuses = [_st(PG, "failure", old), _st("windy-git/ci/gates", "failure", old),
+                _st("windy-git/ci/test-account-server", "failure", old)]
+    due = rm.step(state, "windy-pro", SHA, statuses, now)
+    assert sorted(k for k, _ in due) == ["windy-pro|windy-git/ci/gates", "windy-pro|windy-git/ci/test-account-server"]
+    assert rm.red_count(state, now) == 2
+
+
+def test_the_same_context_name_in_another_repo_is_not_exempt_and_nor_are_look_alike_names():
+    now = _utc("2026-11-10T12:00:00+00:00")
+    old = _utc("2026-11-03T00:00:00+00:00")
+    assert len(rm.step({}, "windy-pro-mobile", SHA, [_st(PG, "failure", old)], now)) == 1
+    for ctx in ("windy-git/ci/test-account-server-pg",            # the name it had in ci.yml: not the one that exists now
+                "windy-git/account-server-pg/test-account-server-pg-2", "windy-git/account-server-pg"):
+        assert len(rm.step({}, "windy-pro", SHA, [_st(ctx, "failure", old)], now)) == 1, ctx
+
+
+def test_main_stays_silent_about_the_exempt_red_and_counts_none(monkeypatch, tmp_path, capsys):
+    _fake(monkeypatch, tmp_path, 4000, [_st(PG, "failure", 1.0)])
+    monkeypatch.setattr(rm.b, "REPOS", ["windy-pro"])
+    monkeypatch.setattr(rm.b, "github", lambda m, p, body=None: (
+        (200, {"resources": {"core": {"remaining": 4000}}}) if p == "/rate_limit" else
+        (200, {"default_branch": "main"}) if p == "/repos/sneakyfree/windy-pro" else
+        (200, {"commit": {"sha": SHA}}) if p.endswith("/branches/main") else
+        (200, {"statuses": [_st(PG, "failure", 1.0)]}) if p.endswith(f"/commits/{SHA}/status?per_page=100") else (404, {})))
+    import time as _time
+    import types
+    monkeypatch.setattr(rm, "time", types.SimpleNamespace(
+        time=lambda: _utc("2026-11-10T12:00:00+00:00"), strftime=_time.strftime, gmtime=_time.gmtime))
+    posts = []
+    rm.main(post=lambda line: posts.append(line) or True)
+    assert posts == [] and capsys.readouterr().out.strip().splitlines()[-1] == "red main: none"

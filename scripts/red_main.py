@@ -62,6 +62,19 @@ NOTES = {("windytalk", "windy-git/secret-guard"):
          "Boss 11-02: likely header-only (publish-release.sh echoes the BEGIN/END lines around a key "
          "fetched at run time); fix = a secret-guard allow entry for that file (path + kind, with a reason)."}
 
+# A context that is KNOWN red by design is exempt, by exact repo + context name, until a date (Boss 11-04).
+# windy-pro's account-server-on-Postgres suite (.github/workflows/account-server-pg.yml) has 148 Postgres-only
+# failures that follow-up PRs fix one by one; Hub posts its fail count in its daily BOARD line instead. The
+# value is the LAST exempt day (UTC, inclusive); from the next day the alarm fires as for any other red. The
+# exemption ends sooner by removing this entry in the PR that makes the job required. Nothing else is exempt:
+# every other context in the same repo still alarms.
+EXEMPT = {("windy-pro", "windy-git/account-server-pg/test-account-server-pg"): "2026-11-30"}
+
+
+def exempt(repo: str, ctx: str, now: float) -> bool:
+    last = EXEMPT.get((repo, ctx))
+    return last is not None and now < _ts(last + "T00:00:00Z") + 86400
+
 
 def _ts(iso: str) -> float:
     return datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp()
@@ -84,6 +97,9 @@ def step(state: dict, repo: str, sha: str, statuses: list[dict], now: float,
     for ctx, s in sorted(newest_by_context(statuses).items()):
         key = f"{repo}|{ctx}"
         st = s.get("state")
+        if exempt(repo, ctx, now):
+            reds.pop(key, None)             # no clock while exempt: the first day after it starts one
+            continue
         if st == "success":
             reds.pop(key, None)
             continue
