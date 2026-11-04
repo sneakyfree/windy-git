@@ -25,7 +25,7 @@ import httpx
 from fastapi import Header, Request
 
 from api.app.config import Settings
-from api.app.ept import EptInvalid, looks_like_ept, verify_ept
+from api.app.ept import EptInvalid, looks_like_ept, parse_cutoff, refused_by_cutoff, verify_ept
 from api.app.errors import RepairPointer, passport_unresolvable
 from api.app.hub_jwt import HubTokenInvalid, verify_hub_token
 from api.app.telemetry import synthetic_headers
@@ -149,6 +149,30 @@ async def resolve_passport(settings: Settings, passport: str) -> tuple[str, tupl
     raise passport_unresolvable(passport, last_status)
 
 
+async def fetch_ept_cutoff(settings: Settings, passport: str) -> int | None:
+    """ept-cutoff.v1: the passport's `ept_valid_after` (Unix seconds) from the
+    public registry verify route, or None when it has no cutoff.
+
+    Same law as resolve_passport: 404/400 refuse, 429/5xx retry then REFUSE.
+    Never "no cutoff" because the lookup failed."""
+    url = f"{settings.eternitas_base_url}/api/v1/registry/verify/{passport}"
+    last_status = 0
+    for attempt in range(3):
+        async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=3.0)) as client:
+            try:
+                r = await client.get(url, headers=synthetic_headers())
+            except httpx.RequestError as exc:
+                last_status = 599
+                log.warning("eternitas registry unreachable (attempt %s): %s", attempt + 1, exc)
+                continue
+        last_status = r.status_code
+        if r.status_code == 200:
+            return parse_cutoff(r.json().get("ept_valid_after"))
+        if r.status_code in (400, 404):
+            break
+    raise passport_unresolvable(passport, last_status)
+
+
 async def get_caller(
     request: Request,
     authorization: str | None = Header(default=None),
@@ -226,6 +250,27 @@ async def get_caller(
                 machine_cause=f"eternitas status for {verified.passport} is {exc.status!r}, not active",
                 remediation_tool=None,
             ) from exc
+        # ept-cutoff.v1: an EPT issued before the passport's cutoff is refused,
+        # even though its signature and standing are fine.
+        try:
+            cutoff = await fetch_ept_cutoff(settings, verified.passport)
+        except EptInvalid as exc:
+            raise RepairPointer(
+                status_code=403,
+                code="passport_unresolvable",
+                speak="We couldn't confirm that helper's ID, so we didn't let it make changes.",
+                machine_cause=f"ept_valid_after unreadable for {verified.passport}: {exc}",
+                remediation_tool="windy_git.reissue_agent_token",
+                passport=verified.passport,
+            ) from exc
+        if refused_by_cutoff(verified, cutoff):
+            raise RepairPointer(
+                status_code=401,
+                code="ept_before_cutoff",
+                speak="That helper's ID is out of date. It needs a fresh one.",
+                machine_cause=f"EPT for {verified.passport} issued {verified.issued_at}, before ept_valid_after {cutoff}",
+                remediation_tool="windy_git.reissue_agent_token",
+            )
         if band.lower() == "untrusted":
             raise RepairPointer(
                 status_code=403,
