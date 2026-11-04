@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
-"""Offsite runner guard (Hub #121 condition, 11-02): Null 0's CI runners may only ever serve
-secret-free repos, and that must stay true AFTER registration, not just at it.
+"""Offsite runner guard (Hub #121 condition, 11-02): the CI runners on the house machines (Null 0:
+null0-*, Windy 0: w0-*) may only ever serve secret-free repos, and that must stay true AFTER
+registration, not just at it.
 
 Gitea hands every Actions secret of a repo (and of its owner, and instance-wide ones) to every job
 of that repo. register.sh refuses a repo with secrets, but a lane can add one later, and nothing
 would notice. Every 10 minutes (windygit-offsite-guard.timer, on Veron, as root), for every live
-offsite runner (name null0-*):
+offsite runner (name null0-* or w0-*):
   * it must be scoped to exactly ONE repo (repo_id > 0); a global or owner-wide one is a violation;
   * that repo must hold 0 Actions secrets at repo, owner and instance level;
-  * Null 0's egress unit must not be in a failed state (its filter or proof broke).
+  * the egress unit of each host that has runners must not be in a failed state (its filter broke).
 On ANY violation it cuts the offsite runners off at once, fail closed:
-  1. ssh Null 0: `docker compose -p windy-git-runner-offsite stop runner-1 runner-2` (reversible);
-  2. if that fails, soft-delete the null0-* runner rows in Gitea, so they can't fetch jobs (they must
+  1. ssh each host that has runners and stop them (reversible). Null 0:
+     `docker compose -p windy-git-runner-offsite stop runner-1 runner-2 runner-3`; Windy 0: stop the
+     user units act-runner@*.service of the windygit-ci user;
+  2. if a stop fails, soft-delete the null0-*/w0-* runner rows in Gitea, so they can't fetch jobs (they must
      then be re-registered through register.sh, which re-checks the secrets).
 One BOARD line per new violation set (state file), never a repeat every pass. Output for windy-job
 --expect: "offsite guard: ok (...)" or "offsite guard: CUT OFF (...)" (no match -> alert).
@@ -32,8 +35,18 @@ import cancel_superseded as cs  # noqa: E402  (psql + the BOARD line)
 
 STATE = Path(os.environ.get("OFFSITE_GUARD_STATE", "/var/lib/windygit/offsite-guard.json"))
 NULL0 = os.environ.get("NULL0_SSH", "eth-null0")
+WINDY0 = os.environ.get("WINDY0_SSH", "eth-windy0")
 LANE_USER = os.environ.get("BOARD_USER", "user1-gpu")
 PROJECT = "windy-git-runner-offsite"
+# runner-name prefix -> (ssh target, egress unit, stop command). Windy 0 stops only the runner units
+# of the windygit-ci user (uid 1002): nothing else on that host is touched.
+HOSTS = {
+    "null0-": (NULL0, "windygit-ci-egress-offsite.service",
+               f"sudo -n docker compose -p {PROJECT} stop runner-1 runner-2 runner-3", "Null 0"),
+    "w0-": (WINDY0, "windygit-ci-egress.service",
+            "sudo -n -u windygit-ci env XDG_RUNTIME_DIR=/run/user/1002 systemctl --user stop 'act-runner@*.service'",
+            "Windy 0"),
+}
 
 RUNNERS_SQL = """
 select r.id, r.name, r.owner_id, r.repo_id, coalesce(p.name, ''),
@@ -41,7 +54,7 @@ select r.id, r.name, r.owner_id, r.repo_id, coalesce(p.name, ''),
      or (s.repo_id = 0 and s.owner_id = coalesce(p.owner_id, r.owner_id) and s.owner_id > 0)
      or (s.owner_id = 0 and s.repo_id = 0))
 from action_runner r left join repository p on p.id = r.repo_id
-where coalesce(r.deleted, 0) = 0 and r.name like 'null0-%'
+where coalesce(r.deleted, 0) = 0 and (r.name like 'null0-%' or r.name like 'w0-%')
 order by r.id;
 """
 
@@ -57,15 +70,21 @@ def violations(rows: list[list[str]]) -> list[str]:
     return out
 
 
-def ssh(cmd: str, run=subprocess.run) -> subprocess.CompletedProcess:
+def ssh(cmd: str, run=subprocess.run, host: str = NULL0) -> subprocess.CompletedProcess:
     return run(["runuser", "-u", LANE_USER, "--", "timeout", "40", "ssh", "-o", "BatchMode=yes",
-                "-o", "ConnectTimeout=8", NULL0, cmd], capture_output=True, text=True, timeout=60)
+                "-o", "ConnectTimeout=8", host, cmd], capture_output=True, text=True, timeout=60)
 
 
-def egress_failed(run=subprocess.run) -> bool | None:
-    """True if Null 0's egress unit is in a failed state; None if Null 0 can't be asked."""
+def families(rows: list[list[str]]) -> list[str]:
+    """The HOSTS prefixes that have at least one live runner row."""
+    return [p for p in HOSTS if any(r[1].startswith(p) for r in rows)]
+
+
+def egress_failed(run=subprocess.run, prefix: str = "null0-") -> bool | None:
+    """True if that host's egress unit is in a failed state; None if the host can't be asked."""
+    host, unit, _stop, _label = HOSTS[prefix]
     try:
-        r = ssh("systemctl is-failed windygit-ci-egress-offsite.service", run)
+        r = ssh(f"systemctl is-failed {unit}", run, host)
     except (subprocess.SubprocessError, OSError):
         return None
     if r.returncode == 255:
@@ -73,17 +92,21 @@ def egress_failed(run=subprocess.run) -> bool | None:
     return r.stdout.strip() == "failed"
 
 
-def stop_runners(run=subprocess.run) -> bool:
-    try:
-        r = ssh(f"sudo -n docker compose -p {PROJECT} stop runner-1 runner-2", run)
-        return r.returncode == 0
-    except (subprocess.SubprocessError, OSError):
-        return False
+def stop_runners(run=subprocess.run, prefixes: list[str] | None = None) -> bool:
+    """Stop the runners on every host in `prefixes` (default: all). True only if EVERY stop worked."""
+    ok = True
+    for prefix in (prefixes if prefixes is not None else list(HOSTS)):
+        host, _unit, stop, _label = HOSTS[prefix]
+        try:
+            ok = ssh(stop, run, host).returncode == 0 and ok
+        except (subprocess.SubprocessError, OSError):
+            ok = False
+    return ok
 
 
 def soft_delete(query) -> list[str]:
     rows = query("update action_runner set deleted = extract(epoch from now())::bigint "
-                 "where coalesce(deleted, 0) = 0 and name like 'null0-%' returning id, name;")
+                 "where coalesce(deleted, 0) = 0 and (name like 'null0-%' or name like 'w0-%') returning id, name;")
     return [f"{r[1]} (id {r[0]})" for r in rows]
 
 
@@ -105,13 +128,15 @@ def save_state(s: dict) -> None:
 def main(query=cs.psql, run=subprocess.run, post=cs.board) -> int:
     rows = query(RUNNERS_SQL)
     bad = violations(rows)
-    if rows and egress_failed(run) is True:
-        bad.append("Null 0's egress unit (windygit-ci-egress-offsite) is FAILED")
+    fams = families(rows)
+    for prefix in fams:
+        if egress_failed(run, prefix) is True:
+            bad.append(f"{HOSTS[prefix][3]}'s egress unit ({HOSTS[prefix][1].removesuffix('.service')}) is FAILED")
     if not bad:
         save_state({})
         print(f"offsite guard: ok ({len(rows)} offsite runner(s), each repo-scoped and secret-free)")
         return 0
-    how = "stopped on Null 0" if stop_runners(run) else ""
+    how = ("stopped on " + " and ".join(HOSTS[p][3] for p in fams)) if stop_runners(run, fams) else ""
     if not how:
         gone = soft_delete(query)
         how = f"ssh stop FAILED; soft-deleted in Gitea: {', '.join(gone) or 'none left'}"

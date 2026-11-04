@@ -66,7 +66,7 @@ def test_the_query_counts_repo_owner_and_instance_secrets():
     assert "(r.repo_id > 0 and s.repo_id = r.repo_id)" in sql
     assert "(s.repo_id = 0 and s.owner_id = coalesce(p.owner_id, r.owner_id) and s.owner_id > 0)" in sql
     assert "(s.owner_id = 0 and s.repo_id = 0)" in sql
-    assert "coalesce(r.deleted, 0) = 0 and r.name like 'null0-%'" in sql
+    assert "coalesce(r.deleted, 0) = 0 and (r.name like 'null0-%' or r.name like 'w0-%')" in sql
 
 
 def test_all_clean_is_ok_and_touches_nothing(state, capsys):
@@ -83,7 +83,7 @@ def test_a_new_secret_stops_the_runners_and_posts_once(state, capsys):
     assert g.main(q, run, lambda line: posts.append(line) or True) == 0
     out = capsys.readouterr().out
     assert out.startswith("offsite guard: CUT OFF (") and "stopped on Null 0" in out
-    assert any("docker compose -p windy-git-runner-offsite stop runner-1 runner-2" in c for c in run.calls)
+    assert any("docker compose -p windy-git-runner-offsite stop runner-1 runner-2 runner-3" in c for c in run.calls)
     assert not any(s.lstrip().startswith("update") for s in q.seen)      # ssh worked: no soft-delete
     assert len(posts) == 1 and "windy-chat, which now sees 1 Actions secret(s)" in posts[0]
     assert g.main(q, run, lambda line: posts.append(line) or True) == 0  # same violation: no 2nd line
@@ -94,7 +94,7 @@ def test_ssh_failure_falls_back_to_soft_delete_in_gitea(state, capsys):
     run, posts = Run(**{"is-failed": (255, ""), "stop": (255, "")}), []
     q = db([["23", "null0-1", "1", "0", "", "0"]])
     assert g.main(q, run, lambda line: posts.append(line) or True) == 0
-    assert any(s.lstrip().startswith("update action_runner set deleted") and "name like 'null0-%'" in s for s in q.seen)
+    assert any(s.lstrip().startswith("update action_runner set deleted") and "name like 'null0-%'" in s and "name like 'w0-%'" in s for s in q.seen)
     out = capsys.readouterr().out
     assert "ssh stop FAILED; soft-deleted in Gitea: null0-1 (id 23)" in out and "CUT OFF" in out
 
@@ -125,3 +125,69 @@ def test_unit_expects_ok_and_the_timer_is_at_least_hourly():
     assert '--expect "^offsite guard: ok [(]"' in unit and "--owner 13" in unit
     timer = (ROOT / "deploy" / "systemd" / "windygit-offsite-guard.timer").read_text()
     assert "OnUnitActiveSec=10min" in timer
+
+
+W1 = ["31", "w0-1", "1", "50", "windy-text", "0"]
+W2 = ["32", "w0-2", "1", "51", "windy-connect", "0"]
+
+
+def test_windy0_runners_are_checked_with_the_same_rules():
+    assert g.violations([W1, W2]) == []
+    assert g.violations([["33", "w0-1", "1", "50", "windy-text", "2"]]) == [
+        "w0-1 (id 33) serves windy-text, which now sees 2 Actions secret(s)"]
+    assert g.violations([["34", "w0-2", "1", "0", "", "0"]]) == ["w0-2 (id 34) is not scoped to one repo"]
+
+
+def test_null0_stop_includes_runner_3():
+    """null0-3 (windy-mind) was missing from the stop list: a secret there left it running."""
+    assert "stop runner-1 runner-2 runner-3" in g.HOSTS["null0-"][2]
+
+
+def test_a_secret_on_a_windy0_runner_stops_only_windy0_units(state, capsys):
+    run, posts = Run(**{"is-failed": (1, "active\n")}), []
+    bad = ["32", "w0-2", "1", "51", "windy-connect", "1"]
+    assert g.main(db([OK1, W1, bad]), run, lambda line: posts.append(line) or True) == 0
+    assert "stopped on Null 0 and Windy 0" in capsys.readouterr().out
+    assert any("systemctl --user stop 'act-runner@*.service'" in c for c in run.calls)
+
+
+def test_only_windy0_rows_never_ssh_null0(state, capsys):
+    hosts = []
+
+    def run(argv, **_):
+        hosts.append(argv[argv.index("ConnectTimeout=8") + 1])
+        return type("R", (), {"returncode": 0, "stdout": "active\n"})()
+
+    bad = ["32", "w0-2", "1", "51", "windy-connect", "1"]
+    assert g.main(db([W1, bad]), run, lambda line: True) == 0
+    assert set(hosts) == {g.WINDY0}
+    assert "stopped on Windy 0" in capsys.readouterr().out
+
+
+def test_a_failed_egress_unit_on_windy0_cuts_off(state, capsys):
+    run = Run(**{"windygit-ci-egress.service": (0, "failed\n")})
+    assert g.main(db([W1, W2]), run, lambda line: True) == 0
+    out = capsys.readouterr().out
+    assert "CUT OFF" in out and "Windy 0's egress unit (windygit-ci-egress) is FAILED" in out
+
+
+def test_windy0_stop_failure_falls_back_to_soft_delete(state, capsys):
+    run = Run(**{"is-failed": (1, "active\n"), "systemctl --user stop": (1, "")})
+    bad = ["32", "w0-2", "1", "51", "windy-connect", "1"]
+    q = db([W1, bad])
+    assert g.main(q, run, lambda line: True) == 0
+    assert any(s.lstrip().startswith("update action_runner set deleted") for s in q.seen)
+    assert "ssh stop FAILED" in capsys.readouterr().out
+
+
+def test_an_ssh_that_raises_counts_as_a_failed_stop(state, capsys):
+    def run(argv, **_):
+        if "systemctl --user stop" in argv[-1]:
+            raise OSError("ssh vanished")
+        return type("R", (), {"returncode": 0, "stdout": "active\n"})()
+
+    bad = ["32", "w0-2", "1", "51", "windy-connect", "1"]
+    q = db([W1, bad])
+    assert g.main(q, run, lambda line: True) == 0
+    assert any(s.lstrip().startswith("update action_runner set deleted") for s in q.seen)
+    assert "ssh stop FAILED" in capsys.readouterr().out
