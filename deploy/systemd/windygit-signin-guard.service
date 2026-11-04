@@ -1,0 +1,11 @@
+[Unit]
+Description=Sign-in guard: registration, password form, passkeys, OIDC auto-registration stay OFF and `windy` stays the only active login source (reads only)
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/srv/windygit/src
+# windy-job: a heartbeat windy-uptime checks. Anything but "signin guard: ok" (DRIFT, UNREADABLE) is a failed run.
+ExecStart=/usr/local/bin/windy-job windygit-signin-guard 3h --expect "^signin guard: ok " --owner 13 -- /usr/bin/python3 /srv/windygit/src/scripts/signin_guard.py
+TimeoutStartSec=300
+Nice=10

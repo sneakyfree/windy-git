@@ -91,6 +91,10 @@ services:
       # Asking the user to re-verify an address their identity provider already
       # verified is friction that buys nothing.
       GITEA__oauth2_client__UPDATE_AVATAR: "false"
+      # OpenID 1.x is a SEPARATE sign-in door from the OAuth2 one above (Hub, 11-04), and Gitea defaults
+      # ENABLE_OPENID_SIGNIN to true. Off, and pinned by api/tests/test_signin_pins.py + scripts/signin_guard.py.
+      GITEA__openid__ENABLE_OPENID_SIGNIN: "false"
+      GITEA__openid__ENABLE_OPENID_SIGNUP: "false"
       GITEA__service__REGISTER_EMAIL_CONFIRM: "false"
       # G4.3 — heavy bytes to R2 at ZERO egress. Git object databases stay on
       # local NVMe (I-3); this covers LFS, attachments, packages, avatars and
