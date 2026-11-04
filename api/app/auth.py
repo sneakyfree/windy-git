@@ -106,6 +106,39 @@ def decide_trust(body: dict, passport: str) -> tuple[str, tuple[str, ...]]:
     return body.get("band", "unproven"), tuple(body.get("allowed_actions", ()))
 
 
+async def fetch_ept_cutoff(settings: Settings, passport: str) -> int | None:
+    """ept-cutoff.v1: the passport's `ept_valid_after` (Unix seconds) from the
+    public registry verify route, or None when it has no cutoff.
+
+    Same law as resolve_passport: 404/400 refuse, 429/5xx retry then REFUSE.
+    Never "no cutoff" because the lookup failed."""
+    url = f"{settings.eternitas_base_url}/api/v1/registry/verify/{quote(passport, safe='')}"
+    # The platform key keeps this call in Eternitas's platform rate tier; without
+    # it every agent request spends the shared per-IP public bucket (100/window).
+    headers = {"X-API-Key": settings.eternitas_platform_api_key, **synthetic_headers()}
+    last_status = 0
+    for attempt in range(3):
+        async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=3.0)) as client:
+            try:
+                r = await client.get(url, headers=headers)
+            except httpx.RequestError as exc:
+                last_status = 599
+                log.warning("eternitas registry unreachable (attempt %s): %s", attempt + 1, exc)
+                continue
+        last_status = r.status_code
+        if r.status_code == 200:
+            try:
+                body = r.json()
+            except ValueError as exc:
+                raise EptInvalid("registry verify body is not JSON") from exc
+            if not isinstance(body, dict):
+                raise EptInvalid("registry verify body is not an object")
+            return parse_cutoff(body.get("ept_valid_after"))
+        if r.status_code in (400, 404):
+            break
+    raise passport_unresolvable(passport, last_status)
+
+
 async def resolve_passport(settings: Settings, passport: str) -> tuple[str, tuple[str, ...]]:
     """G3.6 — THE STATUS-CODE LAW.
 
@@ -147,39 +180,6 @@ async def resolve_passport(settings: Settings, passport: str) -> tuple[str, tupl
             # and pretending it might is how a soft-allow gets written.
             break
         # 429 / 5xx: retry, then refuse. Never allow.
-    raise passport_unresolvable(passport, last_status)
-
-
-async def fetch_ept_cutoff(settings: Settings, passport: str) -> int | None:
-    """ept-cutoff.v1: the passport's `ept_valid_after` (Unix seconds) from the
-    public registry verify route, or None when it has no cutoff.
-
-    Same law as resolve_passport: 404/400 refuse, 429/5xx retry then REFUSE.
-    Never "no cutoff" because the lookup failed."""
-    url = f"{settings.eternitas_base_url}/api/v1/registry/verify/{quote(passport, safe='')}"
-    # The platform key keeps this call in Eternitas's platform rate tier; without
-    # it every agent request spends the shared per-IP public bucket (100/window).
-    headers = {"X-API-Key": settings.eternitas_platform_api_key, **synthetic_headers()}
-    last_status = 0
-    for attempt in range(3):
-        async with httpx.AsyncClient(timeout=httpx.Timeout(8.0, connect=3.0)) as client:
-            try:
-                r = await client.get(url, headers=headers)
-            except httpx.RequestError as exc:
-                last_status = 599
-                log.warning("eternitas registry unreachable (attempt %s): %s", attempt + 1, exc)
-                continue
-        last_status = r.status_code
-        if r.status_code == 200:
-            try:
-                body = r.json()
-            except ValueError as exc:
-                raise EptInvalid("registry verify body is not JSON") from exc
-            if not isinstance(body, dict):
-                raise EptInvalid("registry verify body is not an object")
-            return parse_cutoff(body.get("ept_valid_after"))
-        if r.status_code in (400, 404):
-            break
     raise passport_unresolvable(passport, last_status)
 
 
