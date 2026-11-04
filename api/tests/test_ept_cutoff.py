@@ -31,6 +31,8 @@ def test_parse_cutoff_forms():
     assert parse_cutoff("") is None
     assert parse_cutoff("2026-11-05T12:00:00Z") == 1793880000
     assert parse_cutoff("2026-11-05T12:00:00+00:00") == 1793880000
+    # a fractional cutoff rounds UP, as the Eternitas SDK does
+    assert parse_cutoff("2026-11-05T12:00:00.250Z") == 1793880001
 
 
 @pytest.mark.parametrize("bad", ["yesterday", 12345, ["x"]])
@@ -43,6 +45,12 @@ def test_cutoff_boundary_equal_is_valid_before_is_refused():
     assert refused_by_cutoff(_ept(99), 100) is True
     assert refused_by_cutoff(_ept(100), 100) is False
     assert refused_by_cutoff(_ept(101), 100) is False
+
+
+def test_non_integer_iat_is_refused_when_a_cutoff_exists():
+    assert refused_by_cutoff(_ept("9999999999"), 100) is True
+    assert refused_by_cutoff(_ept(True), 100) is True
+    assert refused_by_cutoff(_ept("9999999999"), None) is False
 
 
 def test_missing_iat_is_before_the_cutoff_and_no_cutoff_never_refuses():
@@ -71,13 +79,15 @@ def world(monkeypatch):
     monkeypatch.setattr(ept_mod, "_jwks_client", None)
     monkeypatch.setattr(ept_mod, "PyJWKClient", _JC)
 
-    state = {"registry": (200, {"ept_valid_after": None})}
+    state = {"registry": (200, {"ept_valid_after": None}), "calls": []}
 
     class _Resp:
         def __init__(self, status, body):
             self.status_code, self._b = status, body
 
         def json(self):
+            if isinstance(self._b, Exception):
+                raise self._b
             return self._b
 
     class _Client:
@@ -92,6 +102,7 @@ def world(monkeypatch):
 
         async def get(self, url, **k):
             if "/registry/verify/" in url:
+                state["calls"].append((url, k.get("headers") or {}))
                 return _Resp(*state["registry"])
             return _Resp(200, {"status": "active", "band": "gold", "allowed_actions": ["read"]})
 
@@ -136,6 +147,23 @@ async def test_ept_issued_at_or_after_the_cutoff_is_accepted(world):
 @pytest.mark.parametrize("registry", [(404, {}), (503, {}), (200, {"ept_valid_after": "garbage"})])
 async def test_a_cutoff_we_cannot_read_refuses(world, registry):
     world.state["registry"] = registry
+    with pytest.raises(RepairPointer) as exc:
+        await world.call(int(time.time()) - 5)
+    assert exc.value.status_code == 403 and exc.value.code == "passport_unresolvable"
+
+
+@pytest.mark.asyncio
+async def test_registry_call_carries_the_platform_key_and_a_quoted_passport(world):
+    await world.call(int(time.time()) - 5)
+    url, headers = world.state["calls"][0]
+    assert headers.get("X-API-Key") == "x"  # platform tier, not the shared public IP bucket
+    assert url.endswith("/api/v1/registry/verify/" + PASSPORT)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", [ValueError("not json"), ["a list"], "text"])
+async def test_a_registry_body_that_is_not_a_json_object_refuses_403(world, body):
+    world.state["registry"] = (200, body)
     with pytest.raises(RepairPointer) as exc:
         await world.call(int(time.time()) - 5)
     assert exc.value.status_code == 403 and exc.value.code == "passport_unresolvable"

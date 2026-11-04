@@ -27,6 +27,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import math
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -174,7 +175,8 @@ def parse_cutoff(value: object) -> int | None:
         raise EptInvalid(f"unreadable ept_valid_after: {value!r}") from exc
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=UTC)
-    return int(dt.timestamp())
+    # The Eternitas SDK rounds a fractional cutoff UP; match it exactly.
+    return math.ceil(dt.timestamp())
 
 
 def refused_by_cutoff(ept: VerifiedEpt, valid_after: int | None) -> bool:
@@ -182,4 +184,7 @@ def refused_by_cutoff(ept: VerifiedEpt, valid_after: int | None) -> bool:
     `iat` counts as before the cutoff when the passport has one."""
     if valid_after is None:
         return False
-    return ept.issued_at is None or ept.issued_at < valid_after
+    iat = ept.issued_at
+    if isinstance(iat, bool) or not isinstance(iat, int):
+        return True  # missing or non-integer iat cannot prove it is after T
+    return iat < valid_after
