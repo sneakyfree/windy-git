@@ -11,11 +11,16 @@ offsite runner (name null0-* or w0-*):
   * that repo must hold 0 Actions secrets at repo, owner and instance level;
   * the egress unit of each host that has runners must not be in a failed state (its filter broke).
 On ANY violation it cuts the offsite runners off at once, fail closed:
-  1. ssh each host that has runners and stop them (reversible). Null 0:
+  1. ssh each host that has runners and stop them (reversible), then READ BACK that none runs;
+     a stop that matched nothing, or fewer runners than there are live rows, is a failed stop. Null 0:
      `docker compose -p windy-git-runner-offsite stop runner-1 runner-2 runner-3`; Windy 0: stop the
      user units act-runner@*.service of the windygit-ci user;
   2. if a stop fails, soft-delete the null0-*/w0-* runner rows in Gitea, so they can't fetch jobs (they must
      then be re-registered through register.sh, which re-checks the secrets).
+A host whose egress unit cannot be read prints "offsite guard: UNKNOWN" (the heartbeat alerts) and
+becomes a violation after 3 passes in a row. Runner names: null0-N is fixed by the compose file and
+register.sh; w0-N is set only by the Windy 0 registration (a follow-up PR adds its script); a row named
+anything else is not watched by this guard.
 One BOARD line per new violation set (state file), never a repeat every pass. Output for windy-job
 --expect: "offsite guard: ok (...)" or "offsite guard: CUT OFF (...)" (no match -> alert).
 
@@ -38,15 +43,22 @@ NULL0 = os.environ.get("NULL0_SSH", "eth-null0")
 WINDY0 = os.environ.get("WINDY0_SSH", "eth-windy0")
 LANE_USER = os.environ.get("BOARD_USER", "user1-gpu")
 PROJECT = "windy-git-runner-offsite"
-# runner-name prefix -> (ssh target, egress unit, stop command). Windy 0 stops only the runner units
-# of the windygit-ci user (uid 1002): nothing else on that host is touched.
+# runner-name prefix -> (ssh target, egress unit, stop command, label). Every stop command prints
+# "<running before> <running after>" as its last line, so a stop that matched NOTHING (a glob with no
+# loaded unit exits 0) cannot pass for a stop (Hub #133 MED-1). Windy 0 stops only the runner units of
+# the windygit-ci user: nothing else on that host is touched; the uid is resolved on the host.
+N0_COUNT = "sudo -n docker ps --filter 'name=offsite-runner-[0-9]' --format x | wc -l"
+W0_USER = "n() { sudo -n -u windygit-ci env XDG_RUNTIME_DIR=/run/user/$(id -u windygit-ci) systemctl --user \"$@\"; }"
+W0_COUNT = "n list-units 'act-runner@*' --state=active --no-legend | wc -l"
 HOSTS = {
     "null0-": (NULL0, "windygit-ci-egress-offsite.service",
-               f"sudo -n docker compose -p {PROJECT} stop runner-1 runner-2 runner-3", "Null 0"),
+               f"b=$({N0_COUNT}); sudo -n docker compose -p {PROJECT} stop runner-1 runner-2 runner-3 >/dev/null 2>&1; "
+               f"a=$({N0_COUNT}); echo \"$b $a\"", "Null 0"),
     "w0-": (WINDY0, "windygit-ci-egress.service",
-            "sudo -n -u windygit-ci env XDG_RUNTIME_DIR=/run/user/1002 systemctl --user stop 'act-runner@*.service'",
+            f"{W0_USER}; b=$({W0_COUNT}); n stop 'act-runner@*.service' >/dev/null 2>&1; a=$({W0_COUNT}); echo \"$b $a\"",
             "Windy 0"),
 }
+UNKNOWN_LIMIT = 3  # passes (10 min apart) a host's egress unit may be unreadable before that is a violation
 
 RUNNERS_SQL = """
 select r.id, r.name, r.owner_id, r.repo_id, coalesce(p.name, ''),
@@ -62,7 +74,11 @@ order by r.id;
 def violations(rows: list[list[str]]) -> list[str]:
     """Pure: one reason per bad runner row (id, name, owner_id, repo_id, repo, secrets)."""
     out = []
-    for rid, name, _owner, repo_id, repo, secrets in (r[:6] for r in rows):
+    for row in rows:
+        if len(row) != 6:  # a '|' in a runner name shifts the columns: never read such a row as clean
+            out.append(f"runner row with {len(row)} fields instead of 6 (a '|' in a name?): {'|'.join(row)[:60]!r}")
+            continue
+        rid, name, _owner, repo_id, repo, secrets = row
         if not repo_id.isdigit() or int(repo_id) <= 0:
             out.append(f"{name} (id {rid}) is not scoped to one repo")
         elif not secrets.isdigit() or int(secrets) > 0:
@@ -77,28 +93,47 @@ def ssh(cmd: str, run=subprocess.run, host: str = NULL0) -> subprocess.Completed
 
 def families(rows: list[list[str]]) -> list[str]:
     """The HOSTS prefixes that have at least one live runner row."""
-    return [p for p in HOSTS if any(r[1].startswith(p) for r in rows)]
+    return [p for p in HOSTS if any(len(r) > 1 and r[1].startswith(p) for r in rows)]
 
 
 def egress_failed(run=subprocess.run, prefix: str = "null0-") -> bool | None:
-    """True if that host's egress unit is in a failed state; None if the host can't be asked."""
+    """True if that host's egress unit is missing or failed; False if loaded and healthy; None if the
+    host can't be asked (ssh down, timeout, any rc other than 0). An unit that is not installed reads
+    LoadState=not-found, which is a violation, not a healthy 'inactive' (Hub #133 MED-2)."""
     host, unit, _stop, _label = HOSTS[prefix]
     try:
-        r = ssh(f"systemctl is-failed {unit}", run, host)
+        r = ssh(f"systemctl show -p LoadState -p ActiveState -p Result {unit}", run, host)
     except (subprocess.SubprocessError, OSError):
         return None
-    if r.returncode == 255:
+    if r.returncode != 0:
         return None
-    return r.stdout.strip() == "failed"
+    kv = dict(line.split("=", 1) for line in r.stdout.splitlines() if "=" in line)
+    if kv.get("LoadState") != "loaded":
+        return True
+    return kv.get("ActiveState") not in ("active", "inactive", "activating", "reloading") or kv.get("Result") != "success"
 
 
-def stop_runners(run=subprocess.run, prefixes: list[str] | None = None) -> bool:
-    """Stop the runners on every host in `prefixes` (default: all). True only if EVERY stop worked."""
+def stopped(r, expected: int) -> bool:
+    """A stop counts only if it exited 0 AND the read-back shows >= `expected` runners were running
+    before and none after."""
+    if r.returncode != 0:
+        return False
+    try:
+        before, after = (int(x) for x in r.stdout.split()[-2:])
+    except ValueError:
+        return False
+    return after == 0 and before >= expected
+
+
+def stop_runners(run=subprocess.run, prefixes: list[str] | None = None, rows: list[list[str]] | None = None) -> bool:
+    """Stop the runners on every host in `prefixes` (default: all). True only if EVERY stop was
+    read back as done."""
     ok = True
     for prefix in (prefixes if prefixes is not None else list(HOSTS)):
         host, _unit, stop, _label = HOSTS[prefix]
+        expected = sum(1 for r in (rows or []) if len(r) > 1 and r[1].startswith(prefix))
         try:
-            ok = ssh(stop, run, host).returncode == 0 and ok
+            ok = stopped(ssh(stop, run, host), expected) and ok
         except (subprocess.SubprocessError, OSError):
             ok = False
     return ok
@@ -129,22 +164,36 @@ def main(query=cs.psql, run=subprocess.run, post=cs.board) -> int:
     rows = query(RUNNERS_SQL)
     bad = violations(rows)
     fams = families(rows)
+    state = load_state()
+    unk = dict(state.get("unknown", {}))
     for prefix in fams:
-        if egress_failed(run, prefix) is True:
-            bad.append(f"{HOSTS[prefix][3]}'s egress unit ({HOSTS[prefix][1].removesuffix('.service')}) is FAILED")
+        failed = egress_failed(run, prefix)
+        if failed is True:
+            bad.append(f"{HOSTS[prefix][3]}'s egress unit ({HOSTS[prefix][1].removesuffix('.service')}) is "
+                       "missing or FAILED")
+        elif failed is None:
+            unk[prefix] = unk.get(prefix, 0) + 1
+            if unk[prefix] >= UNKNOWN_LIMIT:
+                bad.append(f"{HOSTS[prefix][3]}'s egress unit could not be read for {unk[prefix]} passes in a row")
+        else:
+            unk.pop(prefix, None)
+    unknown_now = [HOSTS[p][3] for p in fams if p in unk]
     if not bad:
-        save_state({})
+        save_state({"unknown": unk} if unk else {})
+        if unknown_now:  # not "ok": the heartbeat alerts, but nothing is cut on one blip
+            print(f"offsite guard: UNKNOWN ({', '.join(unknown_now)} unreadable, {len(rows)} runner(s) otherwise clean)")
+            return 0
         print(f"offsite guard: ok ({len(rows)} offsite runner(s), each repo-scoped and secret-free)")
         return 0
-    how = ("stopped on " + " and ".join(HOSTS[p][3] for p in fams)) if stop_runners(run, fams) else ""
+    how = ("stopped on " + " and ".join(HOSTS[p][3] for p in fams)) if stop_runners(run, fams, rows) else ""
     if not how:
         gone = soft_delete(query)
         how = f"ssh stop FAILED; soft-deleted in Gitea: {', '.join(gone) or 'none left'}"
     key = sorted(bad)
     line = ("[Windy Git] OFFSITE RUNNERS CUT OFF (offsite guard, Hub #121): " + "; ".join(key)
             + f". Action: {how}. Back only after the cause is gone and Hub reads it.")
-    if load_state().get("posted") != key and post(line):
-        save_state({"posted": key})
+    if state.get("posted") != key and post(line):
+        save_state({"posted": key, "unknown": unk})
     print(f"offsite guard: CUT OFF ({'; '.join(key)}; {how})")
     return 0
 
