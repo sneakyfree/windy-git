@@ -28,10 +28,12 @@ services:
     networks: [jobs]
     volumes:
       - dind-storage:/var/lib/docker
-    # Null 0 is a 4-core/8-thread laptop with 11 GB: two jobs at 2 CPUs / 4 GB each, plus dind
-    # itself, leaves ~4 threads and ~3 GB for the machine's own work.
+    # Null 0 is a 4-core/8-thread laptop with 11 GB. Boss 11-04 (third runner): the machine keeps >= 4 GB
+    # free while jobs run, so dind (= every job together) is capped at 7g; each job is still capped at
+    # 2 CPUs / 4 GB, so three big jobs at once squeeze each other INSIDE dind (an OOM kill there ends one
+    # job, never the host).
     cpus: 4.0
-    mem_limit: 9g
+    mem_limit: 7g
     restart: unless-stopped
 
   runner-1: &runner
@@ -65,6 +67,20 @@ services:
       - ./config.yaml:/config.yaml:ro
       - runner-data-2:/data
 
+  # runner-3 (Boss GO 11-04, B'): repo-scoped to windy-mind (0 Actions secrets, generic labels), to take
+  # its CI off Veron's runners. Same isolation as runner-1/2; register.sh refuses a repo with secrets.
+  runner-3:
+    <<: *runner
+    environment:
+      DOCKER_HOST: tcp://dind:2375
+      GITEA_INSTANCE_URL: https://app.windygit.com
+      GITEA_RUNNER_REGISTRATION_TOKEN: ${RUNNER_3_TOKEN:-}
+      GITEA_RUNNER_NAME: null0-3
+      CONFIG_FILE: /config.yaml
+    volumes:
+      - ./config.yaml:/config.yaml:ro
+      - runner-data-3:/data
+
 networks:
   jobs:
     internal: false   # jobs legitimately fetch dependencies; egress.sh keeps them off private ranges
@@ -73,3 +89,4 @@ volumes:
   dind-storage:
   runner-data-1:
   runner-data-2:
+  runner-data-3:
