@@ -27,8 +27,10 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import math
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 import httpx
 import jwt
@@ -155,3 +157,34 @@ async def eternitas_reachable(base_url: str) -> bool:
 
 def seconds_until_expiry(ept: VerifiedEpt) -> int | None:
     return None if ept.expires_at is None else int(ept.expires_at - time.time())
+
+
+def parse_cutoff(value: object) -> int | None:
+    """Eternitas `ept_valid_after` (ISO 8601 UTC, `...Z` or `+00:00`) -> Unix seconds.
+
+    Absent / null means the passport has no cutoff. Anything present but
+    unparseable raises EptInvalid: a cutoff we cannot read must not be read as
+    "no cutoff" (fail closed)."""
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str):
+        raise EptInvalid(f"unreadable ept_valid_after: {type(value).__name__}")
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise EptInvalid(f"unreadable ept_valid_after: {value!r}") from exc
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=UTC)
+    # The Eternitas SDK rounds a fractional cutoff UP; match it exactly.
+    return math.ceil(dt.timestamp())
+
+
+def refused_by_cutoff(ept: VerifiedEpt, valid_after: int | None) -> bool:
+    """ept-cutoff.v1: `iat == T` is VALID, only `iat < T` is refused. A missing
+    `iat` counts as before the cutoff when the passport has one."""
+    if valid_after is None:
+        return False
+    iat = ept.issued_at
+    if isinstance(iat, bool) or not isinstance(iat, int):
+        return True  # missing or non-integer iat cannot prove it is after T
+    return iat < valid_after
