@@ -1,0 +1,11 @@
+[Unit]
+Description=Priority for dated slots: a PR that Windy Boss names on the BOARD (PRIORITY repo#PR until ISO) has its WAITING CI jobs moved to the front of the queue
+After=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/srv/windygit/src
+# windy-job: a heartbeat windy-uptime checks. "priority: UNREADABLE ..." (the BOARD could not be read) is a failed run.
+ExecStart=/usr/local/bin/windy-job windygit-priority-queue 20m --expect "^priority: ok " --owner 13 -- /usr/bin/python3 /srv/windygit/src/scripts/priority_queue.py
+TimeoutStartSec=120
+Nice=10
