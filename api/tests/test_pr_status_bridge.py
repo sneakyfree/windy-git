@@ -8,9 +8,9 @@ no status at all.
 
 from __future__ import annotations
 
-import re
 import base64
 import importlib.util
+import re
 import sys
 from pathlib import Path
 
