@@ -430,3 +430,29 @@ def test_gh_head_never_trusts_odd_output_or_names(monkeypatch):
         raise OSError("no runuser")
     monkeypatch.setattr(pq.subprocess, "run", boom)
     assert pq.gh_head("windy-calendar", 130) is None
+
+
+def test_every_workflow_of_the_head_is_moved_not_just_the_newest_run():
+    """windy-pro-mobile #407, 11-05: lint (run 33883) and test (run 33885) are two workflows on the SAME head;
+    the old 'newest run on the ref' filter kept only test, so lint sat 2 h 20 min unmoved under Boss's token."""
+    import sqlite3
+    db = sqlite3.connect(":memory:")
+    db.executescript("""
+      create table repository(id integer, owner_name text, name text);
+      create table action_run(id integer, repo_id integer, ref text, commit_sha text, event text, workflow_id text);
+      create table action_run_job(id integer, run_id integer, repo_id integer, name text, status integer, task_id integer);
+    """)
+    sha = "a" * 40
+    old = "b" * 40
+    db.execute("insert into repository values (1, ?, 'windy-pro-mobile')", (pq.OWNER,))
+    ref = "refs/pull/40/head"
+    runs = [(10, ref, sha, "pull_request_sync", "lint.yml"),       # same head, other workflow
+            (11, ref, sha, "pull_request_sync", "test.yml"),
+            (12, ref, sha, "pull_request_sync", "lint.yml"),       # re-run of lint at the same head
+            (5, ref, old, "pull_request_sync", "lint.yml")]        # superseded head
+    for r in runs:
+        db.execute("insert into action_run values (?, 1, ?, ?, ?, ?)", r)
+    for jid, run in [(100, 10), (101, 11), (102, 12), (103, 5)]:
+        db.execute("insert into action_run_job values (?, ?, 1, 'j', 5, 0)", (jid, run))
+    got = {r[0] for r in db.execute(pq.jobs_sql("windy-pro-mobile", 407, sha))}
+    assert got == {101, 102}   # test + the NEWEST lint run; never the replaced lint run 10 or the old head

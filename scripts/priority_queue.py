@@ -148,7 +148,8 @@ join repository p on p.id = j.repo_id
 where p.owner_name = '{OWNER}' and p.name = '{repo}' and {where_ref}
   and r.event in ('pull_request', 'pull_request_sync')
   and j.status = 5 and j.task_id = 0
-  and r.id = (select max(r2.id) from action_run r2 where r2.repo_id = r.repo_id and r2.ref = r.ref)
+  and r.id = (select max(r2.id) from action_run r2 where r2.repo_id = r.repo_id and r2.ref = r.ref
+              and r2.workflow_id = r.workflow_id)
 order by j.id;"""
 
 
