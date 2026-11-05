@@ -55,7 +55,7 @@ MOVED_POST_EVERY_S = 1800
 OWNER = "windyadmin"
 
 HEADER = re.compile(r"^[\s\-*\[]*(\d{4}-\d\d-\d\dT\d\d:\d\d(?::\d\d)?Z)[\],\s]+\[?\s*Windy Boss\b")
-TOKEN = re.compile(r"\bPRIORITY ([A-Za-z0-9._-]{1,100})#(\d{1,7}) until (\d{4}-\d\d-\d\dT\d\d:\d\dZ)(?![\w:])")
+TOKEN = re.compile(r"\bPRIORITY ([A-Za-z0-9._-]{1,100})#(\d{1,7}) until (\d{4}-\d\d-\d\dT\d\d:\d\d(?::\d\d)?Z)(?![\w:])")
 
 
 def ts(s: str) -> int:

@@ -456,3 +456,13 @@ def test_every_workflow_of_the_head_is_moved_not_just_the_newest_run():
         db.execute("insert into action_run_job values (?, ?, 1, 'j', 5, 0)", (jid, run))
     got = {r[0] for r in db.execute(pq.jobs_sql("windy-pro-mobile", 407, sha))}
     assert got == {101, 102}   # test + the NEWEST lint run; never the replaced lint run 10 or the old head
+
+
+def test_token_end_with_seconds_parses_too():
+    """Boss's #1764 line (11-05 12:14:56Z) wrote 'until 2026-11-05T20:15:00Z'; the HH:MMZ-only pattern ignored it and
+    the PR got no priority until I moved its jobs by hand."""
+    now = pq.ts("2026-11-05T12:30:00Z")
+    text = ("- [2026-11-05T12:14:56Z, Windy Boss] PRIORITY windy-pro#1764 until 2026-11-05T20:15:00Z (doorway fix)\n"
+            "[2026-11-05T12:15:00Z, Windy Boss] PRIORITY windy-pro#1765 until 2026-11-05T20:15Z\n")
+    active, notes = pq.parse_board(text, now)
+    assert active == {("windy-pro", 1764): pq.ts("2026-11-05T20:15:00Z"), ("windy-pro", 1765): pq.ts("2026-11-05T20:15Z")}
