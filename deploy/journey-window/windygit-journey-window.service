@@ -1,0 +1,6 @@
+[Unit]
+Description=Windy Git journey window and Veron throttle (general runners held :17-:40, one active otherwise)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/windygit-journey-window
