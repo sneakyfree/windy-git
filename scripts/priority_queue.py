@@ -26,6 +26,10 @@ Rules (each one tested):
   * one BOARD line when a token is first seen, one (at most every 30 min per PR) when jobs were moved, one when
     it expires.
 Output for windy-job --expect: `priority: ok (...)` or `priority: UNREADABLE ...`.
+  * the token names the GITHUB PR number (what Boss and the lanes see). Windy Git's own PR number differs for most
+    repos (windy-calendar GitHub #130 is Windy Git PR 73), so the number is resolved to the PR's head sha through
+    GitHub (cached 5 min) and the jobs matched by that commit on a pull ref; only when GitHub cannot be asked
+    does it fall back to refs/pull/<number>/head (right for repos whose numbers agree).
   --dry   print what would move, write nothing.
 """
 
@@ -120,13 +124,28 @@ def read_board() -> str | None:
         return None
 
 
-def jobs_sql(repo: str, pr: int) -> str:
+def gh_head(repo: str, pr: int) -> str | None:
+    """Head sha of GitHub PR repo#pr, asked as the BOARD user (it holds the gh login). None when it cannot be told."""
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,100}", repo):
+        return None
+    try:
+        out = subprocess.run(["runuser", "-u", cs.BOARD_USER, "--", "timeout", "25", "gh", "api",
+                              f"repos/sneakyfree/{repo}/pulls/{int(pr)}", "--jq", ".head.sha"],
+                             capture_output=True, text=True, timeout=40).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return out if re.fullmatch(r"[0-9a-f]{40}", out) else None
+
+
+def jobs_sql(repo: str, pr: int, sha: str) -> str:
     assert re.fullmatch(r"[A-Za-z0-9._-]{1,100}", repo) and isinstance(pr, int) and pr > 0
+    assert isinstance(sha, str) and re.fullmatch(r"[0-9a-f]{40}", sha)
+    where_ref = f"r.ref like 'refs/pull/%/head' and r.commit_sha = '{sha}'"
     return f"""
 select j.id, j.name from action_run_job j
 join action_run r on r.id = j.run_id
 join repository p on p.id = j.repo_id
-where p.owner_name = '{OWNER}' and p.name = '{repo}' and r.ref = 'refs/pull/{pr}/head'
+where p.owner_name = '{OWNER}' and p.name = '{repo}' and {where_ref}
   and r.event in ('pull_request', 'pull_request_sync')
   and j.status = 5 and j.task_id = 0
   and r.id = (select max(r2.id) from action_run r2 where r2.repo_id = r.repo_id and r2.ref = r.ref)
@@ -161,7 +180,7 @@ def save_state(st: dict) -> None:
         print(f"  state not saved ({e}); a BOARD line may repeat")
 
 
-def main(query=cs.psql, post=cs.board, read=read_board, now_fn=time.time, dry=False) -> int:
+def main(query=cs.psql, post=cs.board, read=read_board, now_fn=time.time, dry=False, head=gh_head) -> int:
     now = int(now_fn())
     text = read()
     if text is None:
@@ -172,7 +191,10 @@ def main(query=cs.psql, post=cs.board, read=read_board, now_fn=time.time, dry=Fa
     seen = st.setdefault("seen", {})
     posted = st.setdefault("moved_posted", {})
     flagged = st.setdefault("unverified", {})
+    heads = st.setdefault("heads", {})
+    heads_at = st.setdefault("heads_at", {})
     total = 0
+    unresolved: list[str] = []
     for (repo, pr), until in sorted(active.items()):
         key = f"{repo}#{pr}"
         until_s = time.strftime("%Y-%m-%dT%H:%MZ", time.gmtime(until))
@@ -190,7 +212,21 @@ def main(query=cs.psql, post=cs.board, read=read_board, now_fn=time.time, dry=Fa
             flagged[key] = until
         else:
             flagged.pop(key, None)
-        rows = query(jobs_sql(repo, pr))
+        sha = heads.get(key)
+        if not sha or now - heads_at.get(key, 0) > 300:
+            sha = head(repo, pr) or sha
+            if sha:
+                heads[key], heads_at[key] = sha, now
+        if not sha:
+            # FAIL CLOSED: without the head sha the number would be read as a Windy Git PR number, which for most repos
+            # is somebody else's PR (Hub #135 MED). Move nothing, say so (rate-limited), retry next tick.
+            print(f"  UNRESOLVED {key} (GitHub unreachable): nothing moved")
+            unresolved.append(key)
+            if not dry and now - posted.get("unresolved:" + key, 0) >= MOVED_POST_EVERY_S:
+                post(f"[Windy Git] priority: UNRESOLVED {key} (GitHub unreachable), nothing moved; retrying every tick.")
+                posted["unresolved:" + key] = now
+            continue
+        rows = query(jobs_sql(repo, pr, sha))
         ids = [int(r[0]) for r in rows]
         if not ids:
             continue

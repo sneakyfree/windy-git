@@ -15,6 +15,11 @@ import priority_queue as pq  # noqa: E402
 NOW = calendar.timegm((2026, 11, 4, 17, 0, 0))
 
 
+def fake_sha(pr):
+    """A deterministic 40-hex 'head sha' that encodes the PR number, so the Fake can map a commit back to its PR."""
+    return format(int(pr), "040x")
+
+
 def at(h, m=0, day=4):
     return calendar.timegm((2026, 11, day, h, m, 0))
 
@@ -112,8 +117,8 @@ def test_a_line_dated_in_the_future_is_ignored():
 
 # ---------------------------------------------------------------- the SQL
 def test_the_sql_only_touches_waiting_unclaimed_jobs_of_the_newest_run_of_one_repo_and_pr():
-    s = pq.jobs_sql("windy-pro", 1706)
-    assert "p.owner_name = 'windyadmin' and p.name = 'windy-pro'" in s and "r.ref = 'refs/pull/1706/head'" in s
+    s = pq.jobs_sql("windy-pro", 1706, fake_sha(1706))
+    assert "p.owner_name = 'windyadmin' and p.name = 'windy-pro'" in s and f"r.commit_sha = '{fake_sha(1706)}'" in s
     assert "j.status = 5 and j.task_id = 0" in s and "select max(r2.id)" in s
     assert "r.event in ('pull_request', 'pull_request_sync')" in s
     m = pq.move_sql([3, 4], 1000)
@@ -126,14 +131,14 @@ def test_the_sql_only_touches_waiting_unclaimed_jobs_of_the_newest_run_of_one_re
 @pytest.mark.parametrize("repo", ["a;b", "a b", "a'b", "", "x" * 101, "a--"[:0] + "é"])
 def test_a_bad_repo_name_never_reaches_sql(repo):
     with pytest.raises(AssertionError):
-        pq.jobs_sql(repo, 1)
+        pq.jobs_sql(repo, 1, fake_sha(1))
 
 
 def test_a_bad_pr_number_never_reaches_sql():
     with pytest.raises(AssertionError):
-        pq.jobs_sql("windy-pro", 0)
+        pq.jobs_sql("windy-pro", 0, fake_sha(1))
     with pytest.raises(AssertionError):
-        pq.jobs_sql("windy-pro", "1; drop")      # type: ignore[arg-type]
+        pq.jobs_sql("windy-pro", "1; drop", fake_sha(1))      # type: ignore[arg-type]
 
 
 # ---------------------------------------------------------------- the run
@@ -149,7 +154,7 @@ class Fake:
         if "select j.id, j.name from action_run_job" in sql:
             import re
             repo = re.search(r"p.name = '([^']+)'", sql).group(1)
-            pr = re.search(r"refs/pull/(\d+)/head", sql).group(1)
+            pr = str(int(re.search(r"r.commit_sha = '([0-9a-f]{40})'", sql).group(1), 16))
             return [[str(i), "gate"] for i, (k, _u) in sorted(self.jobs.items()) if k == f"{repo}#{pr}"]
         if sql.lstrip().startswith("select coalesce(min(updated)"):
             import re
@@ -176,10 +181,10 @@ def _state(tmp_path, monkeypatch):
     monkeypatch.setattr(pq, "STATE", tmp_path / "state.json")
 
 
-def run(fake, board=BOARD, now=NOW, posts=None, dry=False, read=None):
+def run(fake, board=BOARD, now=NOW, posts=None, dry=False, read=None, head=lambda repo, pr: fake_sha(pr)):
     posts = [] if posts is None else posts
     rc = pq.main(query=fake.query, post=lambda s: posts.append(s) or True,
-                 read=read or (lambda: board), now_fn=lambda: now, dry=dry)
+                 read=read or (lambda: board), now_fn=lambda: now, dry=dry, head=head)
     return rc, posts
 
 
@@ -337,3 +342,91 @@ def test_the_unverified_line_is_posted_once_and_again_only_if_the_token_changes(
 def test_the_token_lines_own_prose_does_not_verify_it():
     own = "[2026-11-04T16:52Z, Windy Boss] slot #1706 (prose on the token's own line): PRIORITY windy-pro#1706 until 2026-11-05T12:35Z"
     assert len(unv(own)[0]) == 1
+
+
+# ------------------------------------------- GitHub PR number != Windy Git PR number (windy-calendar #130 = PR 73)
+SHA = "09958b6c17d40f23b2a47d51d05179618fc6d9f8"
+CAL = "[2026-11-04T16:52Z, Windy Boss] PRIORITY windy-calendar#130 until 2026-11-05T12:00Z\n"
+
+
+class BySha(Fake):
+    """The Gitea side: the run for SHA sits on refs/pull/73/head; jobs are keyed by the Windy Git PR number."""
+
+    def query(self, sql):
+        if "select j.id, j.name from action_run_job" in sql and "r.commit_sha = '" in sql:
+            self.sql.append(sql)
+            import re
+            repo = re.search(r"p.name = '([^']+)'", sql).group(1)
+            sha = re.search(r"r.commit_sha = '([0-9a-f]+)'", sql).group(1)
+            pr = {SHA: "73"}.get(sha, "0")
+            return [[str(i), "test"] for i, (k, _u) in sorted(self.jobs.items()) if k == f"{repo}#{pr}"]
+        return super().query(sql)
+
+
+def test_the_sql_matches_by_commit_when_the_head_sha_is_known():
+    s = pq.jobs_sql("windy-calendar", 130, SHA)
+    assert f"r.ref like 'refs/pull/%/head' and r.commit_sha = '{SHA}'" in s and "refs/pull/130/head" not in s
+    assert "j.status = 5 and j.task_id = 0" in s and "select max(r2.id)" in s
+    with pytest.raises(AssertionError):
+        pq.jobs_sql("windy-calendar", 130, "x' or 1=1 --")
+
+
+def test_a_github_number_is_resolved_to_the_windy_git_pr_through_its_head_sha(capsys):
+    f = BySha({1: ("windy-chat#10", 100), 2: ("windy-calendar#73", 500), 3: ("windy-calendar#130", 700)})
+    rc, posts = run(f, board=CAL, head=lambda repo, pr: SHA if (repo, pr) == ("windy-calendar", 130) else None)
+    assert rc == 0
+    assert f.jobs[2][1] == 99                                    # Windy Git PR 73 = GitHub #130: moved
+    assert f.jobs[3][1] == 700 and f.jobs[1][1] == 100          # a different PR that merely has the number 130 is NOT
+    assert "1 job(s) moved" in capsys.readouterr().out
+
+
+def test_when_github_cannot_be_asked_and_nothing_is_cached_nothing_moves_and_it_is_said_once(capsys):
+    # the bare number would be a DIFFERENT Windy Git PR on most repos: fail closed (Hub #135 MED)
+    f = Fake({1: ("windy-chat#10", 100), 2: ("windy-pro#1706", 500), 3: ("windy-pro#1704", 600)})
+    posts = []
+    rc, _ = run(f, head=lambda repo, pr: None, posts=posts)
+    assert rc == 0 and f.jobs[2][1] == 500 and f.jobs[3][1] == 600
+    assert not any("select j.id, j.name" in q for q in f.sql)                # no job query was even sent
+    out = capsys.readouterr().out
+    assert "UNRESOLVED windy-pro#1706" in out and "0 job(s) moved" in out
+    un = [p for p in posts if "UNRESOLVED" in p]
+    assert len(un) == 2 and any("windy-pro#1706 (GitHub unreachable), nothing moved" in p for p in un)
+    run(f, head=lambda repo, pr: None, posts=posts, now=NOW + 600)           # next ticks: retried, not re-posted
+    assert len([p for p in posts if "UNRESOLVED" in p]) == 2
+    run(f, head=lambda repo, pr: None, posts=posts, now=NOW + 1900)          # after 30 min: said again
+    assert len([p for p in posts if "UNRESOLVED" in p]) == 4
+
+
+def test_a_cached_sha_is_still_used_while_github_is_down():
+    f = Fake({1: ("windy-chat#10", 100), 2: ("windy-pro#1706", 500)})
+    run(f)                                                                   # resolves and caches
+    f.jobs[2] = ("windy-pro#1706", 500)                                      # a new waiting job appears
+    rc, _ = run(f, head=lambda repo, pr: None, now=NOW + 400)                # 6+ min later, gh down: cached sha used
+    assert rc == 0 and f.jobs[2][1] == 99
+
+
+def test_the_head_sha_is_asked_once_per_five_minutes_and_remembered():
+    asked = []
+    f = BySha({1: ("windy-chat#10", 100), 2: ("windy-calendar#73", 500)})
+
+    def head(repo, pr):
+        asked.append((repo, pr))
+        return SHA
+    run(f, board=CAL, head=head)
+    run(f, board=CAL, head=head, now=NOW + 120)
+    assert asked == [("windy-calendar", 130)]
+    run(f, board=CAL, head=head, now=NOW + 400)
+    assert len(asked) == 2
+
+
+def test_gh_head_never_trusts_odd_output_or_names(monkeypatch):
+    import subprocess as sp
+    monkeypatch.setattr(pq.subprocess, "run", lambda *a, **k: sp.CompletedProcess(a, 0, stdout="not a sha\n", stderr=""))
+    assert pq.gh_head("windy-calendar", 130) is None
+    monkeypatch.setattr(pq.subprocess, "run", lambda *a, **k: sp.CompletedProcess(a, 0, stdout=SHA + "\n", stderr=""))
+    assert pq.gh_head("windy-calendar", 130) == SHA and pq.gh_head("a;b", 1) is None
+
+    def boom(*a, **k):
+        raise OSError("no runuser")
+    monkeypatch.setattr(pq.subprocess, "run", boom)
+    assert pq.gh_head("windy-calendar", 130) is None
