@@ -127,6 +127,15 @@ async def test_no_cutoff_lets_the_agent_in(world):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("body", [{}, {"status": "active"}, {"ept_valid_after": None}, {"ept_valid_after": ""}])
+async def test_no_cutoff_in_any_shape_lets_the_agent_in(world, body):
+    """Eternitas before migration 034 does not send the field at all; after it, a passport with no cutoff
+    can send null. Both mean 'no cutoff': only a PRESENT, non-null value that will not parse refuses."""
+    world.state["registry"] = (200, body)
+    assert (await world.call(int(time.time()) - 5)).passport == PASSPORT
+
+
+@pytest.mark.asyncio
 async def test_ept_issued_before_the_cutoff_is_refused_401(world):
     now = int(time.time())
     world.state["registry"] = (200, {"ept_valid_after": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - 10))})
