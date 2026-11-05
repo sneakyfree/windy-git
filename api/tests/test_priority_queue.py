@@ -176,10 +176,10 @@ def _state(tmp_path, monkeypatch):
     monkeypatch.setattr(pq, "STATE", tmp_path / "state.json")
 
 
-def run(fake, board=BOARD, now=NOW, posts=None, dry=False, read=None):
+def run(fake, board=BOARD, now=NOW, posts=None, dry=False, read=None, head=lambda repo, pr: None):
     posts = [] if posts is None else posts
     rc = pq.main(query=fake.query, post=lambda s: posts.append(s) or True,
-                 read=read or (lambda: board), now_fn=lambda: now, dry=dry)
+                 read=read or (lambda: board), now_fn=lambda: now, dry=dry, head=head)
     return rc, posts
 
 
@@ -337,3 +337,72 @@ def test_the_unverified_line_is_posted_once_and_again_only_if_the_token_changes(
 def test_the_token_lines_own_prose_does_not_verify_it():
     own = "[2026-11-04T16:52Z, Windy Boss] slot #1706 (prose on the token's own line): PRIORITY windy-pro#1706 until 2026-11-05T12:35Z"
     assert len(unv(own)[0]) == 1
+
+
+# ------------------------------------------- GitHub PR number != Windy Git PR number (windy-calendar #130 = PR 73)
+SHA = "09958b6c17d40f23b2a47d51d05179618fc6d9f8"
+CAL = "[2026-11-04T16:52Z, Windy Boss] PRIORITY windy-calendar#130 until 2026-11-05T12:00Z\n"
+
+
+class BySha(Fake):
+    """The Gitea side: the run for SHA sits on refs/pull/73/head; jobs are keyed by the Windy Git PR number."""
+
+    def query(self, sql):
+        if "select j.id, j.name from action_run_job" in sql and "r.commit_sha = '" in sql:
+            self.sql.append(sql)
+            import re
+            repo = re.search(r"p.name = '([^']+)'", sql).group(1)
+            sha = re.search(r"r.commit_sha = '([0-9a-f]+)'", sql).group(1)
+            pr = {SHA: "73"}.get(sha, "0")
+            return [[str(i), "test"] for i, (k, _u) in sorted(self.jobs.items()) if k == f"{repo}#{pr}"]
+        return super().query(sql)
+
+
+def test_the_sql_matches_by_commit_when_the_head_sha_is_known():
+    s = pq.jobs_sql("windy-calendar", 130, SHA)
+    assert f"r.ref like 'refs/pull/%/head' and r.commit_sha = '{SHA}'" in s and "refs/pull/130/head" not in s
+    assert "j.status = 5 and j.task_id = 0" in s and "select max(r2.id)" in s
+    with pytest.raises(AssertionError):
+        pq.jobs_sql("windy-calendar", 130, "x' or 1=1 --")
+
+
+def test_a_github_number_is_resolved_to_the_windy_git_pr_through_its_head_sha(capsys):
+    f = BySha({1: ("windy-chat#10", 100), 2: ("windy-calendar#73", 500), 3: ("windy-calendar#130", 700)})
+    rc, posts = run(f, board=CAL, head=lambda repo, pr: SHA if (repo, pr) == ("windy-calendar", 130) else None)
+    assert rc == 0
+    assert f.jobs[2][1] == 99                                    # Windy Git PR 73 = GitHub #130: moved
+    assert f.jobs[3][1] == 700 and f.jobs[1][1] == 100          # a different PR that merely has the number 130 is NOT
+    assert "1 job(s) moved" in capsys.readouterr().out
+
+
+def test_when_github_cannot_be_asked_the_number_is_used_as_before():
+    f = Fake({1: ("windy-chat#10", 100), 2: ("windy-pro#1706", 500)})
+    rc, _ = run(f, head=lambda repo, pr: None)
+    assert rc == 0 and f.jobs[2][1] == 99
+
+
+def test_the_head_sha_is_asked_once_per_five_minutes_and_remembered():
+    asked = []
+    f = BySha({1: ("windy-chat#10", 100), 2: ("windy-calendar#73", 500)})
+
+    def head(repo, pr):
+        asked.append((repo, pr))
+        return SHA
+    run(f, board=CAL, head=head)
+    run(f, board=CAL, head=head, now=NOW + 120)
+    assert asked == [("windy-calendar", 130)]
+    run(f, board=CAL, head=head, now=NOW + 400)
+    assert len(asked) == 2
+
+
+def test_gh_head_never_trusts_odd_output_or_names(monkeypatch):
+    import subprocess as sp
+    monkeypatch.setattr(pq.subprocess, "run", lambda *a, **k: sp.CompletedProcess(a, 0, stdout="not a sha\n", stderr=""))
+    assert pq.gh_head("windy-calendar", 130) is None
+    monkeypatch.setattr(pq.subprocess, "run", lambda *a, **k: sp.CompletedProcess(a, 0, stdout=SHA + "\n", stderr=""))
+    assert pq.gh_head("windy-calendar", 130) == SHA and pq.gh_head("a;b", 1) is None
+
+    def boom(*a, **k):
+        raise OSError("no runuser")
+    monkeypatch.setattr(pq.subprocess, "run", boom)
+    assert pq.gh_head("windy-calendar", 130) is None
