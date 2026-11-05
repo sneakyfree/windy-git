@@ -36,6 +36,7 @@ Output for windy-job --expect: `priority: ok (...)` or `priority: UNREADABLE ...
 from __future__ import annotations
 
 import calendar
+import hashlib
 import json
 import os
 import re
@@ -55,7 +56,7 @@ MOVED_POST_EVERY_S = 1800
 OWNER = "windyadmin"
 
 HEADER = re.compile(r"^[\s\-*\[]*(\d{4}-\d\d-\d\dT\d\d:\d\d(?::\d\d)?Z)[\],\s]+\[?\s*Windy Boss\b")
-TOKEN = re.compile(r"\bPRIORITY ([A-Za-z0-9._-]{1,100})#(\d{1,7}) until (\d{4}-\d\d-\d\dT\d\d:\d\dZ)(?![\w:])")
+TOKEN = re.compile(r"\bPRIORITY ([A-Za-z0-9._-]{1,100})#(\d{1,7}) until (\d{4}-\d\d-\d\dT\d\d:\d\d(?::\d\d)?Z)(?![\w:])")
 
 
 def ts(s: str) -> int:
@@ -91,6 +92,28 @@ def parse_board(text: str, now: int) -> tuple[dict[tuple[str, int], int], list[s
     """{(repo, pr): until_epoch} for the tokens that count (last line wins; clamped to 24 h), plus notes."""
     active, notes, _where = _parse(text, now)
     return active, notes
+
+
+LOOKS_LIKE_TOKEN = re.compile(r"\bPRIORITY\s+[A-Za-z0-9._-]{1,100}#\d{1,7}\b")
+UNPARSED_MAX_PER_PASS = 3
+
+
+def unparsed(text: str, now: int) -> list[tuple[str, str]]:
+    """Boss lines (dated within the last 24 h, not in the future) that NAME a PRIORITY repo#PR but whose token does
+    not parse: [(dedupe key, short snippet)]. A silently ignored token was the 11-05 failure (#1764, 'until ...:00Z')."""
+    out = []
+    for line in text.splitlines():
+        h = HEADER.match(line)
+        if not h or "PRIORITY" not in line:
+            continue
+        line_ts = ts(h.group(1))
+        if line_ts > now + 300 or now - line_ts > MAX_HOURS * 3600:
+            continue
+        body = line[h.end():]
+        if len(LOOKS_LIKE_TOKEN.findall(body)) > len(TOKEN.findall(body)):
+            snip = re.sub(r"[^\x20-\x7e]|[`$\"\\]", "?", body.strip())[:110]   # BOARD line rule: no backtick, $, quote, backslash
+            out.append((f"{line_ts}:{hashlib.sha1(snip.encode()).hexdigest()[:8]}", snip))
+    return out
 
 
 def verified(text: str, repo: str, pr: int, line_ts: int, line_idx: int) -> bool:
@@ -194,6 +217,18 @@ def main(query=cs.psql, post=cs.board, read=read_board, now_fn=time.time, dry=Fa
     flagged = st.setdefault("unverified", {})
     heads = st.setdefault("heads", {})
     heads_at = st.setdefault("heads_at", {})
+    warned = st.setdefault("unparsed", {})
+    for k in [k for k in warned if int(k.split(":")[0]) < now - 2 * MAX_HOURS * 3600]:
+        warned.pop(k)                                           # state does not grow forever
+    n_warn = 0
+    for key, snip in unparsed(text, now):
+        if key in warned or n_warn >= UNPARSED_MAX_PER_PASS:
+            continue
+        n_warn += 1
+        if not dry:
+            post(f"[Windy Git] PRIORITY WARN: a Windy Boss line names a PRIORITY token I CANNOT PARSE, so it is IGNORED: \"{snip}\". "
+                 f"Format: PRIORITY repo#PR until YYYY-MM-DDTHH:MMZ (seconds allowed). Re-post it in that form.")
+            warned[key] = now
     total = 0
     unresolved: list[str] = []
     for (repo, pr), until in sorted(active.items()):
