@@ -482,3 +482,13 @@ def test_an_unparseable_boss_priority_line_gets_one_board_warn_and_a_good_one_no
     assert rc == 0 and len(warns) == 1 and "1800" in warns[0] and "CANNOT PARSE" in warns[0]
     rc, posts2 = run(f, board=board, now=pq.ts("2026-11-04T13:02:00Z"))
     assert not [p for p in posts2 if "PRIORITY WARN" in p]            # once per line, not every tick
+
+
+def test_the_warn_never_copies_shell_metacharacters_onto_the_board():
+    bad = "[2026-11-04T12:30:00Z, Windy Boss] PRIORITY windy-pro#1800 until `rm -rf x` $(id) \"q\" \\n tomorrow\n"
+    f = Fake({})
+    rc, posts = run(f, board=bad, now=pq.ts("2026-11-04T13:00:00Z"))
+    w = [p for p in posts if "PRIORITY WARN" in p]
+    assert len(w) == 1
+    quoted = w[0].split('IGNORED: "', 1)[1].split('". Format', 1)[0]
+    assert not any(c in quoted for c in '`$"\\')

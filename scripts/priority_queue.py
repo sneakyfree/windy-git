@@ -111,7 +111,7 @@ def unparsed(text: str, now: int) -> list[tuple[str, str]]:
             continue
         body = line[h.end():]
         if len(LOOKS_LIKE_TOKEN.findall(body)) > len(TOKEN.findall(body)):
-            snip = re.sub(r"[^\x20-\x7e]", "?", body.strip())[:110]
+            snip = re.sub(r"[^\x20-\x7e]|[`$\"\\]", "?", body.strip())[:110]   # BOARD line rule: no backtick, $, quote, backslash
             out.append((f"{line_ts}:{hashlib.sha1(snip.encode()).hexdigest()[:8]}", snip))
     return out
 
