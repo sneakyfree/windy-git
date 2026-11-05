@@ -325,13 +325,31 @@ def gitea_open_pulls(repo: str) -> list:
             return out
     raise RuntimeError(f"{repo}: Windy Git PR list longer than {GITEA_MAX_PAGES} pages")
 
+GH_PULLS_PAGE = 100
+GH_PULLS_MAX_PAGES = 10   # 1,000 open PRs; more than that is an error, never a silently short list
+
+
+def github_open_pulls(repo: str) -> list:
+    """EVERY open PR of `repo`, page by page. windy-pro passed 100 open PRs on 11-05: the single
+    per_page=100 call dropped the 15 oldest, so they never got a mirror PR (windy-pro #885 had no CI)
+    and their existing mirrors were CLOSED as "closed on GitHub". A short list must never be returned:
+    a failed page or hitting the page cap raises (the pass then skips this repo)."""
+    out: list = []
+    for page in range(1, GH_PULLS_MAX_PAGES + 1):
+        st, body = github("GET", f"/repos/{GH_OWNER}/{repo}/pulls?state=open&per_page={GH_PULLS_PAGE}&page={page}")
+        if st != 200 or not isinstance(body, list):
+            raise RuntimeError(f"{repo}: GitHub PR list page {page} -> {st}")
+        out.extend(body)
+        if len(body) < GH_PULLS_PAGE:
+            return out
+    raise RuntimeError(f"{repo}: GitHub PR list longer than {GH_PULLS_MAX_PAGES} pages")
+
+
 def sync_prs(repo: str, gh_prs: list | None = None) -> list[str]:
     """Mirror open same-repo GitHub PRs into Windy Git. Returns their head shas. `gh_prs` is this
     pass's GraphQL prefetch (REST-shaped); without it, today's REST list call."""
     if gh_prs is None:
-        st, gh_prs = github("GET", f"/repos/{GH_OWNER}/{repo}/pulls?state=open&per_page=100")
-        if st != 200:
-            raise RuntimeError(f"{repo}: GitHub PR list -> {st}")
+        gh_prs = github_open_pulls(repo)
     wg_prs = gitea_open_pulls(repo)
     ours = {p["title"].split("]")[0] + "]": p for p in wg_prs if p["title"].startswith(MIRROR_TAG)}
 
