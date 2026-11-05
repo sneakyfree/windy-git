@@ -466,3 +466,19 @@ def test_token_end_with_seconds_parses_too():
             "[2026-11-05T12:15:00Z, Windy Boss] PRIORITY windy-pro#1765 until 2026-11-05T20:15Z\n")
     active, notes = pq.parse_board(text, now)
     assert active == {("windy-pro", 1764): pq.ts("2026-11-05T20:15:00Z"), ("windy-pro", 1765): pq.ts("2026-11-05T20:15Z")}
+
+
+def test_an_unparseable_boss_priority_line_gets_one_board_warn_and_a_good_one_none():
+    """11-05: 'until ...T20:15:00Z' was silently ignored. Now a Boss line naming PRIORITY repo#PR that does not parse
+    is WARNed on the BOARD once; a good line, a lane quoting it, and a line older than 24 h are not."""
+    bad = "[2026-11-04T12:30:00Z, Windy Boss] PRIORITY windy-pro#1800 until tomorrow noon (doorway)\n"
+    good = "[2026-11-04T12:31:00Z, Windy Boss] PRIORITY windy-pro#1801 until 2026-11-04T20:00Z\n"
+    lane = "[2026-11-04T12:32:00Z, Windy Git] PRIORITY windy-pro#1802 until soon\n"
+    old = "[2026-11-02T12:30:00Z, Windy Boss] PRIORITY windy-pro#1803 until never\n"
+    board = old + lane + good + bad
+    f = Fake({})
+    rc, posts = run(f, board=board, now=pq.ts("2026-11-04T13:00:00Z"))
+    warns = [p for p in posts if "PRIORITY WARN" in p]
+    assert rc == 0 and len(warns) == 1 and "1800" in warns[0] and "CANNOT PARSE" in warns[0]
+    rc, posts2 = run(f, board=board, now=pq.ts("2026-11-04T13:02:00Z"))
+    assert not [p for p in posts2 if "PRIORITY WARN" in p]            # once per line, not every tick
