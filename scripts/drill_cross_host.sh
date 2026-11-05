@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 # Cross-host restore drill on Windy 0: ONLY lockbox + R2, nothing from Veron. Values never printed.
-# Usage: bash drill_cross_host.sh   (needs lockbox keys RESTIC_WINDYGIT_PASSWORD, WINDYGIT_R2_ACCESS_KEY_ID, WINDYGIT_R2_SECRET_ACCESS_KEY, WINDYGIT_R2_ENDPOINT)
+# Usage: bash drill_cross_host.sh   (needs lockbox keys RESTIC_WINDYGIT_PASSWORD, WINDYGIT_R2_ACCESS_KEY_ID_20261105, WINDYGIT_R2_SECRET_20261105, WINDYGIT_R2_ENDPOINT)
+# 11-05 R2 rotation: the key pair is the dated one minted for windy-git-lfs + windy-git-backups; the old WINDYGIT_R2_ACCESS_KEY_ID / WINDYGIT_R2_SECRET_ACCESS_KEY
+# entries are kept in the lockbox, labeled revoked. MERGE ONLY AFTER the new entries exist (Boss slot 11-05 19:45Z).
 set -euo pipefail
 # The restored dumps and app.ini are plaintext: RAM only (Boss standing rule 10-16).
 umask 077; W=$(mktemp -d /dev/shm/wg-xdrill.XXXXXX)
 trap 'docker rm -f wg-xdrill-pg >/dev/null 2>&1 || true; rm -rf "$W"' EXIT
 lockbox-get RESTIC_WINDYGIT_PASSWORD "$W/pw" >/dev/null
-lockbox-get WINDYGIT_R2_ACCESS_KEY_ID "$W/ak" >/dev/null; lockbox-get WINDYGIT_R2_SECRET_ACCESS_KEY "$W/sk" >/dev/null; lockbox-get WINDYGIT_R2_ENDPOINT "$W/ep" >/dev/null
+lockbox-get WINDYGIT_R2_ACCESS_KEY_ID_20261105 "$W/ak" >/dev/null; lockbox-get WINDYGIT_R2_SECRET_20261105 "$W/sk" >/dev/null; lockbox-get WINDYGIT_R2_ENDPOINT "$W/ep" >/dev/null
 export RESTIC_PASSWORD_FILE="$W/pw" AWS_ACCESS_KEY_ID="$(cat "$W/ak")" AWS_SECRET_ACCESS_KEY="$(cat "$W/sk")"
 export RESTIC_REPOSITORY="s3:$(cat "$W/ep")/windy-git-backups/restic"
 restic snapshots --tag windygit-state --compact | tail -3
