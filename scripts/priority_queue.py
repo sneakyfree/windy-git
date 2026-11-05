@@ -137,11 +137,10 @@ def gh_head(repo: str, pr: int) -> str | None:
     return out if re.fullmatch(r"[0-9a-f]{40}", out) else None
 
 
-def jobs_sql(repo: str, pr: int, sha: str | None = None) -> str:
+def jobs_sql(repo: str, pr: int, sha: str) -> str:
     assert re.fullmatch(r"[A-Za-z0-9._-]{1,100}", repo) and isinstance(pr, int) and pr > 0
-    assert sha is None or re.fullmatch(r"[0-9a-f]{40}", sha)
-    where_ref = (f"r.ref like 'refs/pull/%/head' and r.commit_sha = '{sha}'" if sha
-                 else f"r.ref = 'refs/pull/{pr}/head'")
+    assert isinstance(sha, str) and re.fullmatch(r"[0-9a-f]{40}", sha)
+    where_ref = f"r.ref like 'refs/pull/%/head' and r.commit_sha = '{sha}'"
     return f"""
 select j.id, j.name from action_run_job j
 join action_run r on r.id = j.run_id
@@ -195,6 +194,7 @@ def main(query=cs.psql, post=cs.board, read=read_board, now_fn=time.time, dry=Fa
     heads = st.setdefault("heads", {})
     heads_at = st.setdefault("heads_at", {})
     total = 0
+    unresolved: list[str] = []
     for (repo, pr), until in sorted(active.items()):
         key = f"{repo}#{pr}"
         until_s = time.strftime("%Y-%m-%dT%H:%MZ", time.gmtime(until))
@@ -217,6 +217,15 @@ def main(query=cs.psql, post=cs.board, read=read_board, now_fn=time.time, dry=Fa
             sha = head(repo, pr) or sha
             if sha:
                 heads[key], heads_at[key] = sha, now
+        if not sha:
+            # FAIL CLOSED: without the head sha the number would be read as a Windy Git PR number, which for most repos
+            # is somebody else's PR (Hub #135 MED). Move nothing, say so (rate-limited), retry next tick.
+            print(f"  UNRESOLVED {key} (GitHub unreachable): nothing moved")
+            unresolved.append(key)
+            if not dry and now - posted.get("unresolved:" + key, 0) >= MOVED_POST_EVERY_S:
+                post(f"[Windy Git] priority: UNRESOLVED {key} (GitHub unreachable), nothing moved; retrying every tick.")
+                posted["unresolved:" + key] = now
+            continue
         rows = query(jobs_sql(repo, pr, sha))
         ids = [int(r[0]) for r in rows]
         if not ids:
