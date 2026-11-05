@@ -41,7 +41,10 @@ def test_every_private_range_is_dropped_for_the_ci_user_and_dns_goes_to_one_reso
         assert r in NFT
     drop = next(ln for ln in NFT.splitlines() if "private v4" in ln)
     assert "counter drop" in drop and all(r in drop for r in PRIVATE_V4)
-    assert "fe80::/10" in NFT and "fc00::/7" in NFT and "::1" in NFT
+    # IPv6: everything but DNS is dropped (the LAN's global prefix is on-link; dropping only ::1/fe80/fc00 left it open)
+    v6 = next(ln for ln in NFT.splitlines() if "all v6 except DNS" in ln)
+    assert v6.strip() == 'meta nfproto ipv6 counter drop comment "windygit-ci: all v6 except DNS"'
+    assert "fe80::/10" not in NFT and max(NFT.index(x) for x in NFT.splitlines() if "ip6 daddr @DNS6@" in x) < NFT.index(v6)
     allow = [ln for ln in NFT.splitlines() if "dport 53 accept" in ln]
     assert len(allow) == 4 and all("@DNS4@" in ln or "@DNS6@" in ln for ln in allow)
     # the DNS allowances come BEFORE the drops (the router is inside 192.168/16)
@@ -97,7 +100,7 @@ def test_the_probe_proves_the_block_by_refusals_and_by_the_drop_counter_and_chec
     p = (D / "egress-probe.sh").read_text()
     for t in ("10.255.255.1", "192.168.0.1", "172.16.0.1", "100.64.0.1", "169.254.169.254", "127.0.0.1"):
         assert t in p
-    assert "drop counters did not rise" in p and "cannot reach public" in p and "runuser -u" in p
+    assert "v6 drop counter did not rise" in p and "v4 drop counter did not rise" in p and "cannot reach public" in p and "runuser -u" in p
     assert 'exit "$fail"' in p
 
 
@@ -107,3 +110,70 @@ def test_install_checks_the_uid_validates_the_rule_set_and_does_not_start_runner
     code = [ln for ln in i.splitlines() if not ln.lstrip().startswith(("#", "echo"))]
     assert "enable --now windygit-ci-egress.service" in i
     assert not any("systemctl --user" in ln or "act_runner register" in ln for ln in code)     # starts no runner
+
+
+# ---------------------------------------------------------------- the probe, run against fake nft / runuser / ip
+FAKE_RUNUSER = r"""#!/usr/bin/env bash
+# runuser -u USER -- timeout N bash -c "exec 3<>/dev/tcp/HOST/PORT": decide from HOST like the real firewall would
+cmd="${@: -1}"; host=${cmd#*/dev/tcp/}; host=${host%%/*}
+case " $FAKE_OPEN " in *" $host "*) exit 0;; esac
+if [[ "$host" == *:* ]]; then [ -n "${FAKE_NO_COUNT:-}" ] || echo $(( $(cat "$FAKE_DIR/v6") + 1 )) > "$FAKE_DIR/v6"; exit 1; fi
+if [ "$host" = 1.1.1.1 ]; then [ -n "${FAKE_PUBLIC_BLOCKED:-}" ] && exit 1 || exit 0; fi
+[ -n "${FAKE_NO_COUNT:-}" ] || echo $(( $(cat "$FAKE_DIR/v4") + 1 )) > "$FAKE_DIR/v4"; exit 1
+"""
+FAKE_NFT = r"""#!/usr/bin/env bash
+[ "$1 $2" = "list table" ] && exit 0
+echo "    ip daddr { 10.0.0.0/8 } counter packets $(cat "$FAKE_DIR/v4") bytes 0 drop comment \"windygit-ci: private v4\""
+echo "    meta nfproto ipv6 counter packets $(cat "$FAKE_DIR/v6") bytes 0 drop comment \"windygit-ci: all v6 except DNS\""
+"""
+FAKE_IP = r"""#!/usr/bin/env bash
+[ -n "${FAKE_NO_NEIGH:-}" ] && exit 0
+echo "fe80::1 dev eth0 lladdr aa:bb:cc:dd:ee:ff router REACHABLE"
+echo "2001:db8:1::77 dev eth0 lladdr aa:bb:cc:dd:ee:01 REACHABLE"
+"""
+
+
+def probe(tmp_path, **env):
+    import os
+    bindir = tmp_path / "bin"
+    bindir.mkdir(exist_ok=True)
+    for n, body in (("runuser", FAKE_RUNUSER), ("nft", FAKE_NFT), ("ip", FAKE_IP)):
+        (bindir / n).write_text(body)
+        (bindir / n).chmod(0o755)
+    (tmp_path / "v4").write_text("0")
+    (tmp_path / "v6").write_text("0")
+    e = {**os.environ, "PATH": f"{bindir}:{os.environ['PATH']}", "FAKE_DIR": str(tmp_path), **env}
+    r = subprocess.run(["bash", str(D / "egress-probe.sh")], capture_output=True, text=True, env=e, timeout=60)
+    return r.returncode, r.stdout
+
+
+def test_probe_passes_when_v4_and_v6_are_blocked_and_the_public_side_is_open(tmp_path):
+    rc, out = probe(tmp_path)
+    assert rc == 0 and "PASS (6 private v4 + 3 v6 targets refused" in out
+
+
+def test_probe_fails_when_a_lan_host_is_reachable_over_global_v6(tmp_path):
+    rc, out = probe(tmp_path, FAKE_OPEN="2001:db8:1::77")                  # the exact gap Hub found on 11-05
+    assert rc == 1 and "reached IPv6 target" in out and "PASS" not in out
+
+
+def test_probe_fails_when_a_public_v6_target_is_reachable(tmp_path):
+    rc, out = probe(tmp_path, FAKE_OPEN="2606:4700:4700::1111")
+    assert rc == 1 and "reached IPv6 target" in out
+
+
+def test_probe_fails_when_the_v6_drop_counter_does_not_rise_even_if_connects_fail(tmp_path):
+    rc, out = probe(tmp_path, FAKE_NO_COUNT="1")
+    assert rc == 1 and "v6 drop counter did not rise" in out and "v4 drop counter did not rise" in out
+
+
+def test_probe_fails_on_a_reachable_private_v4_and_on_a_too_tight_public_side(tmp_path):
+    rc, out = probe(tmp_path, FAKE_OPEN="192.168.0.1")
+    assert rc == 1 and "reached private 192.168.0.1:80" in out
+    rc, out = probe(tmp_path, FAKE_PUBLIC_BLOCKED="1")
+    assert rc == 1 and "cannot reach public" in out
+
+
+def test_probe_with_no_lan_neighbour_warns_and_still_proves_the_public_v6_drop(tmp_path):
+    rc, out = probe(tmp_path, FAKE_NO_NEIGH="1")
+    assert rc == 0 and "WARN: no global v6 neighbour" in out and "PASS (6 private v4 + 1 v6 targets" in out
