@@ -1,0 +1,18 @@
+# TEMPLATE: install.sh fills the two DNS placeholders below from the host's own resolver (no addresses in the repo).
+# Windy Git CI on Windy 0 (rootless podman user windygit-ci, uid 1002): deny everything private (v4 ranges) and ALL IPv6 but DNS: the LAN'S global v6 prefix is on-link and reachable otherwise. Owner: Windy Git lane.
+# Only this uid is matched; every other process on the host is untouched.
+table inet windygit_ci
+delete table inet windygit_ci
+table inet windygit_ci {
+  chain out {
+    type filter hook output priority 0; policy accept;
+    meta skuid != 1002 return
+    # DNS: the router only
+    ip daddr @DNS4@ udp dport 53 accept
+    ip daddr @DNS4@ tcp dport 53 accept
+    ip6 daddr @DNS6@ udp dport 53 accept
+    ip6 daddr @DNS6@ tcp dport 53 accept
+    ip daddr { 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10, 169.254.0.0/16, 127.0.0.0/8 } counter drop comment "windygit-ci: private v4"
+    meta nfproto ipv6 counter drop comment "windygit-ci: all v6 except DNS"
+  }
+}
