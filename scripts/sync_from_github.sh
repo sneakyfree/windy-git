@@ -52,7 +52,7 @@ FAILED=0
 
 # Repos Windy Git tracks FROM GitHub. Remove a repo from this list at the moment
 # it flips to Windy-Git-first, or the sync will fight its authors and win.
-REPOS="${SYNC_REPOS:-windy-calendar windy-search windy-registry Windy-Clone WindyCloud windy-cloud-sites windy-mind eternitas windy-agent windy-git windy-chat windy-mail windy-connect windy-drops windy-code-web windy-code windy-traveler windy-translate windytranslate-site windytraveler-site windy-hand windy-cloud-domains windy-cloud-vps windytalk windy-pro windy-inbox windy-text windy-hand-site windy-calendar-site windy-contracts windy-vault windy-uptime windy-pro-mobile windy-text-site windy-mind-acp windy-admin Windy-Clone-site windy-mind-site windyword-site windy-mobile windycloud-site eternitas-site eternitas-authenticator windy-legal windy-cfo windy-board}"
+REPOS="${SYNC_REPOS:-windy-calendar windy-search windy-registry Windy-Clone WindyCloud windy-cloud-sites windy-mind eternitas windy-agent windy-git windy-chat windy-mail windy-connect windy-drops windy-code-web windy-code windy-traveler windy-translate windytranslate-site windytraveler-site windy-hand windy-cloud-domains windy-cloud-vps windytalk windy-pro windy-inbox windy-text windy-hand-site windy-calendar-site windy-contracts windy-vault windy-uptime windy-pro-mobile windy-text-site windy-mind-acp windy-admin Windy-Clone-site windy-mind-site windyword-site windy-cell windycloud-site eternitas-site eternitas-authenticator windy-legal windy-cfo windy-board Windy-Clinic WindyProUltra windy-ads windy-call-site windy-cell-site windy-chat-site windy-code-site windy-connect-site windy-control-panel windy-darr windy-drops-site windy-ecosystem-chronicles windy-fix-me windy-fly-desktop windy-fly-site windy-git-site windy-hub windy-infra windy-iron windy-log windy-log-site windy-mail-site windy-mobile-site windy-node windy-ops windy-search-site windy-session windy-vault-site windy-whatsapp-gateway windy-word-mcp windygit-mirror-test-553 windytalk-site windytranslate-examples windytranslate-python windyword-site-book-launch}"
 
 # Repos whose TAGS must not reach Windy Git. A tag push fires `on: push: tags`
 # workflows; windy-pro's build-electron is a matrix over ubuntu/macos/windows-
@@ -60,7 +60,7 @@ REPOS="${SYNC_REPOS:-windy-calendar windy-search windy-registry Windy-Clone Wind
 # queued jobs are invisible in /actions/tasks). Releases are built elsewhere.
 NO_TAGS="${SYNC_NO_TAGS:-windy-pro}"
 
-# windy-call and windy-cell left this list 2026-10-21: archived (read-only) on GitHub
+# windy-call and the OLD windy-cell (now windy-cell-legacy, 11-06) left this list 2026-10-21: archived (read-only) on GitHub
 # by Windy Call; their Windy Git copies stay as frozen history.
 
 # Branches GitHub deleted (merged PR heads, mostly) used to stay on Windy Git for
