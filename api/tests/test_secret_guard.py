@@ -31,6 +31,14 @@ CASES = [
     ("stripe webhook secret", "STRIPE_WEBHOOK_SECRET=whsec_" + "w" * 32),
     ("google api key", "key=AIza" + "B" * 35),
     ("private key block", "-----BEGIN OPENSSH PRIVATE KEY-----"),
+    # Cloudflare (Boss 11-06, kit-army-config #632): account / user tokens and the global key carry a
+    # prefix; legacy 40-char tokens and the 37-hex global key only count when assigned to a CF-named secret.
+    ("cloudflare api token", "CLOUDFLARE_X=cfat_" + "a1B2" * 12),
+    ("cloudflare api token", "token: cfut_" + "Z9" * 24),
+    ("cloudflare api token", "key = 'cfk_" + "q" * 40 + "'"),
+    ("cloudflare origin ca key", "origin = v1.0-" + "a" * 24 + "-" + "b" * 146),
+    ("cloudflare legacy credential assignment", "CLOUDFLARE_API_TOKEN=" + "A" * 40),
+    ("cloudflare legacy credential assignment", "cf_global_key: " + "0123456789abcdef" * 2 + "01234"),
 ]
 
 
@@ -55,6 +63,10 @@ def test_each_shape_is_found_and_only_its_hash_is_kept(kind, text):
     "pk_test_" + "p" * 40,                 # publishable: public by design
     "re_test_register_sends_verification", # windy-pro's fake Resend key
     "ANTHROPIC_API_KEY=",                  # a name, not a value
+    "cfat_",                               # a prefix named in prose
+    "cfat_" + "a" * 8,                     # too short to be a token
+    "CFG_TOKEN=" + "A" * 40,               # not a Cloudflare name
+    "TOKEN=" + "A" * 40,                   # a bare 40-char value with no Cloudflare name
 ])
 def test_non_secrets_are_not_flagged(text):
     assert sg.scan_line("x", text) == []
