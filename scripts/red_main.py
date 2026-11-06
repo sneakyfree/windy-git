@@ -54,7 +54,7 @@ OWNERS = {**gr.OWNERS,
           "windy-calendar-site": "Windy Calender", "windy-vault": "Windy Vault", "windy-uptime": "Windy Git",
           "windy-pro-mobile": "Windy Mobile (mini)", "windy-mind-acp": "Windy Mind", "windy-mind-site": "Windy Mind",
           "windy-admin": "Windy Admin Panel", "Windy-Clone-site": "Windy Clone", "windyword-site": "Windy Word",
-          "windy-mobile": "Windy Mobile (Cell Phone)", "windycloud-site": "Windy Cloud",
+          "windy-cell": "Windy Mobile (Cell Phone)", "windycloud-site": "Windy Cloud",
           "eternitas-site": "Eternitas", "eternitas-authenticator": "Eternitas"}
 
 # A known reading of a red, appended to its line (Boss's read, dated). Never hides the line.
