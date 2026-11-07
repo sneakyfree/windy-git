@@ -23,7 +23,7 @@ be undone, and nothing is deleted in either direction.
 
 ## Preconditions (all must be true before step 1)
 - [x] Encrypted nightly state backup (Postgres + Gitea config + repos); cross-host restore drill passed (10-01).
-- [x] Gitea on a patched release (1.24.7); the upgrade path takes a snapshot first (docs/RESTORE-DRILL.md).
+- [x] Gitea on a patched release (28.3.0 since 11-07; was 1.24.7); the upgrade path takes a snapshot first (docs/RESTORE-DRILL.md).
 - [x] `windygit-state-backup` writes a heartbeat (`/var/lib/windy-heartbeats/windygit-state-backup.json`, ok).
 - [ ] A missed backup actually PAGES: confirm it is on the paging list, and test once by skipping a night.
 - [ ] Boss/Grant capacity call on Veron storage for DB + git. The root disk is at 65% now, but it hit 95% this morning.
