@@ -10,7 +10,7 @@ For this repo: CI throughput, the mirror work and the queue priority are on the 
 
 ## Now
 Line standard (coordinating lane): `- [ ] what · OWNER · ADDED · DUE · STATUS · SOURCE`. Times are UTC. Dated lines first.
-- [ ] This TODO.md merged to main with every open line in the standard, and windy-git-site's too · Windy Git · 2026-11-06 · Sat 2026-11-07 18:00 · this PR (#131) and windy-git-site #2 refreshed 11-07 ~13:5x; need a stamp + green gate · coordinating lane TODO HEALTH 2026-11-07 13:38:38Z
+- [ ] This TODO.md merged to main with every open line in the standard, and windy-git-site's too · Windy Git · 2026-11-06 · Sat 2026-11-07 18:00 · this PR (#131) and windy-git-site #2 refreshed 11-07 13:4x; need a stamp + green gate · coordinating lane TODO HEALTH 2026-11-07 13:38:38Z
 - [ ] Gitea 1.24.7 to 28.3.0 (175 upstream security advisories since 1.24.7): live cutover with tools/gitea-cutover.sh (only at :17-:30 with 0 jobs running, fresh dump + data copy, automatic rollback) · Windy Git · 2026-11-07 · first :17 slot after the go-ahead · rehearsal PASSED on a migrated copy 08:19-08:35; PR #149 (73926b3f) needs a reader + stamp + gate, then a go-ahead by name · Russ (human) 2026-11-07 ~08:15; board ask 08:34
 - [ ] Delete the rehearsal copy (it holds production data; root-only) · Windy Git · 2026-11-07 · 24 h after the cutover, at latest Sun 2026-11-08 12:00 · kept for the runner-swap rehearsal · this lane 2026-11-07
 - [ ] Delete the cutover rollback point (holds secrets) · Windy Git · 2026-11-07 · cutover + 7 days · not made yet (made at cutover) · this lane 2026-11-07
