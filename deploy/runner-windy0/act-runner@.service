@@ -1,0 +1,15 @@
+[Unit]
+Description=Windy Git CI runner w0-%i (act_runner, rootless podman, repo-scoped)
+After=podman.socket
+Wants=podman.socket
+
+[Service]
+Environment=DOCKER_HOST=unix://%t/podman/podman.sock
+WorkingDirectory=/var/lib/windygit-ci/runner-%i
+ExecStart=/usr/local/bin/act_runner daemon --config /var/lib/windygit-ci/runner-%i/config.yaml
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=4min
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,13 @@
+[Unit]
+Description=Windy Git CI egress deny (nft table windygit_ci, uid windygit-ci only)
+After=network-pre.target
+Before=network.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/nftables.d/windygit-ci.nft
+ExecStop=/usr/sbin/nft delete table inet windygit_ci
+
+[Install]
+WantedBy=multi-user.target

@@ -28,6 +28,15 @@ since 10-23), so it prints, every run, as KNOWN-STALE with that reason (never as
 current) but does not count in <m>: an alarm that is red for a known, accepted reason
 trains everyone to ignore red. After PRIVATE_NO_KEY_UNTIL they count again, so nothing
 gets permanent amnesty. Public mirrors always count.
+
+24-HOUR ALARM (Boss 11-04, the mirror-lag alarm): the hourly check above is green for the
+KNOWN-STALE private mirrors, so one can sit frozen for weeks with nobody told. This run also
+remembers WHEN each mirror first went out of step (a stale one counts from its last refresh;
+state file MIRROR_LAG_STATE) and, for every mirror out of step for 24 h or more, KNOWN-STALE or
+not, posts ONE BOARD line per UTC day naming them with their age. Nothing is posted while none
+is 24 h old, never more than one line a day, and a line that could not be written anywhere is
+retried the next hour. State that cannot be saved fails the run (exit 1) rather than letting
+the line repeat every hour. `--dry` prints what it would post and writes nothing.
 """
 from __future__ import annotations
 
@@ -38,6 +47,10 @@ import re
 import sys
 import urllib.error
 import urllib.request
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import cancel_superseded as cs  # noqa: E402  (board: the one BOARD line a day)
 
 GITEA = os.environ.get("BRIDGE_GITEA_URL", "http://localhost:3080").rstrip("/")
 GITEA_TOKEN = os.environ.get("GITEA_SYNC_TOKEN") or os.environ.get("GITEA_ADMIN_TOKEN", "")
@@ -45,6 +58,9 @@ GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 STALE_S = 3600
 GRACE_S = 1800
 BATCH = 40
+ALARM_AFTER_S = 24 * 3600
+ALARM_MAX_NAMES = 10      # a BOARD line stays one line: the oldest ten, then "+N more"
+STATE = Path(os.environ.get("MIRROR_LAG_STATE", "/var/lib/windygit/mirror-lag.json"))
 MAX_PAGES = 40  # 2,000 mirrors; a Gitea that never returns an empty page is a fault, not a list
 _DUR = re.compile(r"(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)(?:\.\d+)?s)?")
 
@@ -177,7 +193,85 @@ def split_known(problems: list[str], private: set[str], today: dt.date) -> tuple
     return real, known
 
 
-def main() -> int:
+def track(problems: list[str], mirrors: list[dict], since: dict, now: float) -> tuple[dict, list[tuple[str, int]]]:
+    """Pure: (new since-map, aged). `problems` = EVERY problem line (known-stale ones too). A mirror's lag
+    starts when it was first seen out of step, or at its last refresh when that is older (STALE). `aged` =
+    [(name, seconds)] for mirrors out of step >= ALARM_AFTER_S, oldest first. A mirror back in step drops out."""
+    refreshed = {m["name"]: m["updated"] for m in mirrors}
+    new: dict[str, float] = {}
+    aged: list[tuple[str, int]] = []
+    for p in problems:
+        kind, name = p.split(" ", 2)[0], p.split(" ", 2)[1].rstrip(":")
+        start = float(since.get(name, now))
+        if kind == "STALE" and refreshed.get(name) is not None:
+            start = min(start, refreshed[name])
+        new[name] = start
+        if now - start >= ALARM_AFTER_S:
+            aged.append((name, int(now - start)))
+    aged.sort(key=lambda a: -a[1])
+    return new, aged
+
+
+def _age(sec: int) -> str:
+    d, h = divmod(sec // 3600, 24)
+    return f"{d}d {h}h" if d else f"{h}h"
+
+
+def alarm_line(aged: list[tuple[str, int]], private: set[str]) -> str:
+    """Pure: the one BOARD line for a day."""
+    parts = [f"{n} ({_age(a)}{', private, KNOWN-STALE' if n in private else ''})" for n, a in aged[:ALARM_MAX_NAMES]]
+    more = f", +{len(aged) - ALARM_MAX_NAMES} more" if len(aged) > ALARM_MAX_NAMES else ""
+    return (f"[Windy Git] MIRROR LAG 24h+: {len(aged)} pull mirror(s) out of step for a day or more: "
+            + ", ".join(parts) + more + ". The hourly check stays green for the KNOWN-STALE private ones, so this is the "
+            "once-a-day line; the fix is a read-only GitHub credential for those mirrors.")
+
+
+def load_state() -> dict:
+    try:
+        d = json.loads(STATE.read_text())
+        return d if isinstance(d, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def save_state(st: dict) -> bool:
+    try:
+        STATE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = STATE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(st))
+        os.replace(tmp, STATE)
+        return True
+    except OSError as e:
+        print(f"mirror lag alarm: state not saved ({type(e).__name__})")
+        return False
+
+
+def alarm(all_problems: list[str], mirrors: list[dict], private: set[str], now: float, today: str, dry: bool,
+          post=None) -> bool:
+    """Track lag, post at most one line today. False = state could not be saved (the run fails)."""
+    post = post or cs.board
+    st = load_state()
+    since, aged = track(all_problems, mirrors, st.get("since") or {}, now)
+    posted_day = st.get("posted_day")
+    for n, a in aged:
+        print(f"  ALARM 24h+ {n}: out of step {_age(a)}")
+    say = bool(aged) and posted_day != today
+    if dry:
+        if say:
+            print(f"  would post: {alarm_line(aged, private)}")
+        return True
+    if not say:
+        return save_state({"since": since, "posted_day": posted_day})
+    # saved BEFORE posting: if the state cannot be written the line must not go out every hour
+    if not save_state({"since": since, "posted_day": today}):
+        return False
+    if not post(alarm_line(aged, private)):
+        print("mirror lag alarm: BOARD line not written anywhere, retrying next run")
+        return save_state({"since": since, "posted_day": posted_day})
+    return True
+
+
+def main(dry: bool = False) -> int:
     try:
         mirrors = gitea_mirrors()
         gh = github_heads([m["source"] for m in mirrors])
@@ -190,13 +284,15 @@ def main() -> int:
         return 1
     now = dt.datetime.now(dt.UTC)
     private = {m["name"] for m in mirrors if (gh.get(m["source"]) or {}).get("private")}
-    problems, known = split_known(judge(mirrors, gh, now.timestamp()), private, now.date())
+    every = judge(mirrors, gh, now.timestamp())
+    problems, known = split_known(every, private, now.date())
     for p in problems + known:
         print(f"  {p}")
+    state_ok = alarm(every, mirrors, private, now.timestamp(), now.date().isoformat(), dry)
     tail = f", {len(known)} known-stale" if known else ""
     print(f"mirror lag: {len(mirrors)} mirrors checked, {len(problems)} behind{tail}")
-    return 1 if problems else 0
+    return 1 if problems or not state_ok else 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(dry="--dry" in sys.argv[1:]))

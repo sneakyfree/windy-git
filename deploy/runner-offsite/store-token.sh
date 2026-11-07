@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # ON NULL 0, as root (via sudo -n from register.sh): read ONE registration token from stdin and
 # store it as RUNNER_<n>_TOKEN in this directory's .env (0600, owned by windygit-ci). Never prints
-# it, never takes it in argv. Usage: printf %s TOKEN | sudo -n store-token.sh <1|2>
+# it, never takes it in argv. Usage: printf %s TOKEN | sudo -n store-token.sh <1|2|3>
 set -euo pipefail
 n=${1:-}
-[[ "$n" =~ ^[12]$ ]] || { echo "runner must be 1 or 2" >&2; exit 2; }
+[[ "$n" =~ ^[123]$ ]] || { echo "runner must be 1, 2 or 3" >&2; exit 2; }
 umask 077
 t=$(head -c 4096)
 t=${t%$'\n'}

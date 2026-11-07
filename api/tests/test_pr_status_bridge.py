@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import importlib.util
+import re
 import sys
 from pathlib import Path
 
@@ -75,6 +76,10 @@ class Fake:
             self.posted.append(body)
             return 201, {}
         if "/pulls?" in path:
+            m = re.search(r"per_page=(\d+)(?:&page=(\d+))?", path)
+            if m:   # honour paging, like GitHub: a list longer than one page comes back page by page
+                per, page = int(m.group(1)), int(m.group(2) or 1)
+                return 200, self.gh_prs[(page - 1) * per: page * per]
             return 200, self.gh_prs
         raise AssertionError(path)
 
@@ -1259,3 +1264,34 @@ def test_a_raising_prefetch_still_lets_the_pass_run_on_rest(monkeypatch, tmp_pat
     assert bridge.main() == 0
     assert [x for x in synced if len(x) == 2] == [("windy-pro", None), ("windy-chat", None)]
     assert "(REST fallback)" in capsys.readouterr().out
+
+
+def test_open_prs_past_the_first_100_are_mirrored(fake, monkeypatch):
+    """windy-pro #885, 11-05: 115 open PRs, one per_page=100 call, the 15 oldest never got a mirror
+    PR (no CI) and their old mirrors were closed as 'closed on GitHub'."""
+    monkeypatch.setattr(bridge, "GH_OWNER", "sneakyfree")
+    prs = [_gh_pr(n) for n in range(1000, 885 - 1, -1)][:115]   # newest first, #885 last (page 2)
+    assert len(prs) == 115 and prs[-1]["number"] == 886
+    prs[-1]["number"] = 885
+    f = fake(gh_prs=prs, wg_prs=[{"number": 9, "title": "[GH#885] still open on GitHub"}])
+    bridge.sync_prs("r")
+    assert f.closed == []                       # the page-2 PR's existing mirror is NOT closed
+    assert len(f.opened) == 114                 # every other open PR gets its mirror (885 already has one)
+
+
+def test_pr_list_page_failure_raises_never_a_short_list(monkeypatch):
+    calls = []
+
+    def gh(method, path, body=None):
+        calls.append(path)
+        return (200, [_gh_pr(i) for i in range(100)]) if "page=1" in path else (502, {})
+
+    monkeypatch.setattr(bridge, "github", gh)
+    with pytest.raises(RuntimeError):
+        bridge.github_open_pulls("r")
+
+
+def test_pr_list_page_cap_raises(monkeypatch):
+    monkeypatch.setattr(bridge, "github", lambda m, p, b=None: (200, [_gh_pr(i) for i in range(100)]))
+    with pytest.raises(RuntimeError):
+        bridge.github_open_pulls("r")

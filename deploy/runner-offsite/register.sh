@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Register ONE offsite runner on Null 0, scoped to ONE secret-free repo. Run ON VERON as root:
-#   sudo bash deploy/runner-offsite/register.sh <runner 1|2> <repo>      e.g. 1 eternitas
+#   sudo bash deploy/runner-offsite/register.sh <runner 1|2|3> <repo>      e.g. 1 eternitas
 # Refuses unless the repo holds 0 Actions secrets (repo, owner and instance level): Gitea hands a
 # repo's secrets to every job of that repo, and only secret-free repos may run off Veron. The
 # repo-scoped registration token goes from Gitea straight into Null 0's 0600 .env over ssh stdin:
@@ -10,7 +10,7 @@
 # compose runs via sudo. Nothing is mounted from any home directory (Boss 11-02: Null 0 holds a Claude login).
 set -euo pipefail
 n=$1; repo=$2
-[[ "$n" =~ ^[12]$ ]] || { echo "runner must be 1 or 2"; exit 2; }
+[[ "$n" =~ ^[123]$ ]] || { echo "runner must be 1, 2 or 3"; exit 2; }
 [[ "$repo" =~ ^[A-Za-z0-9._-]{1,100}$ ]] || { echo "bad repo name"; exit 2; }
 NULL0="${NULL0_SSH:-eth-null0}"; DIR="${OFFSITE_DIR:-/opt/windygit-runner-offsite}"
 WGQ="${WGQ:-/home/user1-gpu/bin/wg-q}"

@@ -1,0 +1,172 @@
+#!/bin/bash
+# veron-heavy (Windy Git, Boss's VERON LOAD RULE 11-04 15:41Z): run a HEAVY job (full test suite, npm ci, a full build)
+# only when a slot is free and the disk is not already drowning. A flock-based COUNTING SEMAPHORE across every lane
+# and user on this machine.
+#
+#   veron-heavy [--max-run SECONDS] [--wait SECONDS] [--io-max N] [--load-max N] [--lane NAME] -- COMMAND [ARGS...]
+#   veron-heavy --status
+#
+#   * at most VERON_HEAVY_MAX (4) heavy jobs at once, fleet-wide: slot files /run/veron-heavy/slot.N, each a flock.
+#     A slot is released the instant its holder dies (the kernel drops the lock), so a crashed job never wedges it.
+#   * IO gate: before taking a slot it reads /proc/pressure/io "some avg60"; while that is AT OR ABOVE VERON_HEAVY_IO_MAX (30)
+#     it waits (a poll every 20-40 s with jitter, never a busy loop). The gate is checked only on the way in.
+#   * LOAD gate (Boss 11-05): while the 1-minute load average is AT OR ABOVE VERON_HEAVY_LOAD_MAX (48) it waits too, and
+#     prints ONE "waiting" line a minute (VERON_HEAVY_SAY_EVERY), so a lane sees why it is held. Waiting is not failing.
+#   * the job runs under `nice -n 10` and `ionice -c2 -n7`, and with its worker counts capped (VERON_HEAVY_WORKERS, 2):
+#     JEST_MAX_WORKERS, PYTEST_XDIST_AUTO_NUM_WORKERS, PYTEST_XDIST_WORKERS, MAKEFLAGS=-jN. Jest reads no env var for
+#     its workers, so a jest run still wants --maxWorkers=2 on its own command line; the rest is enforced here.
+#   * holder timeout: the job is killed (via timeout(1), its own child only) after VERON_HEAVY_MAX_RUN seconds (7200)
+#     and the slot is freed; that is logged and exits 124.
+#   * waiting is bounded: after VERON_HEAVY_WAIT seconds (14400, 4 h) it gives up with exit 75 and names the holders.
+#   * every acquire / wait / release / timeout goes to the journal (logger -t veron-heavy) and to --status. The holder
+#     record has the user, lane, cwd and the command NAME only: never its arguments (they can carry secrets).
+#   * the job does NOT inherit the lock: a stray daemon it leaves behind cannot hold a slot for ever (if the wrapper itself
+#     is SIGKILLed the slot frees at once even though its job may run on: say so, do not rely on it).
+#   * nested calls (a heavy job calling veron-heavy) run directly: no deadlock.
+# Exit: the command's own code; 70 state dir unusable; 75 gave up waiting; 124 held too long; 127 command not found; 64 usage.
+# Env: VERON_HEAVY_MAX, VERON_HEAVY_IO_MAX, VERON_HEAVY_LOAD_MAX, VERON_HEAVY_WORKERS, VERON_HEAVY_SAY_EVERY, VERON_HEAVY_WAIT, VERON_HEAVY_MAX_RUN, VERON_HEAVY_LANE,
+#      VERON_HEAVY_DIR (default /run/veron-heavy), VERON_HEAVY_PRESSURE (default /proc/pressure/io), VERON_HEAVY_LOADAVG
+#      (default /proc/loadavg), VERON_HEAVY_POLL (seconds).
+set -u
+DIR=${VERON_HEAVY_DIR:-/run/veron-heavy}
+PRESSURE=${VERON_HEAVY_PRESSURE:-/proc/pressure/io}
+MAX=${VERON_HEAVY_MAX:-4}
+IO_MAX=${VERON_HEAVY_IO_MAX:-30}
+LOAD_MAX=${VERON_HEAVY_LOAD_MAX:-48}
+LOADAVG=${VERON_HEAVY_LOADAVG:-/proc/loadavg}
+WORKERS=${VERON_HEAVY_WORKERS:-2}
+SAY_EVERY=${VERON_HEAVY_SAY_EVERY:-60}
+WAIT=${VERON_HEAVY_WAIT:-14400}
+MAX_RUN=${VERON_HEAVY_MAX_RUN:-7200}
+POLL=${VERON_HEAVY_POLL:-20}
+LANE=${VERON_HEAVY_LANE:-}
+
+log() { logger -t veron-heavy -- "$*" 2>/dev/null || true; }
+say() { printf 'veron-heavy: %s\n' "$*" >&2; }
+now() { date +%s; }
+
+setup_dir() {
+  umask 000
+  mkdir -p "$DIR/holders" "$DIR/waiters" 2>/dev/null || true
+  chmod 1777 "$DIR" "$DIR/holders" "$DIR/waiters" 2>/dev/null || true
+  # loud, not silent: a semaphore that cannot write its state would let EVERYONE through unseen
+  if [ ! -d "$DIR/holders" ] || [ ! -w "$DIR/holders" ] || [ ! -w "$DIR/waiters" ]; then
+    say "cannot use $DIR (missing or not writable). Ask Windy Git: sudo systemd-tmpfiles --create /etc/tmpfiles.d/veron-heavy.conf"
+    exit 70
+  fi
+}
+
+io_avg60() {      # prints the "some" avg60 as an integer (rounded down); 0 if unreadable (an unreadable gate is open, and logged)
+  local line v
+  line=$(grep -m1 '^some' "$PRESSURE" 2>/dev/null) || { echo 0; return; }
+  v=${line#*avg60=}; v=${v%% *}
+  printf '%s' "${v%%.*}"
+}
+
+load1() {         # the 1-minute load average as an integer (rounded down); 0 if unreadable
+  local v
+  read -r v _ < "$LOADAVG" 2>/dev/null || { echo 0; return; }
+  printf '%s' "${v%%.*}"
+}
+
+holders_text() {
+  local f out=
+  for f in "$DIR"/holders/slot.*; do
+    [ -e "$f" ] || continue
+    out="$out $(cat "$f" 2>/dev/null | tr '\n' ' ')|"
+  done
+  printf '%s' "${out:- none}"
+}
+
+status() {
+  setup_dir
+  local i f held=0
+  for ((i = 0; i < MAX; i++)); do
+    f="$DIR/holders/slot.$i"
+    exec 8>>"$DIR/slot.$i"
+    if flock -n 8; then flock -u 8; else held=$((held + 1)); printf 'slot %d: HELD  %s\n' "$i" "$(cat "$f" 2>/dev/null | tr '\n' ' ')"; fi
+    exec 8>&-
+    [ -e "$DIR/slot.$i" ] && :
+  done
+  printf 'slots in use: %d of %d; io pressure some avg60=%s (gate %s); load1=%s (gate %s)\n' "$held" "$MAX" "$(io_avg60)" "$IO_MAX" "$(load1)" "$LOAD_MAX"
+  local w=0 p
+  for p in "$DIR"/waiters/*; do [ -e "$p" ] && kill -0 "$(basename "$p")" 2>/dev/null && w=$((w + 1)); done
+  printf 'waiting: %d\n' "$w"
+}
+
+# ---- arguments
+while [ $# -gt 0 ]; do
+  case $1 in
+    --status) status; exit 0 ;;
+    --max-run) MAX_RUN=${2:?}; shift 2 ;;
+    --wait) WAIT=${2:?}; shift 2 ;;
+    --io-max) IO_MAX=${2:?}; shift 2 ;;
+    --load-max) LOAD_MAX=${2:?}; shift 2 ;;
+    --lane) LANE=${2:?}; shift 2 ;;
+    --) shift; break ;;
+    -h|--help) sed -n 2,26p "$0"; exit 0 ;;
+    *) say "usage: veron-heavy [--max-run S] [--wait S] [--io-max N] [--load-max N] [--lane NAME] -- COMMAND [ARGS...] | --status"; exit 64 ;;
+  esac
+done
+[ $# -gt 0 ] || { say "no command given (usage: veron-heavy -- COMMAND [ARGS...])"; exit 64; }
+CMD_NAME=$(basename -- "$1")
+if ! command -v -- "$1" >/dev/null 2>&1; then say "command not found: $CMD_NAME"; exit 127; fi
+
+# nested: a heavy job calling veron-heavy again just runs
+if [ -n "${VERON_HEAVY_SLOT:-}" ]; then exec "$@"; fi
+
+setup_dir
+[ -n "$LANE" ] || LANE=$(basename -- "$(pwd)")
+start_wait=$(now)
+printf '%s %s\n' "$LANE" "$CMD_NAME" > "$DIR/waiters/$$" 2>/dev/null || true
+cleanup_wait() { rm -f "$DIR/waiters/$$" 2>/dev/null; }
+trap cleanup_wait EXIT
+declare -i waited_logged=0
+last_say=0
+
+while :; do
+  # 1) IO gate
+  p=$(io_avg60); ld=$(load1)
+  if [ "$p" -ge "$IO_MAX" ]; then
+    reason="io pressure avg60=$p >= $IO_MAX"
+  elif [ "$ld" -ge "$LOAD_MAX" ]; then
+    reason="load1=$ld >= $LOAD_MAX"
+  else
+    reason=
+    # 2) a free slot
+    for ((i = 0; i < MAX; i++)); do
+      { exec 200>>"$DIR/slot.$i"; } 2>/dev/null || continue     # (a bare `exec ... 2>/dev/null` would silence stderr for good)
+      if flock -n 200; then SLOT=$i; break 2; fi
+      exec 200>&-
+    done
+    reason="all $MAX slots busy"
+  fi
+  if [ $(( $(now) - start_wait )) -ge "$WAIT" ]; then
+    say "gave up after ${WAIT}s waiting ($reason). Holders:$(holders_text)"
+    log "gave up lane=$LANE cmd=$CMD_NAME after ${WAIT}s ($reason)"
+    exit 75
+  fi
+  if [ "$waited_logged" -eq 0 ]; then log "waiting lane=$LANE cmd=$CMD_NAME ($reason)"; waited_logged=1; fi
+  if [ $(( $(now) - last_say )) -ge "$SAY_EVERY" ]; then
+    say "waiting: $reason. Holders:$(holders_text)"; last_say=$(now)
+  fi
+  sleep $(( POLL + RANDOM % (POLL > 1 ? POLL : 1) ))
+done
+
+cleanup_wait; trap - EXIT
+HOLD="$DIR/holders/slot.$SLOT"
+printf 'user=%s lane=%s cwd=%s cmd=%s pid=%s since=%s max_run=%s\n' "$(id -un)" "$LANE" "$(pwd)" "$CMD_NAME" "$$" "$(date -u +%FT%TZ)" "$MAX_RUN" > "$HOLD" 2>/dev/null || true
+log "acquired slot=$SLOT lane=$LANE cmd=$CMD_NAME waited=$(( $(now) - start_wait ))s io=$(io_avg60) max_run=${MAX_RUN}s"
+export VERON_HEAVY_SLOT=$SLOT
+release() { rm -f "$HOLD" 2>/dev/null; log "released slot=$SLOT lane=$LANE cmd=$CMD_NAME ran=$(( $(now) - t0 ))s rc=${rc:-?}"; }
+t0=$(now); rc=
+trap 'release' EXIT
+# fd 200 (the slot lock) is closed for the job: a process it leaves behind must not hold the slot for ever
+# nice/ionice/env exec into the job (same PID), so timeout still signals the job itself. Without ionice: nice only.
+PRIO=(nice -n 10)
+command -v ionice >/dev/null 2>&1 && PRIO+=(ionice -c2 -n7)
+timeout --foreground --kill-after=30 "$MAX_RUN" env JEST_MAX_WORKERS="$WORKERS" PYTEST_XDIST_AUTO_NUM_WORKERS="$WORKERS" \
+  PYTEST_XDIST_WORKERS="$WORKERS" MAKEFLAGS="-j$WORKERS" "${PRIO[@]}" "$@" 200>&-
+rc=$?
+if [ "$rc" -eq 124 ]; then say "held the slot longer than ${MAX_RUN}s: the job was stopped and the slot freed"; log "timeout slot=$SLOT lane=$LANE cmd=$CMD_NAME after ${MAX_RUN}s"; fi
+exit "$rc"

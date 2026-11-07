@@ -44,19 +44,25 @@ def test_dind_is_sysbox_not_privileged_and_nothing_mounts_a_host_path():
             src = v.split(":", 1)[0]
             assert src in ("./config.yaml",) or not src.startswith(("/", "~", ".")), (name, v)
         assert "/var/run/docker.sock" not in str(svc)
-    assert s["dind"]["cpus"] == 4.0 and s["dind"]["mem_limit"] == "9g"
+    assert s["dind"]["cpus"] == 4.0 and s["dind"]["mem_limit"] == "7g"      # the host keeps >= 4 GB of its 11 (Boss 11-04)
 
 
-def test_two_runners_each_with_its_own_token_and_volume():
+def test_three_runners_each_with_its_own_token_and_volume():
     s = COMPOSE["services"]
     runners = {n: v for n, v in s.items() if n.startswith("runner-")}
-    assert sorted(runners) == ["runner-1", "runner-2"]
+    assert sorted(runners) == ["runner-1", "runner-2", "runner-3"]
     assert runners["runner-1"]["environment"]["GITEA_RUNNER_NAME"] == "null0-1"
     assert runners["runner-2"]["environment"]["GITEA_RUNNER_NAME"] == "null0-2"
+    assert runners["runner-3"]["environment"]["GITEA_RUNNER_NAME"] == "null0-3"
     assert runners["runner-1"]["environment"]["GITEA_RUNNER_REGISTRATION_TOKEN"] == "${RUNNER_1_TOKEN:-}"
     assert runners["runner-2"]["environment"]["GITEA_RUNNER_REGISTRATION_TOKEN"] == "${RUNNER_2_TOKEN:-}"
+    assert runners["runner-3"]["environment"]["GITEA_RUNNER_REGISTRATION_TOKEN"] == "${RUNNER_3_TOKEN:-}"
     vols = [v for r in runners.values() for v in r["volumes"] if not v.startswith("./")]
-    assert vols == ["runner-data-1:/data", "runner-data-2:/data"]
+    assert vols == ["runner-data-1:/data", "runner-data-2:/data", "runner-data-3:/data"]
+    assert sorted(COMPOSE["volumes"]) == ["dind-storage", "runner-data-1", "runner-data-2", "runner-data-3"]
+    # every runner is capacity 1 and none claims a Veron-only label
+    for r in runners.values():
+        assert r.get("mem_limit") == "1g" and r.get("cpus") == 1.0
 
 
 def test_register_refuses_a_repo_with_secrets_and_scopes_the_token_to_one_repo():
@@ -69,6 +75,18 @@ def test_register_refuses_a_repo_with_secrets_and_scopes_the_token_to_one_repo()
     # Gitea prints a log line on stdout before the token: only the last line goes on (11-02)
     gen = REGISTER.index("generate-runner-token")
     assert REGISTER.index("| tail -n 1", gen) < REGISTER.index("| runuser", gen)
+
+
+def test_register_accepts_runner_1_2_3_and_nothing_else(tmp_path):
+    """register.sh stops at its argument check, before touching Gitea or Null 0."""
+    def run(n, repo="windy-mind"):
+        return subprocess.run(["bash", str(OFF / "register.sh"), n, repo], capture_output=True, text=True,
+                              env={"PATH": "/usr/bin:/bin", "WGQ": "/nonexistent-wgq"}, timeout=30)
+    for bad in ("0", "4", "12", "x", ""):
+        r = run(bad)
+        assert r.returncode == 2 and "runner must be 1, 2 or 3" in r.stdout, bad
+    r = run("3", "bad repo!")
+    assert r.returncode == 2 and "bad repo name" in r.stdout            # runner 3 got past the number check
 
 
 def test_store_token_reads_stdin_only_and_writes_a_0600_file(tmp_path):
@@ -91,8 +109,10 @@ def test_store_token_reads_stdin_only_and_writes_a_0600_file(tmp_path):
     for bad, code in (("short\n", 3), ("has space in it xxxxxxxxxx\n", 3)):
         r = subprocess.run(["bash", str(d / "store-token.sh"), "1"], input=bad, capture_output=True, text=True, env=env)
         assert r.returncode == code and bad.strip() not in r.stdout + r.stderr
-    r = subprocess.run(["bash", str(d / "store-token.sh"), "3"], input="x" * 30, capture_output=True, text=True, env=env)
+    r = subprocess.run(["bash", str(d / "store-token.sh"), "4"], input="x" * 30, capture_output=True, text=True, env=env)
     assert r.returncode == 2
+    r = subprocess.run(["bash", str(d / "store-token.sh"), "3"], input="thirdtokenthirdtoken1234\n", capture_output=True, text=True, env=env)
+    assert r.returncode == 0 and "RUNNER_3_TOKEN=thirdtokenthirdtoken1234\n" in (d / ".env").read_text()
 
 
 def test_the_ci_image_build_can_target_the_offsite_dind():

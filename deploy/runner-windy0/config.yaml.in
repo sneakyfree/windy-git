@@ -1,0 +1,30 @@
+# act_runner configuration for the OFFSITE runners (Null 0). Same as deploy/runner/config.yaml
+# (capacity 1, 150m ceiling, per-job networks, unprivileged jobs, --init, no host docker socket)
+# EXCEPT: labels self-hosted/linux/x64 only (NEVER veron-1 / linux-x64), each job capped at
+# 2 CPUs / 4 GB (no swap beyond it), and NO volume a job may mount (no /ci-inputs here).
+# api/tests/test_runner_offsite.py pins every one of those differences.
+log:
+  level: info
+runner:
+  file: /var/lib/windygit-ci/runner-@N@/.runner
+  capacity: 1
+  timeout: 150m
+  shutdown_timeout: 3m
+  insecure: false
+  fetch_timeout: 5s
+  fetch_interval: 2s
+  labels:
+  - self-hosted:docker://localhost/windy-git-ci/ubuntu:22.04-1
+  - linux:docker://localhost/windy-git-ci/ubuntu:22.04-1
+  - x64:docker://localhost/windy-git-ci/ubuntu:22.04-1
+cache:
+  enabled: true
+  dir: /var/lib/windygit-ci/runner-@N@/cache
+container:
+  network: ''
+  privileged: false
+  options: --init --cpus=2 --memory=4g --memory-swap=4g
+  workdir_parent: /workspace
+  valid_volumes: []
+  docker_host: '-'
+  force_pull: false
