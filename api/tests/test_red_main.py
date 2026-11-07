@@ -30,7 +30,7 @@ def test_a_red_context_alarms_only_after_24_h_then_once_a_day():
     assert rm.step(state, "windy-pro-mobile", SHA, reds, T0 + 23 * H) == []          # not yet a day
     due = rm.step(state, "windy-pro-mobile", SHA, reds, T0 + 25 * H)
     assert len(due) == 1 and "RED MAIN: windy-pro-mobile" in due[0][1]
-    assert "windy-git/secret-guard = failure" in due[0][1] and "Owner: Windy Mobile (mini)" in due[0][1]
+    assert "windy-git/secret-guard = failure" in due[0][1] and "Owner: Windy Fly Mobile" in due[0][1]
     state["reds"][due[0][0]]["last_post"] = T0 + 25 * H                               # main() does this on a confirmed post
     assert rm.step(state, "windy-pro-mobile", SHA, reds, T0 + 30 * H) == []          # once a day
     assert len(rm.step(state, "windy-pro-mobile", SHA, reds, T0 + 49 * H)) == 1       # the next day

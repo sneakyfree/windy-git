@@ -19,7 +19,8 @@ import sys
 import time
 
 OWNER = "sneakyfree"
-REPOS = ("windy-vault", "windy-contracts")
+REPOS = ("windy-vault", "windy-contracts", "windy-legal", "windy-cfo", "windy-board",
+         "windy-log", "windy-log-site", "windy-hub", "windy-fly-desktop")
 APPROVAL = "windy-hub/approved"
 CHECK_PREFIX = "windy-git/check/"
 # Merges before the rule existed are not judged by it.

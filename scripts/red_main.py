@@ -52,10 +52,13 @@ OWNERS = {**gr.OWNERS,
           "windy-mind": "Windy Mind",   # gr.OWNERS spells it "WIndy Mind"; lanes grep BOARD for their name
           "windy-text": "Windy Text", "windy-text-site": "Windy Text", "windy-hand-site": "Windy Hand",
           "windy-calendar-site": "Windy Calender", "windy-vault": "Windy Vault", "windy-uptime": "Windy Git",
-          "windy-pro-mobile": "Windy Mobile (mini)", "windy-mind-acp": "Windy Mind", "windy-mind-site": "Windy Mind",
+          "windy-pro-mobile": "Windy Fly Mobile", "windy-mind-acp": "Windy Mind", "windy-mind-site": "Windy Mind",
           "windy-admin": "Windy Admin Panel", "Windy-Clone-site": "Windy Clone", "windyword-site": "Windy Word",
-          "windy-mobile": "Windy Mobile (Cell Phone)", "windycloud-site": "Windy Cloud",
-          "eternitas-site": "Eternitas", "eternitas-authenticator": "Eternitas"}
+          "windy-cell": "Windy Cell", "windycloud-site": "Windy Cloud",
+          "eternitas-site": "Eternitas", "eternitas-authenticator": "Eternitas",
+          "windy-legal": "Windy Legal", "windy-cfo": "Windy CFO", "windy-board": "Windy Git",
+          "windy-log": "Windy Log", "windy-log-site": "Windy Log", "windy-hub": "Windy Hub",
+          "windy-fly-desktop": "Windy Fly Desktop"}
 
 # A known reading of a red, appended to its line (Boss's read, dated). Never hides the line.
 NOTES = {("windytalk", "windy-git/secret-guard"):
