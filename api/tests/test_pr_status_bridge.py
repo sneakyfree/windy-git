@@ -1128,6 +1128,7 @@ def test_the_query_names_every_bridged_repo_explicitly_and_nothing_wider():
     for wide in ("search(", "organization(", "viewer", "repositories("):
         assert wide not in q
     assert q.count("repository(") == 3 and "pullRequests(states: OPEN, first: 100)" in q
+    assert "pageInfo { hasNextPage endCursor }" in q
 
 
 def test_a_full_answer_becomes_rest_shaped_prs_and_default_heads(monkeypatch):
@@ -1154,6 +1155,66 @@ def test_a_full_answer_becomes_rest_shaped_prs_and_default_heads(monkeypatch):
 def test_any_partial_or_failed_answer_is_none(monkeypatch, answer):
     monkeypatch.setattr(bridge, "graphql", lambda q: answer)
     assert bridge.prefetch(["windy-pro", "windy-chat"]) is None
+
+
+def _page(prs, total, nxt=None):
+    """One more-PRs page of the named repo: nodes, the SAME totalCount, the next cursor if any."""
+    r = _gql_repo(prs, total=total)["pullRequests"]
+    r["pageInfo"] = {"hasNextPage": nxt is not None, "endCursor": nxt}
+    return (200, {"data": {"r": {"pullRequests": r}}})
+
+
+def _first(prs, total, nxt):
+    g = _gql_repo(prs, total=total)
+    g["pullRequests"]["pageInfo"] = {"hasNextPage": nxt is not None, "endCursor": nxt}
+    return g
+
+
+def test_more_open_prs_than_one_page_are_read_by_cursor_and_the_answer_is_complete(monkeypatch):
+    """11-07: windy-pro had 129 open PRs; one page holds 100, so every pass threw the prefetch away
+    and went to REST (~1,800 REST calls an hour). Now the next page is read by cursor."""
+    many = [(n, SHA_A, "sneakyfree/windy-pro") for n in range(1, 130)]
+    calls = []
+
+    def graphql(q):
+        calls.append(q)
+        if len(calls) == 1:
+            return 200, {"data": {"r0": _first(many[:100], 129, "C1"), "r1": _gql_repo()}}
+        assert 'name: "windy-pro"' in q and 'after: "C1"' in q and "first: 100" in q
+        return _page(many[100:], 129)
+    monkeypatch.setattr(bridge, "graphql", graphql)
+    got = bridge.prefetch(["windy-pro", "windy-chat"])
+    assert len(calls) == 2
+    assert [p["number"] for p in got["windy-pro"]["prs"]] == list(range(1, 130))
+    assert got["windy-chat"]["prs"] == []
+
+
+@pytest.mark.parametrize("second", [
+    _page([(n, SHA_A, "sneakyfree/windy-pro") for n in range(101, 130)], 130),   # a PR opened between pages
+    _page([(n, SHA_A, "sneakyfree/windy-pro") for n in range(101, 129)], 129),   # one short
+    _page([(n, SHA_A, "sneakyfree/windy-pro") for n in range(100, 129)], 129),   # a repeat (#100 twice)
+    (200, {"errors": [{"message": "x"}], "data": {}}),
+    (502, None),
+    (200, {"data": {"r": None}}),
+])
+def test_pages_that_do_not_add_up_exactly_are_none(monkeypatch, second):
+    many = [(n, SHA_A, "sneakyfree/windy-pro") for n in range(1, 101)]
+    answers = iter([(200, {"data": {"r0": _first(many, 129, "C1")}}), second])
+    monkeypatch.setattr(bridge, "graphql", lambda q: next(answers))
+    assert bridge.prefetch(["windy-pro"]) is None
+
+
+def test_more_pages_than_the_cap_is_none_never_a_partial_list(monkeypatch):
+    calls = []
+
+    def graphql(q):
+        calls.append(q)
+        if len(calls) == 1:
+            return 200, {"data": {"r0": _first([(1, SHA_A, None)], 9999, "C1")}}
+        return _page([(len(calls), SHA_A, None)], 9999, f"C{len(calls)}")
+    monkeypatch.setattr(bridge, "graphql", graphql)
+    assert bridge.prefetch(["windy-pro"]) is None
+    assert len(calls) == bridge.GQL_PAGES_MAX                          # first page + 4 more, then stop
 
 
 def test_a_transport_failure_is_none(monkeypatch):
