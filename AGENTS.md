@@ -43,3 +43,7 @@ Calls out, calls in, and events are **enumerated in invariant I-2** and mirrored
 ## What needs Grant
 
 See §7 of the plan. Short version: opening to any non-Grant user · any pricing · advancing off the GitHub mirror · marketing provenance before the upstream integrity fix lands · a hard fork of Gitea · the marketing site · enabling `repo_type=model` in production · anything involving Kit 0.
+
+## TODO.md
+
+Read TODO.md first; add every promise to it the same turn.
