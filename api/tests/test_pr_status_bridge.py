@@ -9,6 +9,7 @@ no status at all.
 from __future__ import annotations
 
 import base64
+import json
 import importlib.util
 import re
 import sys
@@ -1295,3 +1296,68 @@ def test_pr_list_page_cap_raises(monkeypatch):
     monkeypatch.setattr(bridge, "github", lambda m, p, b=None: (200, [_gh_pr(i) for i in range(100)]))
     with pytest.raises(RuntimeError):
         bridge.github_open_pulls("r")
+
+
+# ── retired heads (11-07): a head that left the pass gets a final state, never pending forever ──
+SHA_B = "b" * 40
+
+
+def _retired_world(monkeypatch, tmp_path, jobs, gh_state="pending"):
+    """repo-x: SHA_A was a PR head last pass; this pass only SHA_B is."""
+    processed = _cache_world(monkeypatch, tmp_path, {SHA_A: "1:1:1:100", SHA_B: "1:1:1:100"})
+    heads = [[SHA_A]]
+    monkeypatch.setattr(bridge, "sync_prs", lambda r: list(heads[0]))
+    posts = []
+    base_github = bridge.github
+
+    def github(method, path, body=None):
+        if method == "POST" and "/statuses/" in path:
+            posts.append((path.rsplit("/", 1)[1], body))
+            return 201, {}
+        if path.startswith("/repos/sneakyfree/repo-x/commits/") and path.endswith("/statuses?per_page=100"):
+            return 200, [{"context": "windy-git/ci/test", "state": gh_state}]
+        if path.endswith("/branches/main"):
+            return 200, {"commit": {"sha": "c" * 40}}
+        return base_github(method, path, body)
+    monkeypatch.setattr(bridge, "github", github)
+    monkeypatch.setattr(bridge, "sha_job_states", lambda r, s: dict(jobs))
+    return processed, heads, posts
+
+
+def test_a_superseded_pending_head_gets_its_final_state_once_then_is_forgotten(monkeypatch, tmp_path):
+    processed, heads, posts = _retired_world(monkeypatch, tmp_path, {"windy-git/ci/test": [3]})
+    bridge.main()                                                 # SHA_A is a PR head
+    heads[0] = [SHA_B]                                            # pushed again: SHA_A retires
+    bridge.main()
+    final = [b for s, b in posts if s == SHA_A]
+    assert len(final) == 1 and final[0]["state"] == "error" and final[0]["context"] == "windy-git/ci/test"
+    assert "cancelled before a runner took it" in final[0]["description"]
+    assert json.loads((tmp_path / "state.json").read_text())["retired"] == {}
+    bridge.main()
+    assert len([b for s, b in posts if s == SHA_A]) == 1          # forgotten: never posted again
+
+
+def test_a_retired_head_with_a_live_job_waits_and_a_day_old_one_is_dropped(monkeypatch, tmp_path):
+    processed, heads, posts = _retired_world(monkeypatch, tmp_path, {"windy-git/ci/test": [3, 6]})
+    clock = [1_000_000.0]
+    monkeypatch.setattr(bridge.time, "time", lambda: clock[0])
+    bridge.main()
+    heads[0] = [SHA_B]
+    bridge.main()
+    assert [b for s, b in posts if s == SHA_A] == []              # one job still running: no verdict yet
+    assert SHA_A in next(iter(json.loads((tmp_path / "state.json").read_text())["retired"]))
+    clock[0] += bridge.RETIRE_TTL_S + 1
+    bridge.main()
+    assert json.loads((tmp_path / "state.json").read_text())["retired"] == {}
+
+
+def test_a_retired_head_already_green_is_left_alone_and_the_cap_holds(monkeypatch, tmp_path):
+    processed, heads, posts = _retired_world(monkeypatch, tmp_path, {"windy-git/ci/test": [1]}, gh_state="success")
+    bridge.main()
+    heads[0] = [SHA_B]
+    bridge.main()
+    assert [b for s, b in posts if s == SHA_A] == []              # never overwrite a real verdict
+    st = {"heads": {f"repo-x|{i:040x}": {} for i in range(40)}, "retired": {}}
+    monkeypatch.setattr(bridge, "post_statuses", lambda r, s: None)
+    monkeypatch.setattr(bridge, "finish_retired", lambda r, s: False)
+    assert bridge.run_retired(st, set(), 5.0) == bridge.RETIRE_MAX and len(st["retired"]) == 40

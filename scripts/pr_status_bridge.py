@@ -692,6 +692,94 @@ def post_statuses(repo: str, sha: str) -> None:
         print(f"  {repo}@{sha[:7]} {ctx} = {state} -> {st}")
 
 
+# A head that is no longer an open PR's head nor the default branch's head is RETIRED: the pass used to
+# forget it at once, so whatever it last posted (often `pending`) stayed on GitHub forever (Windy Hand's
+# question 11-07; windy-calendar #144 3065aa19). Retired heads are re-read for up to a day until none of
+# our contexts is left pending. A job cancelled before any runner took it (cancel-superseded) never shows
+# in /actions/tasks, so its context gets its final state from the job table here.
+RETIRE_TTL_S = 24 * 3600
+RETIRE_MAX = 25                       # retired heads read per pass (GitHub budget)
+LIVE_JOB = {5, 6, 7, 8, 9}            # waiting, running, blocked; Gitea 28.x adds 8 cancelling, 9 pending
+SUPERSEDED_TEXT = "Not run: cancelled before a runner took it (a newer commit replaced this one)"
+
+
+def sha_job_states(repo: str, sha: str) -> dict[str, list[int]] | None:
+    """{context: [status of every Gitea job at `sha` for it]}, picked up or not. None = unreadable."""
+    if not (SAFE_NAME.match(repo) and SAFE_NAME.match(WG_OWNER) and SAFE_SHA.match(sha)):
+        return None
+    query = (
+        "select coalesce(json_agg(json_build_array(ar.workflow_id, j.name, j.status)), '[]'::json)"
+        " from action_run_job j join action_run ar on ar.id = j.run_id"
+        " join repository r on r.id = j.repo_id join \"user\" o on o.id = r.owner_id"
+        f" where o.lower_name = '{WG_OWNER.lower()}' and r.lower_name = '{repo.lower()}'"
+        f" and ar.commit_sha = '{sha}';"
+    )
+    try:
+        out = subprocess.run(
+            ["docker", "exec", "-i", "windy-git-db-1", "sh", "-c",
+             'psql -U "$POSTGRES_USER" -d gitea -At -v ON_ERROR_STOP=1'],
+            input=query, capture_output=True, text=True, check=True, timeout=30,
+        ).stdout.strip()
+        got: dict[str, list[int]] = {}
+        for wf, name, status in json.loads(out or "[]"):
+            got.setdefault(f"windy-git/{wf.removesuffix('.yml')}/{name}", []).append(int(status))
+        return got
+    except (subprocess.SubprocessError, OSError, ValueError, TypeError) as e:
+        print(f"  {repo}: job-state lookup skipped ({type(e).__name__})")
+        return None
+
+
+def finish_retired(repo: str, sha: str) -> bool:
+    """After post_statuses() on a retired head: a context GitHub still shows `pending` whose Gitea jobs
+    are ALL done gets the superseded verdict. True = nothing of ours is left pending (forget the head)."""
+    jobs = sha_job_states(repo, sha)
+    if jobs is None:
+        return False
+    _STATUSES_CACHE.pop((repo, sha), None)                    # see what post_statuses() just posted
+    current: dict[str, str] = {}
+    for s in commit_statuses(repo, sha):                      # newest first
+        current.setdefault(s["context"], s["state"])
+    if (repo, sha) not in _STATUSES_CACHE:
+        return False                                          # the GET failed: try again next pass
+    left = False
+    for ctx, state in sorted(current.items()):
+        if state != "pending" or ctx not in jobs:
+            continue                                          # not a job context of ours
+        if LIVE_JOB & set(jobs[ctx]):
+            left = True                                       # still queued or running: next pass
+            continue
+        st, _ = github("POST", f"/repos/{GH_OWNER}/{repo}/statuses/{sha}", {
+            "state": "error", "context": ctx, "description": SUPERSEDED_TEXT[:140],
+            "target_url": f"{PUBLIC}/{WG_OWNER}/{repo}/src/commit/{sha}",
+        })
+        print(f"  {repo}@{sha[:7]} {ctx} = error (retired head, superseded) -> {st}")
+        left = left or st != 201
+    return not left
+
+
+def run_retired(state: dict, seen: set[str], now: float) -> int:
+    """Move heads that left this pass into state['retired'], read up to RETIRE_MAX of them (oldest
+    first), forget the finished and the day-old. Returns how many were read."""
+    retired = state.setdefault("retired", {})
+    for key in state["heads"]:
+        if key not in seen:
+            retired.setdefault(key, now)
+    for key in list(retired):
+        if key in seen or now - retired[key] > RETIRE_TTL_S or key.split("|", 1)[0] not in REPOS:
+            retired.pop(key)
+    done = 0
+    for key in sorted(retired, key=retired.get)[:RETIRE_MAX]:
+        repo, sha = key.split("|", 1)
+        try:
+            post_statuses(repo, sha)
+            if finish_retired(repo, sha):
+                retired.pop(key)
+        except Exception as e:  # one head's failure must not stop the pass
+            print(f"  retired {repo}@{sha[:7]}: {e}")
+        done += 1
+    return done
+
+
 def _verdict_text(r: dict) -> str:
     text = f"Windy Git CI on Veron 1: {r['status']}"
     if r["status"] == "failure":
@@ -998,9 +1086,10 @@ def main() -> int:
         except Exception as e:  # one repo's failure must not hide the others'
             print(f"  FAILED {repo}: {e}")
             failed = 1
+    retired_read = run_retired(state, seen, now)
     state["heads"] = {k: v for k, v in state["heads"].items() if k in seen}
     save_state(state)
-    print(f"  bridge: {processed} heads read, {skipped} unchanged (cached); GitHub calls this pass: "
+    print(f"  bridge: {processed} heads read, {skipped} unchanged (cached), {retired_read} retired; GitHub calls this pass: "
           f"REST {CALLS['rest']}, GraphQL {CALLS['graphql']} ({'GraphQL prefetch' if pre else 'REST fallback'})")
     return failed
 
