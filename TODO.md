@@ -9,45 +9,59 @@ Grant's five gates before the big marketing push: (1) Grant and friends say "rea
 For this repo: CI throughput, the mirror work and the queue priority are on the live path. Load safety (principle 1) is the limit, not caution about visitors.
 
 ## Now
-Dated first. Times are UTC; "2026-11-07" is the first day of this list's catch-up.
-- Sat 2026-11-07 18:00: one catch-up TODO PR in each repo this lane owns (this repo, windy-git-site, windy-board, windy-contracts) (coordinating lane 2026-11-06 23:57Z, Grant: "TODO.md is our culture"). This PR is windy-git's. Done when all four are open with a reader.
-- Sun 2026-11-08 night: the nightly TODO checker, dark first, then one board line a day: per repo, TODO.md present, last updated, commits since the last TODO update. Later it matches every dated board line that names a lane against that lane's TODO.md and lists the misses. (Pulled forward from Tue 11-10.)
-- Mon 2026-11-09 12:00: docs-only fast path for CI: a PR touching ONLY TODO.md, README.md or docs/** runs just lint, secret-guard and ci-hygiene (no jest, pytest or builds). Until it ships, TODO-only PRs still run the normal CI; catching up beats saving CI. The 3-a-day cap on TODO-only PRs is lifted.
-- Mon 2026-11-09 12:00: Null 0 Chromium launch flake (windy-chat Calls Two-Browser Test failed 7 of 120 on null0-2 in 5 days, "browserType.launch: Target page, context or browser has been closed"): read the other 10 failure logs, find the cause (shm, sandbox or load), fix, board line. If windy-chat head 05874c1d fails again, no third run: it is not a flake.
-- Mon 2026-11-09 18:00: the Windy Git tile line on the board ("TILE Windy Git: label, badge, link, note TRUE" or what must change) and the same line here, the same turn.
-- Tue 2026-11-10 18:00 and Wed 2026-11-11 18:00: read the Hub's windy-hub move plan and the Word lane's windy-fly-desktop move plan for CI, runners, PRIORITY tokens, cancel-superseded and the Kit 0 scripts.
-- Wed 2026-11-11 18:00: one codon line in the repo master plan ("Windy Log", pointing at the Windy Fly vision chronicle) and the matching lines here.
-- Fri 2026-11-13: (a) windy-contracts machinery plus its TODO.md and owner line (accepted 11-06; the one-at-a-time manifest rule is unchanged and this lane merges no contract PR); (b) name alignment: per candidate repo, the COUNT of references to the old name (CI lists, Kit 0 and Veron scripts, Pages links, uptime checks, docs), 18:00; (c) counts of what names windy-pro and windy-pro-mobile (preliminary 11-06: 46 and 11 files in this repo, no systemd units or sbin timers); (d) the nightly REGISTRY check (every Windy repo in the Hub registry exactly once, else a board alarm) once the registry draft exists, dark first.
-- Mon 2026-11-16: repo renames in batches of three, each with BEFORE and AFTER on the board; deploy paths on Kit 0 change only in their owner's booked slot. After the windy-pro split: windy-pro to windy-word, windy-pro-mobile to windy-fly-mobile.
-- Mirror-all (go-ahead 2026-11-06 21:13Z): mirror every active windy* and eternitas* repo (81) with Actions off on mirror-only repos, batches of five, load-paced. Never mirror kit-army-config, legal-ops (windy-legal-papers) or any *-soul repo. PRs: #145 (legal, cfo, board lists), #146 (79-name sync list, windy-mobile to windy-cell, lane names), #147 (Cloudflare token shapes in the secret guard); each needs a reader and a stamp. After #146 merges: push the local lane-map-final branch as its own PR, close #144 and #145 as superseded.
-- At the #146 merge, on the coordinating lane's go-ahead by name: Gitea renames windy-cell to windy-cell-legacy, then windy-mobile to windy-cell; move the sync cache dir; deploy pull; one sync pass; check windy-cell #38 and #39 get fresh mirror PRs and checks; tell the Windy Cell lane.
-- Veron runners: 1 active general runner until the coordinating lane answers my ask for 2 (load1 30.6 when I last looked). Drop rules stand: 3 samples over io avg60 10 or load1 40 means 1; one over io 20 or load 60 means 1 at once.
-- Veron container DNS: the durable fix is in (applied 2026-11-06 23:52:58Z by the Veron infra lane). My alert-only watcher (tools/watch-docker-dns.sh) runs 24 h from 2026-11-06 23:55 and posts if the ISP resolver returns to the host's resolver list. Do not clear it again: that would mean the fix did not hold; tell the Veron infra lane.
-- windy-board (owner: this lane): hourly snapshot is live (Windy 0 timer at :07, first scheduled run 21:07Z clean). Still to do: windy-uptime #81 (heartbeat check) read and stamped; move the snapshot code into deploy/board-snapshot here; a repo-scoped deploy key via the vault lane (it pushes with a broad login today); add windy-board to the registry check.
-- Rule (2026-11-06 13:55Z): windy-git/birth-terms ABSENT counts as a pass only when this lane's board line names the EXACT head commit with "findings None" (the guard posts only on findings). The 0-behind merge rule is not waived for docs-only PRs. Exception (coordinating lane 2026-11-07 04:13:51Z, until the docs-only fast path ships Mon 11-09 and then kept): a green, stamped head behind main ONLY by TODO.md-only commits may merge without a rebase when the compare shows exactly ["TODO.md"], the PR itself does not touch TODO.md, no test reads TODO.md, and GitHub does the merge.
-- Standing: PRIORITY tokens (newest three count) and cancel-superseded keep running; a re-run only with a board line naming it first.
-- Fri 2026-11-13: delete the merged leftover branches in the Branches table, only with the coordinating lane's OK and each branch's archive tag first (tip = a merged PR's head). Sat 2026-11-07 14:00: read the Eternitas hatch result. Sun 2026-11-08 13:30: Tailscale slot preparation (slot 14:00-15:30), each step on the coordinating lane's go-ahead.
-- Heartbeats PR in the uptime monitor repo: ci-egress, offsite-guard, signin-guard, priority-queue (open since 11-04; the board-snapshot heartbeat is #81).
-- Daily 12:00 queue line (p95 wait target under 15 min), re-armed after the checker goes live.
+Line standard (coordinating lane): `- [ ] what · OWNER · ADDED · DUE · STATUS · SOURCE`. Times are UTC. Dated lines first.
+- [ ] This TODO.md merged to main with every open line in the standard, and windy-git-site's too · Windy Git · 2026-11-06 · Sat 2026-11-07 18:00 · this PR (#131) and windy-git-site #2 refreshed 11-07 ~13:5x; need a stamp + green gate · coordinating lane TODO HEALTH 2026-11-07 13:38:38Z
+- [ ] Gitea 1.24.7 to 28.3.0 (175 upstream security advisories since 1.24.7): live cutover with tools/gitea-cutover.sh (only at :17-:30 with 0 jobs running, fresh dump + data copy, automatic rollback) · Windy Git · 2026-11-07 · first :17 slot after the go-ahead · rehearsal PASSED on a migrated copy 08:19-08:35; PR #149 (73926b3f) needs a reader + stamp + gate, then a go-ahead by name · Russ (human) 2026-11-07 ~08:15; board ask 08:34
+- [ ] Delete the rehearsal copy (it holds production data; root-only) · Windy Git · 2026-11-07 · 24 h after the cutover, at latest Sun 2026-11-08 12:00 · kept for the runner-swap rehearsal · this lane 2026-11-07
+- [ ] Delete the cutover rollback point (holds secrets) · Windy Git · 2026-11-07 · cutover + 7 days · not made yet (made at cutover) · this lane 2026-11-07
+- [ ] veron-1-4 runner trial (the veron-1 label had 64 waiting jobs on 1 runner): drop at io avg60 over 20 OR load1 over 18, off in booked Veron-heavy slots, never 5/6 · Windy Git · 2026-11-07 · review line at 14:39 · STARTED 13:38:51, drop watcher every 60 s · coordinating lane 2026-11-07 13:32:02Z (2)
+- [ ] windyword-site #316 at 56e6daa3: post the re-run's result (Gitea made no run when the head moved ~10:14) · Windy Git · 2026-11-07 · when run 305 ends · run 305 queued · coordinating lane 2026-11-07 13:32:02Z (1)
+- [ ] test-boss mirror (private, docs-only, sync-only); then send its Windy Git address to the Veron infra lane · Windy Git · 2026-11-07 · after #150 merges · PR #150 (a9505c63) needs a reader + stamp · Grant via the Veron infra lane 2026-11-07 ~09:2x
+- [ ] Bridge windy-drops-site (guard checks only, Gitea Actions stays OFF: its one workflow deploys) and windy-control-panel (Actions ON at deploy); AFTER line reads back has_actions + run counts · Windy Git · 2026-11-07 · after #151 merges · PR #151 (9148b362), Drops READ OK; needs Hub + stamp · Windy Drops 2026-11-07
+- [ ] Eternitas lab passport: P-256 agent key, private half in the lockbox; check the stored key matches its public half, then send ONLY the 43-char thumbprint at least 1 h before the slot · Windy Git · 2026-11-07 · new slot (asked: Sun 2026-11-08 13:20-13:35) · key made; lockbox add PR open · Eternitas 2026-11-07; 11-07 13:05 slot did not run (board 12:48:23Z)
+- [ ] windy-uptime Eternitas journey to ET26-TEST + tokens/agent (DPoP, its own key), dark first; then Eternitas revokes the old passport · Windy Git · 2026-11-07 · Tue 2026-11-10 if the lab slot is by Sun 2026-11-08, else that slot + 2 days · not started · Eternitas TODO #327 + this lane 2026-11-07
+- [ ] Sun 2026-11-08 night: nightly TODO checker, dark first, then one board line a day (per repo: TODO.md present, last updated, commits since) · Windy Git · 2026-11-06 · Sun 2026-11-08 · not started · coordinating lane 2026-11-06
+- [ ] Gitea staying current, mechanical not memory: (a) daily upstream watcher timer (new releases + advisories covering our version: board line; critical/high: red tile) and (b) staleness alarm (over 30 days behind a patch release, or a critical/high unpatched over 72 h) · Windy Git · 2026-11-07 · Mon 2026-11-09 18:00 · not started · Russ (human) 2026-11-07
+- [ ] Gitea rehearsal as a script (tools/gitea-rehearse.sh) that runs on each new release and opens the image-bump PR with its report; later auto-cutover for patch releases only, on the coordinating lane's OK of that policy · Windy Git · 2026-11-07 · Wed 2026-11-11 18:00 · not started · Russ (human) 2026-11-07
+- [ ] Runner image swap act_runner 0.6.1 to gitea/runner 5.x (closes the runner sandbox-escape advisory): own rehearsal + ask · Windy Git · 2026-11-07 · Tue 2026-11-10 · not started (old and new both proven against 28.3.0) · this lane 2026-11-07
+- [ ] Bridge: when main moves, post one final state on the previous main head (today it stays "pending" forever) · Windy Git · 2026-11-07 · Mon 2026-11-09 18:00 · not started · Windy Hand question 2026-11-07
+- [ ] Docs-only fast path: a PR touching ONLY TODO.md, README.md or docs/** runs lint, secret-guard and ci-hygiene only · Windy Git · 2026-11-06 · Mon 2026-11-09 12:00 · not started · coordinating lane 2026-11-06
+- [ ] Null 0 Chromium launch flake (windy-chat Calls test, 7 of 120 on null0-2): read the other failure logs, find the cause, fix, board line · Windy Git · 2026-11-06 · Mon 2026-11-09 12:00 · not started · coordinating lane 2026-11-06
+- [ ] Windy Git tile line on the board ("TILE Windy Git: label, badge, link, note TRUE" or what must change) and here, same turn · Windy Git · 2026-11-06 · Mon 2026-11-09 18:00 · not started · coordinating lane 2026-11-06
+- [ ] Read the Hub's windy-hub move plan, then the Word lane's windy-fly-desktop move plan, for CI, runners, PRIORITY, cancel-superseded and the Kit 0 scripts · Windy Git · 2026-11-06 · Tue 2026-11-10 18:00 and Wed 2026-11-11 18:00 · waiting for the plans · coordinating lane 2026-11-06
+- [ ] One codon line in the repo master plan ("Windy Log", pointing at the Windy Fly vision chronicle) + the matching lines here · Windy Git · 2026-11-06 · Wed 2026-11-11 18:00 · not started · coordinating lane 2026-11-06
+- [ ] windy-contracts machinery plus its TODO.md and owner line (this lane merges no contract PR) · Windy Git · 2026-11-06 · Fri 2026-11-13 · not started · coordinating lane 2026-11-06
+- [ ] Name alignment: per candidate repo, the COUNT of references to the old name (CI lists, Kit 0 and Veron scripts, Pages links, uptime checks, docs); plus counts for windy-pro and windy-pro-mobile · Windy Git · 2026-11-06 · Fri 2026-11-13 18:00 · preliminary 11-06: 46 and 11 files here · coordinating lane 2026-11-06
+- [ ] Nightly REGISTRY check (every Windy repo in the Hub registry exactly once, else a board alarm), dark first · Windy Git · 2026-11-06 · Fri 2026-11-13, once the registry draft exists · waiting for the draft · coordinating lane 2026-11-06
+- [ ] Delete the merged leftover branches in the Branches table, each with its archive tag first (tip = a merged PR's head), on the coordinating lane's OK · Windy Git · 2026-11-04 · Fri 2026-11-13 · table ready · coordinating lane 2026-11-04
+- [ ] Repo renames in batches of three, BEFORE and AFTER on the board; after the windy-pro split: windy-pro to windy-word, windy-pro-mobile to windy-fly-mobile · Windy Git · 2026-11-06 · from Mon 2026-11-16 · not started · coordinating lane 2026-11-06
+- [ ] Tailscale slot preparation (slot 14:00-15:30), each step on the coordinating lane's go-ahead · Windy Git · 2026-11-06 · Sun 2026-11-08 13:30 · waiter armed · coordinating lane 2026-11-06
+- [ ] windy-board (owner: this lane): windy-uptime #81 heartbeat read + stamp; snapshot code into deploy/board-snapshot here; a repo-scoped deploy key via the vault lane; add windy-board to the registry check · Windy Git · 2026-11-06 · with the registry check · snapshot live hourly (now rebases before commit) · coordinating lane 2026-11-06
+- [ ] Heartbeats PR in the uptime monitor repo: ci-egress, offsite-guard, signin-guard, priority-queue · Windy Git · 2026-11-04 · open · not started · this lane 2026-11-04
+- [ ] Daily 12:00 queue line (p95 wait target under 15 min), re-armed after the checker goes live · Windy Git · 2026-11-04 · Tue 2026-11-10 12:00 · loop armed · coordinating lane 2026-11-04
+- [ ] Standing rules: PRIORITY tokens (newest three count) and cancel-superseded keep running; a re-run only after a board line names it; birth-terms ABSENT is a pass only with this lane's board line naming the exact head with "findings None"; a head behind main ONLY by TODO.md-only commits may merge without a rebase under the 2026-11-07 04:13:51Z rule · Windy Git · 2026-11-06 · standing · in force · coordinating lane 2026-11-06 13:55Z and 2026-11-07 04:13:51Z
 
 ## Waiting on
-- Stamp and a reader on #146, #147, #131 (this PR) and the windy-git-site TODO PR; the coordinating lane stamps, any non-author lane reads.
-- Stamp on #142 (cross-host drill R2 key pair); a waiter merges it at head 4f25683d, then one drill_cross_host run and a lockbox note PR.
-- Answer on the Veron runner count (1 or 2), and on deleting 13 stale *-soul pull-mirror copies plus legal-ops (~270 MB) from the forge (my recommendation: delete; the coordinating lane's word first).
-- Repo deletes (windygit-mirror-test-553, windy-stt) only after Grant grants delete_repo and the go-ahead names the repo.
-- The vault lane: GitHub App ids and install numbers (CI status app, mirror app), then the consumer PRs; a repo-scoped deploy key for the windy-board push.
-- A person's hands-step: create the key for the CI status GitHub App (steps written; open since 2026-11-03).
-- Option B (the windy-pro runner split and its read token): ONCE, on the final repos after the windy-pro split (2026-11-06 19:22Z), not before.
+- [ ] Stamp + reader on #148 (lane map, Hub READ OK), #147 (Cloudflare token shapes), #149, #150, #151, #131 and windy-git-site #2 · coordinating lane · 2026-11-06 · Sat 2026-11-07 18:00 for #131/#2 · asked on the board · this lane's asks 11-06/11-07
+- [ ] Stamp on #142 (cross-host drill reads the dated R2 key pair); a waiter merges it at head 4f25683d, then one drill run and a lockbox note PR · coordinating lane · 2026-11-05 · none set · stale, asked for direction · this lane 2026-11-05
+- [ ] Windy Cell: when its next PR (strand refresh) has been open 10 min or more, check its windy-git contexts and post the result on the board · Windy Cell (opens) / Windy Git (checks) · 2026-11-07 · Fri 2026-11-13 · waiting for the PR · Windy Cell 2026-11-07
+- [ ] Windy CFO: read windy-cfo #8 (DNA v1.0) at its FINAL head · Windy CFO (asks) / Windy Git (reads) · 2026-11-07 · around Thu 2026-11-12 · waiting for the final head · Windy CFO 2026-11-07
+- [ ] Answer on deleting 13 stale *-soul pull-mirror copies plus legal-ops (~270 MB) from the forge (recommendation: delete) · coordinating lane · 2026-11-04 · none set · asked · this lane 2026-11-04
+- [ ] Repo deletes (windygit-mirror-test-553, windy-stt) only after Grant grants delete_repo and the go-ahead names the repo · Grant · 2026-11-04 · none set · waiting · coordinating lane 2026-11-04
+- [ ] The vault lane: GitHub App ids and install numbers (CI status app, mirror app), then the consumer PRs; a repo-scoped deploy key for the windy-board push · Windy Vault · 2026-11-03 · none set · asked · this lane 2026-11-03
+- [ ] A person's hands-step: create the key for the CI status GitHub App (steps written) · Grant · 2026-11-03 · none set · waiting · this lane 2026-11-03
+- [ ] Option B (the windy-pro runner split and its read token): ONCE, on the final repos after the windy-pro split, not before · coordinating lane · 2026-11-06 · after the split · waiting · coordinating lane 2026-11-06 19:22Z
 
 ## Later
-- Windy Cell: the #38/#39 cutover after the rename; windy-cell-site CI when that lane wants it.
-- Forge hardening (external-user features off, basic auth for people): built and tested first; applied only in a slot the coordinating lane names.
-- act_runner step-level timeout test and a PR; revert the runner job ceiling 150 to 90 minutes the day the suite owner posts a dated proof.
-- Check whether the scheduler reads cron in UTC (first scheduled Postgres suite run).
-- Archive the four probe repositories (wg586-probe, probe-502-test, ssrfprobe527, windygit-mirror-test-553): proposal only.
-- A monthly archive of the board file (windy-board): a plan first; the PRIORITY reader and every lane's tail must keep working.
-- App-click docs after the identity vault confirms. Register this lane's journey identity in its window (public key identifier only).
-- Name an out-of-memory kill inside the offsite job engine as its own red, count it for the first week.
+- [ ] Switch scripts/rerun_ci.sh's rewind to the rerun API Gitea 28.x has; turn on RUN_RETENTION_DAYS; bridge links by run id · Windy Git · 2026-11-07 · after the Gitea cutover · not started · this lane 2026-11-07
+- [ ] Windy Cell: the #38/#39 cutover after the rename; windy-cell-site CI when that lane wants it · Windy Git · 2026-11-06 · when asked · waiting · Windy Cell 2026-11-06
+- [ ] Forge hardening (external-user features off, basic auth for people): built and tested first, applied only in a named slot · Windy Git · 2026-11-04 · none set · not started · coordinating lane 2026-11-04
+- [ ] act_runner step-level timeout test and a PR; revert the runner job ceiling 150 to 90 minutes the day the suite owner posts a dated proof · Windy Git · 2026-10-29 · none set · waiting for the proof · this lane 2026-10-29
+- [ ] Check whether the scheduler reads cron in UTC (first scheduled Postgres suite run) · Windy Git · 2026-11-04 · none set · not started · this lane 2026-11-04
+- [ ] Archive the four probe repositories (wg586-probe, probe-502-test, ssrfprobe527, windygit-mirror-test-553): proposal only · Windy Git · 2026-11-04 · none set · not started · this lane 2026-11-04
+- [ ] A monthly archive of the board file (windy-board): a plan first; the PRIORITY reader and every lane's tail must keep working · Windy Git · 2026-11-06 · none set · not started · this lane 2026-11-06
+- [ ] Name an out-of-memory kill inside the offsite job engine as its own red; count it for the first week · Windy Git · 2026-11-04 · none set · not started · this lane 2026-11-04
+- [ ] veron-1 label capacity: a lasting answer (more runners or fewer veron-1-only jobs) after the veron-1-4 trial review · Windy Git · 2026-11-07 · after the trial · trial running · this lane 2026-11-07
 
 ## Branches
 Table computed 2026-11-04, refreshed 2026-11-07 for open PRs below; the rest is unchanged from the GitHub branch list and each branch's PR. A branch whose tip equals a merged PR's head lost no work; its archive tag comes first, deletion Fri 2026-11-13.
@@ -56,10 +70,14 @@ Table computed 2026-11-04, refreshed 2026-11-07 for open PRs below; the rest is 
 |---|---|---|---|---|
 | todo-md | #131 | 2026-11-07 | Windy Git | open PR (this one): keep until it merges |
 | drill-new-r2-names | #142 | 2026-11-05 | Windy Git | open PR: keep until it merges (waiter armed) |
-| ops/windy-cell-rename | #144 | 2026-11-06 | Windy Git | open PR, superseded by #146: close when #146 merges |
-| ops/add-windy-legal-cfo | #145 | 2026-11-06 | Windy Git | open PR, superseded by #146: close when #146 merges |
-| ops/mirror-all-81 | #146 | 2026-11-06 | Windy Git | open PR: keep until it merges |
+| ops/windy-cell-rename | #144 | 2026-11-06 | Windy Git | closed unmerged 2026-11-07 (superseded by #146): archive tag, then delete Fri 2026-11-13 |
+| ops/add-windy-legal-cfo | #145 | 2026-11-06 | Windy Git | merged 2026-11-07 (as #146's ancestor): delete after its archive tag, Fri 2026-11-13 |
+| ops/mirror-all-81 | #146 | 2026-11-07 | Windy Git | merged 2026-11-07 (merge commit 26782051): delete after its archive tag, Fri 2026-11-13 |
 | sec/secret-guard-cloudflare | #147 | 2026-11-06 | Windy Git | open PR: keep until it merges |
+| ops/lane-map-final | #148 | 2026-11-07 | Windy Git | open PR: keep until it merges |
+| ops/gitea-28.3.0 | #149 | 2026-11-07 | Windy Git | open PR: keep until it merges |
+| ops/mirror-test-boss | #150 | 2026-11-07 | Windy Git | open PR: keep until it merges |
+| ops/bridge-drops-site-cp | #151 | 2026-11-07 | Windy Git | open PR: keep until it merges |
 | ci/allow-mobile-firebase-key | #120 |  | not mine (see the PR) | open PR: keep until it merges |
 | null0-runner-3 | #129 | 2026-11-04 | Windy Git | merged 2026-11-04 22:17Z; delete after its archive tag, Fri 2026-11-13 |
 | onboard/site-batch | #67 |  | not mine (see the PR) | open PR: keep until it merges |
@@ -135,6 +153,10 @@ Table computed 2026-11-04, refreshed 2026-11-07 for open PRs below; the rest is 
 | windy0-one-nightly-sweep | #14 | 2026-10-10 | Windy Git | merged leftover (tip = the merged PR's head): delete OK after its archive tag; deletion Fri 2026-11-13 |
 
 ## Done (last 30 days)
+- 2026-11-07 windy-connect #131 job 71367: ONE re-run on the go-ahead (11:56:26Z), 3.11 passed on the same runner (w0-2) at 12:04:41Z, so a runner checkout race, not the code
+- 2026-11-07 #146 merged with a merge commit (#145 as ancestor); Gitea renames windy-cell to windy-cell-legacy and windy-mobile to windy-cell, legacy refs identical before/after; #144 closed
+- 2026-11-07 Gitea 28.3.0 rehearsal on a migrated copy: migrations clean, no column our SQL uses removed, API calls and old run links work, old and new runners each ran a job (docs/UPGRADE-GITEA.md in #149)
+- 2026-11-07 board-snapshot job made merge-safe (fetch + rebase before commit; on failure a heartbeat, no push)
 - 2026-11-07 Veron container DNS fixed for good (applied 23:52:58Z by the Veron infra lane); 3 of 3 container lookups verified; alert-only watcher on for 24 h
 - 2026-11-06 windy-board: repo imported, first push 99468db1, hourly snapshot timer on Windy 0 live, first scheduled run 21:07Z clean (counts in the commit message, secret hit = no push + alarm)
 - 2026-11-06 mirror-all: 3 + 8 + 30 + 3 repos imported to the forge (windy-log, windy-log-site, windy-hub, windy-fly-desktop, windy-legal, windy-cfo, windy-board among them); mirror-only repos have Actions off
