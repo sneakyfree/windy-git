@@ -32,7 +32,8 @@ services:
 
   gitea:
     # G2.1 — PIN AN EXACT VERSION. Never `latest`. Record it in SUBSTRATE.md.
-    image: docker.io/gitea/gitea:1.24.7
+    # 28.3.0 (2026-11-01): rehearsed 11-07 on a migrated copy (docs/UPGRADE-GITEA.md). Digest-pinned.
+    image: docker.io/gitea/gitea:28.3.0@sha256:8967bf9deaf3c5c4adae13519436dc1b20c646ac83fe37ae810c933a1045227d
     environment:
       GITEA__database__DB_TYPE: postgres
       GITEA__database__HOST: db:5432
@@ -54,6 +55,10 @@ services:
       GITEA__server__LFS_START_SERVER: "true"
       # G7.1 — CI on our own hardware. This is the whole verification payoff.
       GITEA__actions__ENABLED: "true"
+      # >= 1.26/28: "https://github.com" is no longer accepted as a custom URL; "github" means the same thing.
+      GITEA__actions__DEFAULT_ACTIONS_URL: github
+      # >= 1.26 defaults to "auto" (links built from the request Host header). One public domain: always ROOT_URL.
+      GITEA__server__PUBLIC_URL_DETECTION: never
       # D-9 vocabulary law reaches the product name itself.
       GITEA__DEFAULT__APP_NAME: Windy Git
       GITEA__DEFAULT__APP_SLOGAN: Your work, every version, and agents as citizens.
