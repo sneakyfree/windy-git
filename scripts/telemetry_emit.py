@@ -244,13 +244,14 @@ def main() -> int:
     # --- heartbeat: counts since the previous invocation --------------------
     # Interval counts come from EXACTLY the rows emitted above, so
     # sum(jobs_finished) over any window == count(ci.run) in it, by construction.
+    # Gitea 28.x: waiting includes 9 (pending on needs), running includes 8 (cancelling, still on a runner).
     h = sql(f"""
         select
-          (select count(*) from action_run_job where status in (5, 7)) as jobs_waiting,
-          (select count(*) from action_run_job where status = 6) as jobs_running,
+          (select count(*) from action_run_job where status in (5, 7, 9)) as jobs_waiting,
+          (select count(*) from action_run_job where status in (6, 8)) as jobs_running,
           (select count(*) from action_runner where deleted is null and last_online >= {int(now) - 120}) as runners_online,
           (select coalesce(extract(epoch from now())::bigint - min(created), 0)
-             from action_run_job where status in (5, 7)) as oldest_waiting_s""")[0]
+             from action_run_job where status in (5, 7, 9)) as oldest_waiting_s""")[0]
     h["jobs_finished"] = len(jobs)
     h["jobs_failed"] = sum(1 for j in jobs if j["status"] == 2)
     h["jobs_cancelled"] = sum(1 for j in jobs if j["status"] == 3)

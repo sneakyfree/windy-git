@@ -18,7 +18,7 @@ with no egress. In the copy's config: local storage instead of R2, mail, cron an
 | Schema migrations 321 -> 357 | clean, ~12 s |
 | Row counts before/after (repo, user, pr, run, job, token) | identical |
 | Columns our SQL uses: removed or retyped | **none** (only additions) |
-| Job status codes 1-7 | unchanged; new 8 = cancelling, 9 = pending |
+| Job status codes 1-7 | numbers unchanged; new 8 = cancelling, 9 = pending (see below) |
 | Runner pick order (`updated`, `id` ascending) | unchanged: `priority_queue.py` still works |
 | Home, header, theme CSS, repo/PR/actions pages, explore | 200 |
 | `link_account.tmpl` override | needs `data-global-init="initTabSwitcher"` (added) |
@@ -26,6 +26,20 @@ with no egress. In the copy's config: local storage instead of R2, mail, cron an
 | Old `/actions/runs/{index}` links (the bridge posts these) | redirect to the new run-ID URL |
 | git push with a token (how the sync writes) | ok |
 | act_runner 0.6.1 and gitea/runner 5.4.1: a job each, with a secret | both succeed |
+
+### Job statuses 8 and 9, and run attempts (Hub's read, 11-07)
+From the v28.3.0 source (`models/actions/status.go`, `services/actions/run.go` insertRunJob,
+`services/actions/job_emitter.go`, `models/actions/run_job_queue.go`, `models/actions/run_attempt.go`):
+- **9 = pending**: a new job with `needs:` starts as 9 (1.24 used 7 for that). When its needs are done the
+  emitter moves it to 7, then to 5. Only `status = 5 AND task_id = 0` is pickable (Gitea's own queue filter),
+  so `priority_queue.py`, `approved_first.py`, `queue_jump.sh` and the bridge's waiting count are unchanged.
+- **8 = cancelling**: a RUNNING job asked to stop; it keeps its runner until the runner reports back, and
+  Gitea counts it as running. Our done-status checks (1-4) are unaffected; it ends as 3.
+- **Run attempts**: `action_run_attempt` rows carry their own status (the run's status mirrors it).
+Changed for this: `cancel_superseded.py` also cancels 9 and closes the attempt row (only where that table
+exists, so the same SQL as before on 1.24); `telemetry_emit.py` counts 9 as waiting and 8 as running.
+Checked: the SQL runs on the migrated copy (in a rolled-back transaction) and plans on live 1.24.7.
+The rehearsal's own CI runs were single-job, so they never produced an 8 or 9.
 
 ### Config changes (in `docker-compose.yml`)
 - `DEFAULT_ACTIONS_URL`: `https://github.com` is refused in 28.x; set to `github` (same meaning).
