@@ -1,0 +1,10 @@
+[Unit]
+Description=Gitea upstream watch, once a day at 12:10 UTC
+
+[Timer]
+OnCalendar=*-*-* 12:10:00 UTC
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

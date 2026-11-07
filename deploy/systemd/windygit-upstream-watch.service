@@ -1,0 +1,15 @@
+[Unit]
+Description=Gitea upstream watch: our version vs Gitea's releases and security advisories (reads only)
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/srv/windygit/src
+EnvironmentFile=/etc/windygit/sync.env
+# DARK first (11-07): prints its one line to the journal only. Switch-on, on the coordinating lane's
+# go-ahead: add --post (one BOARD line a day) and wrap it in windy-job so an ALARM day (exit 1) becomes
+# a windy-uptime alert (the red tile):
+#   /usr/local/bin/windy-job windygit-upstream-watch 26h --expect "Gitea watch: we run" --owner 13 -- \
+#     /usr/bin/python3 /srv/windygit/src/scripts/gitea_upstream_watch.py --post
+ExecStart=/usr/bin/python3 /srv/windygit/src/scripts/gitea_upstream_watch.py
+TimeoutStartSec=120
