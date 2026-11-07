@@ -28,3 +28,11 @@ container:
   valid_volumes: []
   docker_host: '-'
   force_pull: false
+
+host:
+  # act_runner keeps its CLONES OF ACTIONS (actions/checkout, astral-sh/setup-uv, ...) here; empty means
+  # $HOME/.cache/act, which all w0 runners SHARE (one user, one HOME), so two jobs refreshing the same action
+  # broke each other ("worktree contains unstaged changes", then "lstat ...: no such file", windy-search
+  # job 72430, 11-07). One directory per runner. Source: act_runner v0.6.1 config.go + run/runner.go
+  # (ActionCacheDir = Host.WorkdirParent). XDG_CACHE_HOME does NOT move it.
+  workdir_parent: /var/lib/windygit-ci/runner-@N@/act
