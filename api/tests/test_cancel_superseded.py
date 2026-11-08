@@ -15,9 +15,9 @@ _spec.loader.exec_module(cs)
 
 def test_the_cancel_sql_carries_every_safety_line():
     sql = " ".join(cs.CANCEL_SQL.split())
-    assert "j.status in (5, 7) and j.task_id = 0" in sql                 # waiting/blocked, unclaimed only
-    assert sql.count("j.status in (5, 7) and j.task_id = 0") == 2        # re-checked inside the UPDATE
-    assert re.findall(r"j\.status in \(([^)]*)\)", sql) == ["5, 7", "5, 7"]    # never 6 (running)
+    assert "j.status in (5, 7, 9) and j.task_id = 0" in sql              # waiting/blocked/pending, unclaimed only
+    assert sql.count("j.status in (5, 7, 9) and j.task_id = 0") == 2     # re-checked inside the UPDATE
+    assert re.findall(r"j\.status in \(([^)]*)\)", sql) == ["5, 7, 9", "5, 7, 9"]  # never 6/8 (running/cancelling)
     assert "r.ref like 'refs/pull/%/head'" in sql                        # PR refs only: no main, no tag
     assert "r.event in ('pull_request', 'pull_request_sync')" in sql     # no push, schedule or dispatch
     assert "r.commit_sha <> n.commit_sha" in sql and "order by r.repo_id, r.ref, r.id desc" in sql
@@ -38,6 +38,7 @@ def test_cancels_are_logged_runs_closed_and_one_board_line_posted(tmp_path, monk
         return []
     assert cs.main(query, posts.append) == 0
     assert any("r.id in (501,502)" in s for s in seen)                   # runs closed when all cancelled
+    assert not any("action_run_attempt a set" in s for s in seen)       # 1.24: no attempt table, no attempt SQL
     assert len(posts) == 1 and "3 waiting/blocked PR jobs" in posts[0] and "Windy-Clone 1, windy-pro 2" in posts[0]
     assert (tmp_path / "log").read_text().count("cancelled job") == 3
 
@@ -121,3 +122,21 @@ def test_board_fallback_unknown_lane_user_as_root_writes_nothing(tmp_path, monke
     monkeypatch.setattr(cs, "BOARD_USER", "no-such-user-xyz")
     monkeypatch.setattr(cs.os, "geteuid", lambda: 0)
     assert cs.board("x") is False and not today.exists()
+
+
+def test_gitea_28_closes_the_attempt_rows_too_and_never_touches_running_or_cancelling(tmp_path, monkeypatch):
+    monkeypatch.setattr(cs, "LOG", tmp_path / "log")
+    for sql in (cs.CANCEL_SQL, cs.CLOSE_RUNS_SQL, cs.CLOSE_ATTEMPTS_SQL):
+        assert "6" not in re.findall(r"status in \(([^)]*)\)", sql)[0] and "8" not in re.findall(r"status in \(([^)]*)\)", sql)[0]
+    seen = []
+
+    def query(sql):
+        seen.append(sql)
+        if sql is cs.CANCEL_SQL:
+            return [["21", "windy-pro", "refs/pull/9/head", "aaaaaaaa", "gates", "601"]]
+        if sql is cs.HAS_ATTEMPTS_SQL:
+            return [["t"]]
+        return []
+    assert cs.main(query, lambda line: True) == 0
+    att = [s for s in seen if "action_run_attempt a set" in s]
+    assert len(att) == 1 and "a.run_id in (601)" in att[0] and "j.run_attempt_id = a.id and j.status <> 3" in att[0]

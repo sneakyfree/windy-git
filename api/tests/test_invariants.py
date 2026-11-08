@@ -248,7 +248,8 @@ def test_g21_gitea_version_is_pinned_not_latest():
     m = re.search(r"image:\s*\S*gitea/gitea:(\S+)", compose)
     assert m, "no gitea image pin found"
     assert m.group(1) != "latest", "G2.1: pin an exact Gitea version, never `latest`"
-    assert re.match(r"^\d+\.\d+\.\d+$", m.group(1)), f"not an exact version: {m.group(1)}"
+    # An exact X.Y.Z, optionally pinned harder by its image digest (28.3.0 upgrade, 11-07).
+    assert re.match(r"^\d+\.\d+\.\d+(@sha256:[0-9a-f]{64})?$", m.group(1)), f"not an exact version: {m.group(1)}"
 
 
 def test_g24_gitea_license_travels_with_us():
