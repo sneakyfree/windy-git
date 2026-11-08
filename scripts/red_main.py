@@ -59,7 +59,9 @@ OWNERS = {**gr.OWNERS,
           "windy-legal": "Windy Legal", "windy-cfo": "Windy CFO", "windy-board": "Windy Git",
           "windy-log": "Windy Log", "windy-log-site": "Windy Log", "windy-hub": "Windy Hub",
           "windy-fly-desktop": "Windy Fly Desktop",
-          "windy-support": "Windy Support"}
+          "windy-support": "Windy Support",
+          "windy-mobile": "Windy Mobile", "windy-mobile-site": "Windy Mobile",   # Boss 11-08 (phone family)
+          "windy-os": "Windy OS", "windy-os-site": "Windy OS"}
 
 # A known reading of a red, appended to its line (Boss's read, dated). Never hides the line.
 NOTES = {("windytalk", "windy-git/secret-guard"):

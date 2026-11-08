@@ -52,7 +52,7 @@ FAILED=0
 
 # Repos Windy Git tracks FROM GitHub. Remove a repo from this list at the moment
 # it flips to Windy-Git-first, or the sync will fight its authors and win.
-REPOS="${SYNC_REPOS:-windy-calendar windy-search windy-registry Windy-Clone WindyCloud windy-cloud-sites windy-mind eternitas windy-agent windy-git windy-chat windy-mail windy-connect windy-drops windy-code-web windy-code windy-traveler windy-translate windytranslate-site windytraveler-site windy-hand windy-cloud-domains windy-cloud-vps windytalk windy-pro windy-inbox windy-text windy-hand-site windy-calendar-site windy-contracts windy-vault windy-uptime windy-pro-mobile windy-text-site windy-mind-acp windy-admin Windy-Clone-site windy-mind-site windyword-site windy-cell windycloud-site eternitas-site eternitas-authenticator windy-legal windy-cfo windy-board Windy-Clinic WindyProUltra windy-ads windy-call-site windy-cell-site windy-chat-site windy-code-site windy-connect-site windy-control-panel windy-darr windy-drops-site windy-ecosystem-chronicles windy-fix-me windy-fly-desktop windy-fly-site windy-git-site windy-hub windy-infra windy-iron windy-log windy-log-site windy-mail-site windy-node windy-search-site windy-session windy-vault-site windy-word-mcp windytalk-site windytranslate-examples windytranslate-python windy-marketing windy-seo windy-support}"
+REPOS="${SYNC_REPOS:-windy-calendar windy-search windy-registry Windy-Clone WindyCloud windy-cloud-sites windy-mind eternitas windy-agent windy-git windy-chat windy-mail windy-connect windy-drops windy-code-web windy-code windy-traveler windy-translate windytranslate-site windytraveler-site windy-hand windy-cloud-domains windy-cloud-vps windytalk windy-pro windy-inbox windy-text windy-hand-site windy-calendar-site windy-contracts windy-vault windy-uptime windy-pro-mobile windy-text-site windy-mind-acp windy-admin Windy-Clone-site windy-mind-site windyword-site windy-cell windycloud-site eternitas-site eternitas-authenticator windy-legal windy-cfo windy-board Windy-Clinic WindyProUltra windy-ads windy-call-site windy-cell-site windy-chat-site windy-code-site windy-connect-site windy-control-panel windy-darr windy-drops-site windy-ecosystem-chronicles windy-fix-me windy-fly-desktop windy-fly-site windy-git-site windy-hub windy-infra windy-iron windy-log windy-log-site windy-mail-site windy-node windy-search-site windy-session windy-vault-site windy-word-mcp windytalk-site windytranslate-examples windytranslate-python windy-marketing windy-seo windy-support windy-mobile windy-mobile-site windy-os windy-os-site}"
 
 # Repos whose TAGS must not reach Windy Git. A tag push fires `on: push: tags`
 # workflows; windy-pro's build-electron is a matrix over ubuntu/macos/windows-
@@ -62,7 +62,9 @@ NO_TAGS="${SYNC_NO_TAGS:-windy-pro}"
 
 # windy-call and the OLD windy-cell (now windy-cell-legacy, 11-06) left this list 2026-10-21: archived (read-only) on GitHub
 # by Windy Call; their Windy Git copies stay as frozen history. Same rule for the 5 archived 11-06:
-# windy-mobile-site, windy-ops, windy-whatsapp-gateway, windygit-mirror-test-553, windyword-site-book-launch.
+# windy-ops, windy-whatsapp-gateway, windygit-mirror-test-553, windyword-site-book-launch (and windy-mobile-site,
+# un-archived 11-08 by Windy Boss for Windy Mobile: back on the list). windy-mobile (11-08) is the NEW carrier
+# repo, not the old windy-mobile (that one is windy-cell since 11-06).
 
 # Branches GitHub deleted (merged PR heads, mostly) used to stay on Windy Git for
 # ever: the bare cache below is fetched with --prune, but the push to Windy Git
@@ -89,13 +91,20 @@ PRUNE_MAX="${SYNC_PRUNE_MAX:-25}"
 # builtin, so the token never reaches argv here either.
 gh_auth="Authorization: Basic $(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')"
 wg_auth="Authorization: Basic $(printf '%s:%s' "$WG_OWNER" "$GITEA_TOKEN" | base64 | tr -d '\n')"
+# Windy Git never follows a redirect (11-08). Gitea answers a renamed repo's OLD name with a 301 to
+# the new one, before auth. git follows that on the first request, so a push (or prune) to
+# windyadmin/<old>.git would land on <new>: when a NEW repo takes an old name (windy-mobile, 11-08:
+# the carrier repo, while Windy Git still redirects windy-mobile -> windy-cell) the --force push
+# below would put the new repo's branches on windy-cell. Not following turns that into a FAILED push.
+# GitHub keeps its default (its rename redirects are harmless here: fetch only).
 git_authed() {
-  GIT_TERMINAL_PROMPT=0 GIT_CONFIG_COUNT=5 \
+  GIT_TERMINAL_PROMPT=0 GIT_CONFIG_COUNT=6 \
     GIT_CONFIG_KEY_0="http.${GH_GIT}/.extraheader" GIT_CONFIG_VALUE_0="$gh_auth" \
     GIT_CONFIG_KEY_1="http.${WG_GIT}/.extraheader" GIT_CONFIG_VALUE_1="$wg_auth" \
     GIT_CONFIG_KEY_2=credential.helper GIT_CONFIG_VALUE_2= \
     GIT_CONFIG_KEY_3=http.lowSpeedLimit GIT_CONFIG_VALUE_3=1000 \
     GIT_CONFIG_KEY_4=http.lowSpeedTime GIT_CONFIG_VALUE_4=60 \
+    GIT_CONFIG_KEY_5="http.${WG_GIT}/.followRedirects" GIT_CONFIG_VALUE_5=false \
     timeout -k 10 "${T:-$GIT_TIMEOUT}" git "$@" 9>&-  # a straggler must never keep the push lock
 }
 timed_out() { [[ $1 -eq 124 || $1 -eq 137 ]]; }
