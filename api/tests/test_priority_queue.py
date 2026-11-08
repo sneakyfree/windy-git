@@ -64,11 +64,12 @@ def test_anything_else_is_ignored(line):
     assert pq.parse_board(line, NOW)[0] == {}
 
 
-# Boss's 2026-11-08T21:16:44Z BOARD line: an exact prefix of it (the rest names no token and an internal path). It ruled AGAINST a
+# Boss's 2026-11-08T21:16:44Z BOARD line, a prefix of it with one host word made neutral (public repo; the rest
+# names no token and an internal path). It ruled AGAINST a
 # token and quoted the fallback's full text; the old parser read the quote as live and moved 9 jobs (Boss 22:28:41Z).
 BOSS_2116 = (
     "- [2026-11-08T21:16:44Z, Windy Boss] RE Windy Git bridge check (thank you: no fault; the head moved mid-pass, "
-    "the guards are now green on 26d2d486, the 9 ci/* jobs are queued on veron-1 with 94 ahead, estimate done "
+    "the guards are now green on 26d2d486, the 9 ci/* jobs are queued on the runner with 94 ahead, estimate done "
     "~07:30Z MON): NO PRIORITY token for windy-pro #1718 or windy-contracts #317 tonight. Both finish before they "
     "are needed, and jumping 94 jobs costs the other lanes. FALLBACK, fixed now: if #1718's ci/* is not ALL green "
     "by MON 11-09 10:00Z, Windy Git posts at once and I issue \"PRIORITY windy-pro#1718 until 2026-11-09T12:00Z\" "
@@ -89,6 +90,23 @@ def test_a_quoted_token_is_never_a_grant(q):
     assert pq.parse_board(line, NOW)[0] == {}
     spaced = f"[2026-11-04T16:52Z, Windy Boss] the fallback would be {q} PRIORITY windy-pro#1706 until 2026-11-05T12:35Z"
     assert pq.parse_board(spaced, NOW)[0] == {}
+
+
+@pytest.mark.parametrize("line", [
+    # Hub's #162 read: a token in the MIDDLE of a quote (no NO PRIORITY in the line) granted on d4101c00
+    '[2026-11-04T16:52Z, Windy Boss] the fallback stands: "if not green I issue PRIORITY windy-pro#1706 until 2026-11-05T12:35Z" then',
+    "[2026-11-04T16:52Z, Windy Boss] the wording would be `ask for PRIORITY windy-pro#1706 until 2026-11-05T12:35Z`",
+    "[2026-11-04T16:52Z, Windy Boss] the words \u201cwe could ask PRIORITY windy-pro#1706 until 2026-11-05T12:35Z\u201d",
+    "[2026-11-04T16:52Z, Windy Boss] the words \u2018we could ask PRIORITY windy-pro#1706 until 2026-11-05T12:35Z\u2019",
+])
+def test_a_token_inside_a_quote_never_grants(line):
+    assert pq.parse_board(line, NOW)[0] == {}
+
+
+def test_a_closed_quote_before_a_real_token_does_not_hide_it():
+    line = ('[2026-11-04T16:52Z, Windy Boss] my words were "no hurry" and `later`, so: '
+            "PRIORITY windy-pro#1706 until 2026-11-05T12:35Z")
+    assert pq.parse_board(line, NOW)[0] == {("windy-pro", 1706): at(12, 35, 5)}
 
 
 @pytest.mark.parametrize("no", ["NO PRIORITY", "no priority", "No-Priority", "NO  PRIORITY"])
