@@ -38,14 +38,14 @@ with newest as (
   select j.id from action_run_job j
   join action_run r on r.id = j.run_id
   join newest n on n.repo_id = r.repo_id and n.ref = r.ref
-  where j.status in (5, 7) and j.task_id = 0
+  where j.status in (5, 7, 9) and j.task_id = 0
     and r.ref like 'refs/pull/%/head' and r.event in ('pull_request', 'pull_request_sync')
     and r.commit_sha <> n.commit_sha
   for update of j skip locked
 ), done as (
   update action_run_job j set status = 3, stopped = extract(epoch from now())::bigint,
          updated = extract(epoch from now())::bigint
-  from victims v where j.id = v.id and j.status in (5, 7) and j.task_id = 0
+  from victims v where j.id = v.id and j.status in (5, 7, 9) and j.task_id = 0
   returning j.id, j.run_id, j.repo_id, j.commit_sha, j.name
 )
 select d.id, p.name, r.ref, substr(d.commit_sha, 1, 8), d.name, d.run_id
@@ -55,8 +55,23 @@ from done d join action_run r on r.id = d.run_id join repository p on p.id = d.r
 CLOSE_RUNS_SQL = """
 update action_run r set status = 3, stopped = extract(epoch from now())::bigint,
        updated = extract(epoch from now())::bigint
-where r.id in ({ids}) and r.status in (5, 7)
+where r.id in ({ids}) and r.status in (5, 7, 9)
   and not exists (select 1 from action_run_job j where j.run_id = r.id and j.status <> 3);
+"""
+
+
+# Gitea 28.x (windy-git #149): 9 = pending (waiting on `needs:`; 1.24 used 7 for that), 8 = cancelling
+# (a RUNNING job asked to stop; never touched here). A run also has attempt rows with their own status
+# (action_run_attempt; run.status mirrors it), so they are closed too. On 1.24 neither 9 nor that table
+# exists, so this is the same SQL as before there. Source: models/actions/status.go, services/actions/run.go
+# (insertRunJob: Waiting + needs -> Pending), models/actions/run_attempt.go at v28.3.0.
+HAS_ATTEMPTS_SQL = "select to_regclass('public.action_run_attempt') is not null;"
+
+CLOSE_ATTEMPTS_SQL = """
+update action_run_attempt a set status = 3, stopped = extract(epoch from now())::bigint,
+       updated = extract(epoch from now())::bigint
+where a.run_id in ({ids}) and a.status in (5, 7, 9)
+  and not exists (select 1 from action_run_job j where j.run_attempt_id = a.id and j.status <> 3);
 """
 
 
@@ -118,6 +133,8 @@ def main(query=psql, post=board) -> int:
             runs = sorted({r[5] for r in rows if r[5].isdigit()})
             if runs:
                 query(CLOSE_RUNS_SQL.format(ids=",".join(runs)))
+                if query(HAS_ATTEMPTS_SQL) == [["t"]]:
+                    query(CLOSE_ATTEMPTS_SQL.format(ids=",".join(runs)))
     except Exception as e:  # noqa: BLE001 - never fails the sync
         print(f"  cancel-superseded: skipped ({type(e).__name__})")
         return 0

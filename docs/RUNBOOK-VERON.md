@@ -197,7 +197,7 @@ other. BOARD line before and after.
 ssh wg-veron
 cd /srv/windygit/src && bash scripts/queue_jump.sh <action_run_job id>
 ```
-Gitea 1.24 has no priority knob: a runner gets the waiting job with the lowest `updated`, then
+Gitea has no priority knob (still true in 28.3.0): a runner gets the waiting job with the lowest `updated`, then
 `id`. The script refuses unless the job is waiting and unclaimed. It sets that one row's `updated`
 one second below the oldest waiting job, then watches: OK when it is the next job picked; if any
 other job is picked first (or none within `QUEUE_JUMP_WAIT`, default 30 min) it restores the old
@@ -205,7 +205,7 @@ value and exits 1. First use: 10-27, windy-admin run 74 went next, ahead of abou
 Don't cancel a duplicate run to post a "same tree" status by hand: the status bridge maps
 cancelled to `error` and re-posts that every cycle over any manual status.
 
-## Re-run a PR's CI (Gitea 1.24 has no rerun API)
+## Re-run a PR's CI (written for 1.24, which had no rerun API; 28.x has one: switching to it is a separate PR)
 
 ```bash
 ssh wg-veron
