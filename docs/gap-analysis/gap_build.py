@@ -30,7 +30,7 @@ STRANDS = [
         ("G1.7", "RUNBOOK-VERON.md", G, "Present."),
     ]),
     ("G2", "Gitea, stock and branded", [
-        ("G2.1", "Exact Gitea version pinned", G, "gitea/gitea:1.24.7; test_g21."),
+        ("G2.1", "Exact Gitea version pinned", G, "gitea/gitea:28.3.0 (digest-pinned); test_g21."),
         ("G2.2", "app.ini: no self-signup, no password login, LFS on", G, "Live: DISABLE_REGISTRATION, password form off, external-only registration, LFS_START_SERVER, DEFAULT_BRANCH main."),
         ("G2.3", "Branding, Gitea marks removed", G, "APP_NAME Windy Git; branding version-controlled (test_g23)."),
         ("G2.4", "LICENSES + NOTICE", G, "LICENSES/gitea-MIT.txt + NOTICE.md; test_g24."),
