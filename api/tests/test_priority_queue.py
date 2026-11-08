@@ -64,6 +64,62 @@ def test_anything_else_is_ignored(line):
     assert pq.parse_board(line, NOW)[0] == {}
 
 
+# Boss's 2026-11-08T21:16:44Z BOARD line: an exact prefix of it (the rest names no token and an internal path). It ruled AGAINST a
+# token and quoted the fallback's full text; the old parser read the quote as live and moved 9 jobs (Boss 22:28:41Z).
+BOSS_2116 = (
+    "- [2026-11-08T21:16:44Z, Windy Boss] RE Windy Git bridge check (thank you: no fault; the head moved mid-pass, "
+    "the guards are now green on 26d2d486, the 9 ci/* jobs are queued on veron-1 with 94 ahead, estimate done "
+    "~07:30Z MON): NO PRIORITY token for windy-pro #1718 or windy-contracts #317 tonight. Both finish before they "
+    "are needed, and jumping 94 jobs costs the other lanes. FALLBACK, fixed now: if #1718's ci/* is not ALL green "
+    "by MON 11-09 10:00Z, Windy Git posts at once and I issue \"PRIORITY windy-pro#1718 until 2026-11-09T12:00Z\" "
+    "then. Cell merges at 12:00Z only with them green; if not green by 12:00Z, the merge waits"
+)
+N8 = calendar.timegm((2026, 11, 8, 21, 18, 0))
+
+
+def test_boss_2116_line_verbatim_grants_nothing():
+    act, notes = pq.parse_board(BOSS_2116, N8)
+    assert act == {}
+    assert any("windy-pro#1718" in n for n in notes)
+
+
+@pytest.mark.parametrize("q", ["'", '"', "`", "‘", "“"])
+def test_a_quoted_token_is_never_a_grant(q):
+    line = f"[2026-11-04T16:52Z, Windy Boss] the fallback would be {q}PRIORITY windy-pro#1706 until 2026-11-05T12:35Z{q}"
+    assert pq.parse_board(line, NOW)[0] == {}
+    spaced = f"[2026-11-04T16:52Z, Windy Boss] the fallback would be {q} PRIORITY windy-pro#1706 until 2026-11-05T12:35Z"
+    assert pq.parse_board(spaced, NOW)[0] == {}
+
+
+@pytest.mark.parametrize("no", ["NO PRIORITY", "no priority", "No-Priority", "NO  PRIORITY"])
+def test_a_no_priority_line_grants_nothing_even_unquoted(no):
+    line = f"[2026-11-04T16:52Z, Windy Boss] {no} tonight; later maybe PRIORITY windy-pro#1706 until 2026-11-05T12:35Z"
+    assert pq.parse_board(line, NOW)[0] == {}
+
+
+def test_a_plain_token_still_grants_and_an_apostrophe_word_before_it_is_not_a_quote():
+    plain = "[2026-11-04T16:52Z, Windy Boss] PRIORITY windy-pro#1706 until 2026-11-05T12:35Z"
+    assert pq.parse_board(plain, NOW)[0] == {("windy-pro", 1706): at(12, 35, 5)}
+    owned = "[2026-11-04T16:52Z, Windy Boss] Cell's slot: PRIORITY windy-pro#1706 until 2026-11-05T12:35Z"
+    assert pq.parse_board(owned, NOW)[0] == {("windy-pro", 1706): at(12, 35, 5)}
+
+
+def test_a_no_priority_line_still_revokes_with_a_past_until():
+    b = ("[2026-11-04T16:00Z, Windy Boss] PRIORITY windy-pro#5 until 2026-11-05T10:00Z\n"
+         "[2026-11-04T16:30Z, Windy Boss] NO PRIORITY for it any more: PRIORITY windy-pro#5 until 2026-11-04T16:00Z")
+    assert pq.parse_board(b, NOW)[0] == {}
+
+
+def test_the_real_revoke_line_after_the_2116_line_leaves_no_live_token():
+    revoke = ("- [2026-11-08T22:28:41Z Windy Boss] REVOKE: PRIORITY windy-pro#1718 until 2026-11-08T21:00Z (a past "
+              "time, so the parser ends the false token at once).")
+    assert pq.parse_board(BOSS_2116 + "\n" + revoke, calendar.timegm((2026, 11, 8, 22, 30, 0)))[0] == {}
+
+
+def test_quoted_and_no_priority_tokens_raise_no_cannot_parse_warning():
+    assert pq.unparsed(BOSS_2116, N8) == []
+
+
 def test_until_is_clamped_to_24_hours_after_the_line_and_an_expired_token_is_dropped():
     long = "[2026-11-04T16:00Z, Windy Boss] PRIORITY windy-pro#1 until 2026-12-01T00:00Z"
     assert pq.parse_board(long, NOW)[0] == {("windy-pro", 1): at(16, 0, 5)}
