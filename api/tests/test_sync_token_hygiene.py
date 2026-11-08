@@ -44,8 +44,9 @@ def _git(*args, cwd=None):
 class _Server:
     """/gh/<owner>/<repo>.git and /wg/<owner>/<repo>.git, each demanding its own header."""
 
-    def __init__(self, root: Path, delay=0.0, hang_gh=False):
+    def __init__(self, root: Path, delay=0.0, hang_gh=False, redirects=None):
         self.root, self.delay, self.hang_gh = root, delay, hang_gh
+        self.redirects = redirects or {}  # "/wg/windyadmin/old.git" -> "/wg/windyadmin/new.git", as Gitea
         self.denied = []
         srv = self
 
@@ -54,6 +55,12 @@ class _Server:
                 pass
 
             def _serve(self):
+                for old, new in srv.redirects.items():  # Gitea: a renamed repo's old name -> 301, before auth
+                    if self.path.startswith(old + "/"):
+                        self.send_response(301)
+                        self.send_header("Location", srv.base + new + self.path[len(old):])
+                        self.end_headers()
+                        return
                 prefix = self.path.split("/")[1]
                 want = {"gh": GH_AUTH, "wg": WG_AUTH}.get(prefix)
                 if self.headers.get("Authorization") != want:
@@ -474,3 +481,65 @@ def test_the_lock_is_free_while_the_bridge_runs(world):
         server.close()
     assert rc == 0, out
     assert probe.read_text() == "free"
+
+
+# --- 11-08: a NEW repo that takes a renamed repo's OLD name must never be pushed onto the renamed one.
+# Gitea redirected windyadmin/windy-mobile -> windy-cell (the 11-06 rename) when Windy Boss created a new
+# sneakyfree/windy-mobile (the carrier). Listing it in SYNC_REPOS would have force-pushed the carrier's
+# branches onto windy-cell, and prune could have deleted windy-cell's. git_authed never follows a Windy
+# Git redirect, so the push FAILS loudly instead.
+
+
+def _redirect_world(world: Path) -> str:
+    """demo.git on Windy Git (synced once, = windy-cell) and a different GitHub repo 'old' whose name
+    Windy Git redirects to demo. Returns demo's main sha before."""
+    server = _Server(world / "srv")
+    try:
+        rc, out, _ = _run(world, server)
+    finally:
+        server.close()
+    assert rc == 0, out
+    seed = world / "seed2"
+    _git("init", "-q", "-b", "main", str(seed))
+    (seed / "README").write_text("carrier")
+    _git("add", "README", cwd=seed)
+    _git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "carrier", cwd=seed)
+    _git("clone", "-q", "--bare", str(seed), str(world / "srv/gh/o/old.git"))
+    return _wg_sha(world, "main")
+
+
+def _wg_sha(world: Path, ref: str) -> str:
+    return subprocess.run(["git", "--git-dir", str(world / "srv/wg/windyadmin/demo.git"), "rev-parse", ref],
+                          capture_output=True, text=True, check=True).stdout.strip()
+
+
+def test_a_push_never_follows_a_windy_git_redirect(world):
+    before = _redirect_world(world)
+    _has_commit_stub(world, 0)
+    server = _Server(world / "srv", redirects={"/wg/windyadmin/old.git": "/wg/windyadmin/demo.git"})
+    try:
+        rc, out, _ = _run(world, server, SYNC_REPOS="old", SYNC_PRUNE_GONE="1")
+    finally:
+        server.close()
+    assert rc == 1
+    assert "FAILED push old -> windy git" in out
+    assert _wg_sha(world, "main") == before        # the renamed repo is untouched
+    assert _wg_heads(world) == ["feat/x", "main"]  # and nothing was pruned from it
+
+
+def test_the_redirect_is_real_so_the_test_above_is_honest(world):
+    # Same world, but the sync WITHOUT the guard: the carrier lands on demo. If this ever stops
+    # happening, the test above proves nothing.
+    before = _redirect_world(world)
+    sh = world / "scripts/sync_from_github.sh"
+    text = sh.read_text()
+    guard = '    GIT_CONFIG_KEY_5="http.${WG_GIT}/.followRedirects" GIT_CONFIG_VALUE_5=false \\\n'
+    assert guard in text and "GIT_CONFIG_COUNT=6" in text
+    sh.write_text(text.replace(guard, "").replace("GIT_CONFIG_COUNT=6", "GIT_CONFIG_COUNT=5"))
+    server = _Server(world / "srv", redirects={"/wg/windyadmin/old.git": "/wg/windyadmin/demo.git"})
+    try:
+        rc, out, _ = _run(world, server, SYNC_REPOS="old")
+    finally:
+        server.close()
+    assert rc == 0, out
+    assert _wg_sha(world, "main") != before
