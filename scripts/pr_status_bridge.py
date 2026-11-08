@@ -61,7 +61,7 @@ REPOS = os.environ.get(
     " windy-drops-site windy-control-panel"  # 11-07 Drops: drops-site = guards only (Gitea Actions OFF: its one workflow deploys)
     " windy-translate windytranslate-site windytraveler-site windy-hand"
     " windy-cloud-sites windy-cloud-domains windy-cloud-vps windytalk windy-pro windy-mind"
-    " windy-inbox windy-text windy-hand-site windy-calendar-site windy-contracts windy-vault windy-uptime windy-pro-mobile windy-text-site windy-mind-acp windy-admin Windy-Clone-site windy-mind-site windyword-site windy-cell windycloud-site eternitas-site eternitas-authenticator windy-legal windy-cfo windy-board windy-log windy-log-site windy-hub windy-fly-desktop windy-support",
+    " windy-inbox windy-text windy-hand-site windy-calendar-site windy-contracts windy-vault windy-uptime windy-pro-mobile windy-text-site windy-mind-acp windy-admin Windy-Clone-site windy-mind-site windyword-site windy-cell windycloud-site eternitas-site eternitas-authenticator windy-legal windy-cfo windy-board windy-log windy-log-site windy-hub windy-fly-desktop windy-support windy-mobile windy-mobile-site windy-os windy-os-site",
 ).split()
 
 # Gitea run status -> GitHub status state. `skipped` is deliberately absent: a
