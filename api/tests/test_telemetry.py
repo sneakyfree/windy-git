@@ -200,3 +200,11 @@ def test_buffer_overflow_is_counted_as_dropped(monkeypatch):
         tel.boot()
     assert len(tel.buffer) == 3
     assert tel.health_row()["telemetry_dropped"] == 2
+
+
+def test_heartbeat_counts_gitea_28_pending_as_waiting_and_cancelling_as_running():
+    from pathlib import Path
+
+    # read the file: importing scripts.* depends on sys.path order in the full suite
+    src = " ".join((Path(__file__).resolve().parents[2] / "scripts" / "telemetry_emit.py").read_text().split())
+    assert src.count("where status in (5, 7, 9)") == 2 and "where status in (6, 8)) as jobs_running" in src
