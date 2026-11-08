@@ -4,7 +4,7 @@ Read this before touching anything. Then read `DNA_STRAND_MASTER_PLAN.md`, which
 
 ## Current state (2026-09-23)
 
-**LIVE on Veron 1** — `app.windygit.com` (Gitea 1.24.6, Windy SSO only),
+**LIVE on Veron 1** — `app.windygit.com` (Gitea 28.3.0, Windy SSO only),
 `api.windygit.com` (our plane: humans via hub JWKS, agents via Eternitas EPT),
 `models.windygit.com`. Strands G0–G5, G7, G11 done; see the plan for the rest.
 
