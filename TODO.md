@@ -9,8 +9,8 @@ Grant's five gates before the big marketing push: (1) Grant and friends say "rea
 For this repo: CI throughput, the mirror work and the queue priority are on the live path. Load safety (principle 1) is the limit, not caution about visitors.
 
 ## Now
+- [ ] Standing policy (Grant, 2026-11-08): every test run on a shared machine is booked with Test Boss first. Windy Git keeps its CI queue and tells Test Boss its runner windows (registered: S-008 to S-011 runner windows, S-012 this repo's full suite, S-020 the fleet canary, never scheduled off) · OWNER Windy Git · ADDED 2026-11-08 · DUE none · STATUS now (standing) · SOURCE coordinating lane BOARD 2026-11-08T10:07:58Z; Test Boss schedule/STANDING.md
 Line standard (coordinating lane, board 2026-11-07T00:02:22Z): `- [ ] what · OWNER <lane> · ADDED YYYY-MM-DD · DUE YYYY-MM-DD or none · STATUS now | waiting on X | blocked by X | later · SOURCE <board ts / PR#>`; Done: `- [x] what · OWNER · ADDED · DONE YYYY-MM-DD · PROOF <PR#/sha/board ts>`. Times are UTC.
-- [ ] Gitea 1.24.7 to 28.3.0 (175 upstream security advisories since 1.24.7): live cutover with tools/gitea-cutover.sh after a runner drain (tools/runner-drain.sh: each runner stopped only when idle); preflight 0 running jobs, minute :17-:30, load1 under 14; fresh dump + data copy; automatic rollback; AFTER includes one real multi-job run (status 9 to 7 to 5 seen live) · OWNER Windy Git · ADDED 2026-11-07 · DUE 2026-11-08 (proposed 07:17Z; retry 08:17, latest start 09:17, done by 09:50) · STATUS waiting on the coordinating lane: read + stamp, PRIORITY for the gate, then a go-ahead by commit id (PR #149 at bc43181a, Hub stamped) · SOURCE Russ (human) 2026-11-07 ~08:15; coordinating lane 2026-11-07 14:0x (no cutover today, propose Sunday)
 - [ ] Delete the rehearsal copy (it holds production data; root-only) · OWNER Windy Git · ADDED 2026-11-07 · DUE 2026-11-08 (12:00) · STATUS later (kept until then; the runner-swap rehearsal takes a fresh copy) · SOURCE this lane 2026-11-07
 - [ ] Delete the cutover rollback point (holds secrets) · OWNER Windy Git · ADDED 2026-11-07 · DUE none (cutover + 7 days) · STATUS blocked by the cutover (the rollback point is made at cutover) · SOURCE this lane 2026-11-07
 - [ ] veron-1-4 runner trial (the veron-1 label had 64 waiting jobs on 1 runner): restart only when load1 stays under 12 for 10 min, stops with a 240 s grace (never a 10 s kill), drop at io avg60 over 20 OR load1 over 18 · OWNER Windy Git · ADDED 2026-11-07 · DUE none (when load1 stays under 12 for 10 min) · STATUS blocked by Veron load (stopped 13:51:16 by the drop rule, load1 18.22, after 14 jobs in 12.5 min; that 10 s stop cut windy-admin #882's job, re-run run 318 PASSED) · SOURCE coordinating lane 2026-11-07 13:32:02Z and 13:54:02Z
@@ -42,7 +42,7 @@ Line standard (coordinating lane, board 2026-11-07T00:02:22Z): `- [ ] what · OW
 - [ ] Standing rules: PRIORITY tokens (newest three count) and cancel-superseded keep running; a re-run only after a board line names it; birth-terms ABSENT is a pass only with this lane's board line naming the exact head with "findings None"; a head behind main ONLY by TODO.md-only commits may merge without a rebase under the 2026-11-07 04:13:51Z rule · OWNER Windy Git · ADDED 2026-11-06 · DUE none (standing) · STATUS now (in force) · SOURCE coordinating lane 2026-11-06 13:55Z and 2026-11-07 04:13:51Z
 
 ## Waiting on
-- [ ] Stamp + reader on #148 (lane map, Hub READ OK), #147 (Cloudflare token shapes), #149 (Hub stamped), #150 and #151 · OWNER coordinating lane · ADDED 2026-11-06 · DUE none · STATUS waiting on the coordinating lane (asked on the board) · SOURCE this lane's asks 11-06/11-07
+- [ ] Stamp + reader on #148 (lane map, Hub READ OK), #147 (Cloudflare token shapes), #150, #151 and #156 (all three brought up to date with main 2026-11-08, full suite each; asked as ONE batch) · OWNER coordinating lane · ADDED 2026-11-06 · DUE none · STATUS waiting on the coordinating lane (asked on the board) · SOURCE this lane's asks 11-06/11-07/11-08
 - [ ] Stamp on #142 (cross-host drill reads the dated R2 key pair); a waiter merges it at head 4f25683d, then one drill run and a lockbox note PR · OWNER coordinating lane · ADDED 2026-11-05 · DUE none · STATUS waiting on the coordinating lane (stale, asked for direction) · SOURCE this lane 2026-11-05
 - [ ] Windy Cell: when its next PR (strand refresh) has been open 10 min or more, check its windy-git contexts and post the result on the board · OWNER Windy Cell (opens) / Windy Git (checks) · ADDED 2026-11-07 · DUE 2026-11-13 · STATUS waiting on Windy Cell's next PR · SOURCE Windy Cell 2026-11-07
 - [ ] Windy CFO: read windy-cfo #8 (DNA v1.0) at its FINAL head · OWNER Windy CFO (asks) / Windy Git (reads) · ADDED 2026-11-07 · DUE 2026-11-12 (around) · STATUS waiting on windy-cfo #8's final head · SOURCE Windy CFO 2026-11-07
@@ -53,7 +53,7 @@ Line standard (coordinating lane, board 2026-11-07T00:02:22Z): `- [ ] what · OW
 - [ ] Option B (the windy-pro runner split and its read token): ONCE, on the final repos after the windy-pro split, not before · OWNER coordinating lane · ADDED 2026-11-06 · DUE none (after the windy-pro split) · STATUS blocked by the windy-pro split · SOURCE coordinating lane 2026-11-06 19:22Z
 
 ## Later
-- [ ] Switch scripts/rerun_ci.sh's rewind to the rerun API Gitea 28.x has; turn on RUN_RETENTION_DAYS; bridge links by run id · OWNER Windy Git · ADDED 2026-11-07 · DUE none (after the Gitea cutover) · STATUS blocked by the Gitea cutover · SOURCE this lane 2026-11-07
+- [ ] Switch scripts/rerun_ci.sh's rewind to the per-job rerun API Gitea 28.x has (first used by hand 2026-11-08: windy-chat job 74343 -> 74431, windy-search 72430 -> 74451; only that job re-runs); turn on RUN_RETENTION_DAYS; bridge links by run id · OWNER Windy Git · ADDED 2026-11-07 · DUE none · STATUS later (the cutover is done) · SOURCE this lane 2026-11-07
 - [ ] Windy Cell: the #38/#39 cutover after the rename; windy-cell-site CI when that lane wants it · OWNER Windy Git · ADDED 2026-11-06 · DUE none (when asked) · STATUS waiting on Windy Cell · SOURCE Windy Cell 2026-11-06
 - [ ] Forge hardening (external-user features off, basic auth for people): built and tested first, applied only in a named slot · OWNER Windy Git · ADDED 2026-11-04 · DUE none · STATUS later (not started) · SOURCE coordinating lane 2026-11-04
 - [ ] act_runner step-level timeout test and a PR; revert the runner job ceiling 150 to 90 minutes the day the suite owner posts a dated proof · OWNER Windy Git · ADDED 2026-10-29 · DUE none · STATUS waiting on the suite owner's dated proof · SOURCE this lane 2026-10-29
@@ -75,7 +75,7 @@ Table computed 2026-11-04, refreshed 2026-11-07 for open PRs below; the rest is 
 | ops/mirror-all-81 | #146 | 2026-11-07 | Windy Git | merged 2026-11-07 (merge commit 26782051): delete after its archive tag, Fri 2026-11-13 |
 | sec/secret-guard-cloudflare | #147 | 2026-11-06 | Windy Git | open PR: keep until it merges |
 | ops/lane-map-final | #148 | 2026-11-07 | Windy Git | open PR: keep until it merges |
-| ops/gitea-28.3.0 | #149 | 2026-11-07 | Windy Git | open PR: keep until it merges |
+| ops/gitea-28.3.0 | #149 | 2026-11-07 | Windy Git | merged 2026-11-08 (ee80fd40): delete the branch |
 | ops/mirror-test-boss | #150 | 2026-11-07 | Windy Git | open PR: keep until it merges |
 | ops/bridge-drops-site-cp | #151 | 2026-11-07 | Windy Git | open PR: keep until it merges |
 | ci/allow-mobile-firebase-key | #120 |  | not mine (see the PR) | open PR: keep until it merges |
@@ -153,6 +153,7 @@ Table computed 2026-11-04, refreshed 2026-11-07 for open PRs below; the rest is 
 | windy0-one-nightly-sweep | #14 | 2026-10-10 | Windy Git | merged leftover (tip = the merged PR's head): delete OK after its archive tag; deletion Fri 2026-11-13 |
 
 ## Done (last 30 days)
+- [x] Gitea 1.24.7 to 28.3.0 live cutover at ee80fd40 (#149): attempt 1 (07:17Z) skipped on load, attempt 2 started 08:21:51Z; downtime 08:21:53-08:26:43Z; every post-check passed; first CI run + one bridged status after it; rollback point kept 7+ days · OWNER Windy Git · ADDED 2026-11-07 · DONE 2026-11-08 · PROOF BOARD 2026-11-08T08:25:56Z (BEFORE), 08:26:44Z + 08:37:00Z (AFTER)
 - [x] windyword-site #316 re-run (run 305 at 56e6daa3): cancelled as superseded, the head moved to 45359b7c at 15:40:56Z, which has its own run 306 · OWNER Windy Git · ADDED 2026-11-07 · DONE 2026-11-07 · PROOF board 2026-11-07 ~15:5x (result line); coordinating lane 2026-11-07 13:32:02Z (1)
 - [x] windy-git #131 merged (2c2a75bf) and windy-git-site #2 merged (26723a6e): TODO.md on main in both · OWNER Windy Git · ADDED 2026-11-06 · DONE 2026-11-07 · PROOF #131, windy-git-site #2
 - [x] windy-admin #882 re-run after the veron-1-4 stop cut its job: run 318 PASSED · OWNER Windy Git · ADDED 2026-11-07 · DONE 2026-11-07 · PROOF Gitea run 318 job 72453; coordinating lane 2026-11-07 13:54:02Z
