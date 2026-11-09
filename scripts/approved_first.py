@@ -12,7 +12,8 @@ failure or pending status on the same context wins, so the head is re-read after
 #96 LOW), and it skips when fewer than MIN_BUDGET calls are left. Logged; one BOARD line per pass when it moves anything.
 Required approvals per repo: APPROVALS below (windy-git needs only Hub's: it is Boss-exempt). An entry that is a
 tuple is ANY ONE of its contexts: the 2 Traveler repos take Agent's read in place of the Hub's (Boss 11-09 05:57:38Z,
-per his REVIEW CAPACITY ruling 11-04 22:00:57Z; not fleet-wide). This only orders the queue: it merges nothing.
+per his REVIEW CAPACITY ruling 11-04 22:00:57Z; not fleet-wide), and windy-pro takes Admin's read in place of the
+Hub's (Boss 11-09 06:45:55Z: the Hub never stamps its own PRs). This only orders the queue: it merges nothing.
 """
 
 from __future__ import annotations
@@ -34,9 +35,11 @@ STATE = Path(os.environ.get("APPROVED_FIRST_STATE", "/var/lib/windygit/approved-
 LOG = Path(os.environ.get("APPROVED_FIRST_LOG", "/var/log/windygit/approved-first.log"))
 DEFAULT_APPROVALS = ("windy-hub/approved", "windy-boss/approved")
 HUB_OR_AGENT = ("windy-hub/approved", "windy-agent/approved")   # any one: the non-author reader
+HUB_OR_ADMIN = ("windy-hub/approved", "windy-admin/approved")
 APPROVALS = {"windy-git": ("windy-hub/approved",),
              "windy-traveler": ("windy-boss/approved", HUB_OR_AGENT),
-             "windytraveler-site": ("windy-boss/approved", HUB_OR_AGENT)}
+             "windytraveler-site": ("windy-boss/approved", HUB_OR_AGENT),
+             "windy-pro": ("windy-boss/approved", HUB_OR_ADMIN)}
 
 WAITING_HEADS_SQL = """
 select p.name, j.commit_sha, min(j.created)

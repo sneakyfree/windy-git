@@ -121,6 +121,22 @@ def test_traveler_repos_take_agents_read_in_place_of_the_hubs(monkeypatch):
         assert af.approved(repo, A, {}, now=1000.0)
         assert not af.approved(repo, B, {}, now=1000.0)
         assert af.approved(repo, C, {}, now=1000.0)
-    assert not af.approved("windy-pro", A, {}, now=1000.0)                       # not fleet-wide
+    assert not af.approved("windy-pro", A, {}, now=1000.0)                       # Agent does not count on windy-pro
+    assert not af.approved("windy-admin", A, {}, now=1000.0)                     # not fleet-wide
     statuses[A] = [{"context": "windy-agent/approved", "state": "failure"}] + statuses[A]
     assert not af.approved("windy-traveler", A, {}, now=1000.0)                   # a withdrawn read: newest wins
+
+
+def test_windy_pro_takes_admins_read_in_place_of_the_hubs(monkeypatch):
+    """Boss 2026-11-09T06:45:55Z: on windy-pro, windy-boss/approved AND (windy-hub OR windy-admin); no other repo."""
+    statuses = {A: _ok("windy-boss/approved", "windy-admin/approved"),
+                B: _ok("windy-admin/approved"),                                   # no Boss stamp
+                C: _ok("windy-boss/approved", "windy-hub/approved")}
+    monkeypatch.setattr(af.b, "commit_statuses", lambda repo, sha: statuses[sha])
+    assert af.approved("windy-pro", A, {}, now=1000.0)
+    assert not af.approved("windy-pro", B, {}, now=1000.0)
+    assert af.approved("windy-pro", C, {}, now=1000.0)
+    for repo in ("windy-traveler", "windy-admin", "WindyCloud"):                   # Admin's read counts nowhere else
+        assert not af.approved(repo, A, {}, now=1000.0)
+    statuses[A] = [{"context": "windy-admin/approved", "state": "failure"}] + statuses[A]
+    assert not af.approved("windy-pro", A, {}, now=1000.0)                        # a withdrawn read: newest wins
