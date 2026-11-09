@@ -10,7 +10,9 @@ Cheap on the GitHub quota (shared with stamps): it looks only at heads that have
 a head seen fully approved is cached for APPROVAL_TTL_S (an approval CAN be withdrawn: a later
 failure or pending status on the same context wins, so the head is re-read after the TTL, Hub
 #96 LOW), and it skips when fewer than MIN_BUDGET calls are left. Logged; one BOARD line per pass when it moves anything.
-Required approvals per repo: APPROVALS below (windy-git needs only Hub's: it is Boss-exempt).
+Required approvals per repo: APPROVALS below (windy-git needs only Hub's: it is Boss-exempt). An entry that is a
+tuple is ANY ONE of its contexts: the 2 Traveler repos take Agent's read in place of the Hub's (Boss 11-09 05:57:38Z,
+per his REVIEW CAPACITY ruling 11-04 22:00:57Z; not fleet-wide). This only orders the queue: it merges nothing.
 """
 
 from __future__ import annotations
@@ -31,7 +33,10 @@ APPROVAL_TTL_S = int(os.environ.get("APPROVED_FIRST_TTL_S", "1800"))
 STATE = Path(os.environ.get("APPROVED_FIRST_STATE", "/var/lib/windygit/approved-heads.json"))
 LOG = Path(os.environ.get("APPROVED_FIRST_LOG", "/var/log/windygit/approved-first.log"))
 DEFAULT_APPROVALS = ("windy-hub/approved", "windy-boss/approved")
-APPROVALS = {"windy-git": ("windy-hub/approved",)}
+HUB_OR_AGENT = ("windy-hub/approved", "windy-agent/approved")   # any one: the non-author reader
+APPROVALS = {"windy-git": ("windy-hub/approved",),
+             "windy-traveler": ("windy-boss/approved", HUB_OR_AGENT),
+             "windytraveler-site": ("windy-boss/approved", HUB_OR_AGENT)}
 
 WAITING_HEADS_SQL = """
 select p.name, j.commit_sha, min(j.created)
@@ -54,7 +59,7 @@ def approved(repo: str, sha: str, cache: dict[str, float], now: float | None = N
     newest: dict[str, str] = {}                 # statuses come newest first: a later failure wins
     for s in b.commit_statuses(repo, sha):
         newest.setdefault(s["context"], s.get("state", ""))
-    if all(newest.get(c) == "success" for c in need):
+    if all(any(newest.get(x) == "success" for x in ((c,) if isinstance(c, str) else c)) for c in need):
         cache[sha] = now
         return True
     return False

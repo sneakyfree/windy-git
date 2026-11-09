@@ -109,3 +109,18 @@ def test_a_read_time_in_the_future_is_expired_not_trusted_forever(monkeypatch):
     monkeypatch.setattr(af.b, "commit_statuses", lambda repo, sha: reads.append(sha) or [])
     cache = {A: 10_000.0}
     assert not af.approved("windy-git", A, cache, now=1000.0) and reads == [A] and A not in cache
+
+
+def test_traveler_repos_take_agents_read_in_place_of_the_hubs(monkeypatch):
+    """Boss 2026-11-09T05:57:38Z: windy-boss/approved AND (windy-hub OR windy-agent) on the 2 Traveler repos only."""
+    statuses = {A: _ok("windy-boss/approved", "windy-agent/approved"),
+                B: _ok("windy-agent/approved"),                                   # no Boss stamp
+                C: _ok("windy-boss/approved", "windy-hub/approved")}
+    monkeypatch.setattr(af.b, "commit_statuses", lambda repo, sha: statuses[sha])
+    for repo in ("windy-traveler", "windytraveler-site"):
+        assert af.approved(repo, A, {}, now=1000.0)
+        assert not af.approved(repo, B, {}, now=1000.0)
+        assert af.approved(repo, C, {}, now=1000.0)
+    assert not af.approved("windy-pro", A, {}, now=1000.0)                       # not fleet-wide
+    statuses[A] = [{"context": "windy-agent/approved", "state": "failure"}] + statuses[A]
+    assert not af.approved("windy-traveler", A, {}, now=1000.0)                   # a withdrawn read: newest wins
