@@ -66,16 +66,22 @@ rm -f "$T/cpupressure"; out=$(bash "$W" -- echo nofile 2>&1); chk "an unreadable
 printf 'garbage\n' > "$T/cpupressure"; out=$(bash "$W" -- echo garbled 2>&1); chk "a garbled cpu pressure file is open (no bash error)" '[ "$out" = garbled ]'; cpr 0.00
 la 47.00; cpr 10.00; out=$(bash "$W" -- echo pinned-case 2>&1); chk "high load1 under the backstop with low cpu PSI is allowed" '[[ "$out" == *pinned-case ]]'; la 0.50; cpr 0.00
 
-echo "== the MEMORY gate (11-09: wait while MemAvailable < 48 GB)"
+echo "== the MEMORY gate (11-09: wait while MemAvailable < 48 GiB)"
 mem 40000000; out=$(VERON_HEAVY_WAIT=2 bash "$W" -- echo x 2>&1); rc=$?
-chk "MemAvailable 40 GB waits, then 75, naming the reason" '[ $rc = 75 ] && [[ "$out" == *"MemAvailable=40GB < 48GB"* ]]'
-mem 46875000; out=$(bash "$W" -- echo at-mem 2>&1); chk "MemAvailable exactly 48 GB (46875000 kB) is allowed" '[[ "$out" == *at-mem ]]'
-mem 46874000; VERON_HEAVY_WAIT=1 bash "$W" -- echo x >/dev/null 2>&1; chk "just under 48 GB waits" '[ $? = 75 ]'
+chk "MemAvailable 38 GiB waits, then 75, naming the reason" '[ $rc = 75 ] && [[ "$out" == *"MemAvailable=38GiB < 48GiB"* ]]'
+mem 50331648; out=$(bash "$W" -- echo at-mem 2>&1); chk "MemAvailable exactly 48 GiB (50331648 kB) is allowed" '[[ "$out" == *at-mem ]]'
+mem 50331647; VERON_HEAVY_WAIT=1 bash "$W" -- echo x >/dev/null 2>&1; chk "1 kB under 48 GiB waits" '[ $? = 75 ]'
 mem 40000000; VERON_HEAVY_WAIT=1 bash "$W" --mem-min-gb 32 -- echo y >/dev/null 2>&1; chk "--mem-min-gb lowers the floor" '[ $? = 0 ]'
 mem 40000000; (sleep 2; mem 170000000) & out=$(VERON_HEAVY_WAIT=20 bash "$W" -- echo mem-went 2>&1); chk "memory frees: it proceeds" '[[ "$out" == *mem-went ]]'
 rm -f "$T/meminfo"; out=$(bash "$W" -- echo nofile 2>&1); chk "an unreadable meminfo is open" '[[ "$out" == *nofile ]]'
 printf 'MemTotal: 1 kB\n' > "$T/meminfo"; out=$(bash "$W" -- echo nomemavail 2>&1); chk "meminfo without MemAvailable is open" '[ "$out" = nomemavail ]'; mem 170000000
-st=$(bash "$W" --status 2>&1); chk "--status shows cpu pressure and MemAvailable with their gates" '[[ "$st" == *"cpu pressure some avg60=0 (gate 25)"* && "$st" == *"MemAvailable=174 GB (gate 48)"* ]]'
+st=$(bash "$W" --status 2>&1); chk "--status shows cpu pressure and MemAvailable with their gates" '[[ "$st" == *"cpu pressure some avg60=0 (gate 25)"* && "$st" == *"MemAvailable=162 GiB (gate 48)"* ]]'
+
+echo "== a gate value that is not a whole number is refused (64), never an open gate"
+out=$(bash "$W" --cpu-max abc -- echo ran 2>&1); rc=$?; chk "--cpu-max abc: 64, the job does not run" '[ $rc = 64 ] && [[ "$out" != *ran* && "$out" == *"CPU_MAX gate"* ]]'
+bash "$W" --mem-min-gb x -- true >/dev/null 2>&1; chk "--mem-min-gb x: 64" '[ $? = 64 ]'
+bash "$W" --io-max 2.5 -- true >/dev/null 2>&1; chk "--io-max 2.5: 64" '[ $? = 64 ]'
+VERON_HEAVY_LOAD_MAX=lots bash "$W" -- true >/dev/null 2>&1; chk "VERON_HEAVY_LOAD_MAX=lots: 64" '[ $? = 64 ]'
 
 echo "== the LOAD gate (Boss 11-05: wait, do not fail, while load1 >= 48; a backstop since 11-09)"
 la 48.00; out=$(VERON_HEAVY_WAIT=2 bash "$W" -- echo x 2>&1); rc=$?

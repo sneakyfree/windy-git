@@ -15,7 +15,7 @@ Counting semaphore for heavy jobs on Veron (Boss's VERON LOAD RULE, 11-04; caps 
   - `/proc/pressure/io` some avg60 >= 20 (`VERON_HEAVY_IO_MAX`, `--io-max`; was 30);
   - `/proc/pressure/cpu` some avg60 >= 25 (`VERON_HEAVY_CPU_MAX`, `--cpu-max`): real CPU contention, unlike load1,
     which also counts tasks queued on a pinned job's own cores;
-  - MemAvailable < 48 GB (`VERON_HEAVY_MEM_MIN_GB`, `--mem-min-gb`);
+  - MemAvailable < 48 GiB, i.e. kB / 1048576 (`VERON_HEAVY_MEM_MIN_GB`, `--mem-min-gb`);
   - 1-min load >= 48, now a backstop (`VERON_HEAVY_LOAD_MAX`, `--load-max`).
   A gate whose file cannot be read is open, never a silent block;
 - the job runs under `nice -n 10` + `ionice -c2 -n7` with JEST_MAX_WORKERS / PYTEST_XDIST_AUTO_NUM_WORKERS /
