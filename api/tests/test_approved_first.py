@@ -140,3 +140,69 @@ def test_windy_pro_takes_admins_read_in_place_of_the_hubs(monkeypatch):
         assert not af.approved(repo, A, {}, now=1000.0)
     statuses[A] = [{"context": "windy-admin/approved", "state": "failure"}] + statuses[A]
     assert not af.approved("windy-pro", A, {}, now=1000.0)                        # a withdrawn read: newest wins
+
+
+def _vault(monkeypatch, statuses, files=None, st=200):
+    """windy-vault world: statuses per sha; files = the compare answer (None -> the read fails)."""
+    compares = []
+
+    def github(method, path, body=None):
+        compares.append(path)
+        if files is None:
+            return 404, {}
+        return st, {"files": files}
+    monkeypatch.setattr(af.b, "commit_statuses", lambda repo, sha: statuses[sha])
+    monkeypatch.setattr(af.b, "github", github)
+    return compares
+
+
+def _f(*names, prev=None):
+    out = [{"filename": n} for n in names]
+    if prev:
+        out[-1]["previous_filename"] = prev
+    return out
+
+
+def test_vault_takes_clouds_read_only_when_every_file_is_docs_or_todo(monkeypatch):
+    """Boss 2026-11-09T16:09:00Z (b), NARROW: windy-vault only; docs/** or TODO.md only; anything else needs the Hub."""
+    st = {A: _ok("windy-boss/approved", "windy-cloud/approved")}
+    calls = _vault(monkeypatch, st, _f("docs/TOKEN-ROLL.md", "TODO.md"))
+    assert af.approved("windy-vault", A, {}, now=1000.0)
+    assert calls == [f"/repos/{af.b.GH_OWNER}/windy-vault/compare/main...{A}"]          # ONE compare read
+    for bad in (_f("docs/TOKEN-ROLL.md", "scripts/roll.py"),                          # code next to docs
+                _f(".github/workflows/ci.yml"), _f("ACCESS_LOCKBOX.md"),
+                _f("sub/TODO.md"), _f("TODO.md.bak"), _f("docsx/a.md"), _f("docs"),   # look-alikes
+                _f("docs/moved.py", prev="scripts/moved.py"),                         # a rename OUT of code
+                [], [{"filename": None}]):
+        _vault(monkeypatch, st, bad)
+        assert not af.approved("windy-vault", A, {}, now=1000.0), bad
+    _vault(monkeypatch, st, _f("docs/new.md", prev="docs/old.md"))                     # a rename inside docs/
+    assert af.approved("windy-vault", A, {}, now=1000.0)
+
+
+def test_vault_docs_rule_fails_closed(monkeypatch):
+    st = {A: _ok("windy-boss/approved", "windy-cloud/approved")}
+    _vault(monkeypatch, st, None)                                                      # compare read failed
+    assert not af.approved("windy-vault", A, {}, now=1000.0)
+    _vault(monkeypatch, st, _f(*[f"docs/{i}.md" for i in range(af.COMPARE_FILE_CAP)]))  # list may be partial
+    assert not af.approved("windy-vault", A, {}, now=1000.0)
+    _vault(monkeypatch, st, _f("docs/a.md"), st=500)
+    assert not af.approved("windy-vault", A, {}, now=1000.0)
+    st[A] = [{"context": "windy-cloud/approved", "state": "failure"}] + st[A]          # a withdrawn Cloud read
+    _vault(monkeypatch, st, _f("docs/a.md"))
+    assert not af.approved("windy-vault", A, {}, now=1000.0)
+    st[A] = _ok("windy-cloud/approved")                                                # Boss's stamp still required
+    _vault(monkeypatch, st, _f("docs/a.md"))
+    assert not af.approved("windy-vault", A, {}, now=1000.0)
+
+
+def test_vault_docs_rule_is_vault_only_and_costs_no_read_when_the_hub_stamped(monkeypatch):
+    st = {A: _ok("windy-boss/approved", "windy-cloud/approved"),
+          B: _ok("windy-boss/approved", "windy-hub/approved")}
+    calls = _vault(monkeypatch, st, _f("docs/a.md"))
+    for repo in ("windy-uptime", "windycloud-site", "windy-pro", "windy-git"):
+        assert not af.approved(repo, A, {}, now=1000.0)                                # not fleet-wide
+    assert calls == []                                                                 # and no compare read
+    assert af.approved("windy-vault", B, {}, now=1000.0) and calls == []               # Hub + Boss: as before
+    _vault(monkeypatch, st, _f("scripts/x.py"))
+    assert af.approved("windy-vault", B, {}, now=1000.0)                               # the Hub still covers code
