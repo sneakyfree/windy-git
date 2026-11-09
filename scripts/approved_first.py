@@ -13,7 +13,10 @@ failure or pending status on the same context wins, so the head is re-read after
 Required approvals per repo: APPROVALS below (windy-git needs only Hub's: it is Boss-exempt). An entry that is a
 tuple is ANY ONE of its contexts: the 2 Traveler repos take Agent's read in place of the Hub's (Boss 11-09 05:57:38Z,
 per his REVIEW CAPACITY ruling 11-04 22:00:57Z; not fleet-wide), and windy-pro takes Admin's read in place of the
-Hub's (Boss 11-09 06:45:55Z: the Hub never stamps its own PRs). This only orders the queue: it merges nothing.
+Hub's (Boss 11-09 06:45:55Z: the Hub never stamps its own PRs). windy-vault ONLY: Cloud's read counts in place of the
+Hub's when EVERY changed file is docs/** or the top-level TODO.md (Boss 11-09 16:09:00Z (b), NARROW); the file list comes
+from ONE GitHub compare read, and any doubt (read failed, 300+ files, a rename from outside docs/) needs the Hub.
+This only orders the queue: it merges nothing.
 """
 
 from __future__ import annotations
@@ -40,6 +43,9 @@ APPROVALS = {"windy-git": ("windy-hub/approved",),
              "windy-traveler": ("windy-boss/approved", HUB_OR_AGENT),
              "windytraveler-site": ("windy-boss/approved", HUB_OR_AGENT),
              "windy-pro": ("windy-boss/approved", HUB_OR_ADMIN)}
+# repo -> (context, its docs-only stand-in): the stand-in counts ONLY when every changed file is docs/** or TODO.md
+DOCS_ONLY_READER = {"windy-vault": ("windy-hub/approved", "windy-cloud/approved")}
+COMPARE_FILE_CAP = 300   # GitHub's compare lists at most 300 files: at the cap the list may be partial -> not docs-only
 
 WAITING_HEADS_SQL = """
 select p.name, j.commit_sha, min(j.created)
@@ -62,10 +68,41 @@ def approved(repo: str, sha: str, cache: dict[str, float], now: float | None = N
     newest: dict[str, str] = {}                 # statuses come newest first: a later failure wins
     for s in b.commit_statuses(repo, sha):
         newest.setdefault(s["context"], s.get("state", ""))
-    if all(any(newest.get(x) == "success" for x in ((c,) if isinstance(c, str) else c)) for c in need):
+
+    def met(req) -> bool:
+        return all(any(newest.get(x) == "success" for x in ((c,) if isinstance(c, str) else c)) for c in req)
+
+    ok = met(need)
+    alt = DOCS_ONLY_READER.get(repo)
+    if not ok and alt:
+        swapped = tuple(alt[1] if c == alt[0] else c for c in need)
+        ok = swapped != tuple(need) and met(swapped) and docs_only(repo, sha)   # compare read only when it can matter
+    if ok:
         cache[sha] = now
         return True
     return False
+
+
+def _docs_path(p) -> bool:
+    return isinstance(p, str) and (p == "TODO.md" or (p.startswith("docs/") and len(p) > 5))
+
+
+def docs_only(repo: str, sha: str) -> bool:
+    """True only if EVERY file changed between main and sha (merge base) is docs/** or the top-level TODO.md,
+    renames included (both names). Fails closed: a failed read, no files, or a list at GitHub's cap is False."""
+    try:
+        st, body = b.github("GET", f"/repos/{b.GH_OWNER}/{repo}/compare/main...{sha}")
+    except Exception:  # noqa: BLE001
+        return False
+    files = body.get("files") if st == 200 and isinstance(body, dict) else None
+    if not isinstance(files, list) or not 0 < len(files) < COMPARE_FILE_CAP:
+        return False
+    for f in files:
+        if not isinstance(f, dict) or not _docs_path(f.get("filename")):
+            return False
+        if "previous_filename" in f and not _docs_path(f["previous_filename"]):
+            return False
+    return True
 
 
 def move_sql(shas: list[str], slots: int) -> str:
