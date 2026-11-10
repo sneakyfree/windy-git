@@ -3,14 +3,21 @@
 # only when a slot is free and the disk is not already drowning. A flock-based COUNTING SEMAPHORE across every lane
 # and user on this machine.
 #
-#   veron-heavy [--max-run SECONDS] [--wait SECONDS] [--io-max N] [--load-max N] [--lane NAME] -- COMMAND [ARGS...]
+#   veron-heavy [--max-run SECONDS] [--wait SECONDS] [--io-max N] [--cpu-max N] [--mem-min-gb N] [--load-max N] [--lane NAME] -- COMMAND [ARGS...]
 #   veron-heavy --status
 #
 #   * at most VERON_HEAVY_MAX (4) heavy jobs at once, fleet-wide: slot files /run/veron-heavy/slot.N, each a flock.
 #     A slot is released the instant its holder dies (the kernel drops the lock), so a crashed job never wedges it.
-#   * IO gate: before taking a slot it reads /proc/pressure/io "some avg60"; while that is AT OR ABOVE VERON_HEAVY_IO_MAX (30)
+#   * IO gate: before taking a slot it reads /proc/pressure/io "some avg60"; while that is AT OR ABOVE VERON_HEAVY_IO_MAX (20;
+#     30 until 11-09, Test Boss's CAPACITY plan: 24 h of samples peaked at 14)
 #     it waits (a poll every 20-40 s with jitter, never a busy loop). The gate is checked only on the way in.
-#   * LOAD gate (Boss 11-05): while the 1-minute load average is AT OR ABOVE VERON_HEAVY_LOAD_MAX (48) it waits too, and
+#   * CPU gate (11-09, Test Boss's CAPACITY plan): while /proc/pressure/cpu "some avg60" is AT OR ABOVE VERON_HEAVY_CPU_MAX
+#     (25) it waits. PSI is time tasks really lose waiting for a CPU; load1 also counts tasks merely queued on a pinned
+#     job's own cores. 24 h of samples: 8-11 off-peak, 15-21 in the 10-17Z block.
+#   * MEMORY gate (11-09): while MemAvailable is BELOW VERON_HEAVY_MEM_MIN_GB (48 GiB, i.e. kB / 1048576, the unit Test
+#     Boss's CAPACITY plan uses) it waits. Normal: about 150-165 GiB.
+#   * Any gate whose file cannot be read is OPEN (never a silent block), as before.
+#   * LOAD gate (Boss 11-05), now a BACKSTOP: while the 1-minute load average is AT OR ABOVE VERON_HEAVY_LOAD_MAX (48) it waits too, and
 #     prints ONE "waiting" line a minute (VERON_HEAVY_SAY_EVERY), so a lane sees why it is held. Waiting is not failing.
 #   * the job runs under `nice -n 10` and `ionice -c2 -n7`, and with its worker counts capped (VERON_HEAVY_WORKERS, 2):
 #     JEST_MAX_WORKERS, PYTEST_XDIST_AUTO_NUM_WORKERS, PYTEST_XDIST_WORKERS, MAKEFLAGS=-jN. Jest reads no env var for
@@ -24,14 +31,19 @@
 #     is SIGKILLed the slot frees at once even though its job may run on: say so, do not rely on it).
 #   * nested calls (a heavy job calling veron-heavy) run directly: no deadlock.
 # Exit: the command's own code; 70 state dir unusable; 75 gave up waiting; 124 held too long; 127 command not found; 64 usage.
-# Env: VERON_HEAVY_MAX, VERON_HEAVY_IO_MAX, VERON_HEAVY_LOAD_MAX, VERON_HEAVY_WORKERS, VERON_HEAVY_SAY_EVERY, VERON_HEAVY_WAIT, VERON_HEAVY_MAX_RUN, VERON_HEAVY_LANE,
-#      VERON_HEAVY_DIR (default /run/veron-heavy), VERON_HEAVY_PRESSURE (default /proc/pressure/io), VERON_HEAVY_LOADAVG
+# Env: VERON_HEAVY_MAX, VERON_HEAVY_IO_MAX, VERON_HEAVY_CPU_MAX, VERON_HEAVY_MEM_MIN_GB, VERON_HEAVY_LOAD_MAX, VERON_HEAVY_WORKERS, VERON_HEAVY_SAY_EVERY, VERON_HEAVY_WAIT, VERON_HEAVY_MAX_RUN, VERON_HEAVY_LANE,
+#      VERON_HEAVY_DIR (default /run/veron-heavy), VERON_HEAVY_PRESSURE (default /proc/pressure/io), VERON_HEAVY_CPU_PRESSURE
+#      (default /proc/pressure/cpu), VERON_HEAVY_MEMINFO (default /proc/meminfo), VERON_HEAVY_LOADAVG
 #      (default /proc/loadavg), VERON_HEAVY_POLL (seconds).
 set -u
 DIR=${VERON_HEAVY_DIR:-/run/veron-heavy}
 PRESSURE=${VERON_HEAVY_PRESSURE:-/proc/pressure/io}
 MAX=${VERON_HEAVY_MAX:-4}
-IO_MAX=${VERON_HEAVY_IO_MAX:-30}
+IO_MAX=${VERON_HEAVY_IO_MAX:-20}
+CPU_PRESSURE=${VERON_HEAVY_CPU_PRESSURE:-/proc/pressure/cpu}
+CPU_MAX=${VERON_HEAVY_CPU_MAX:-25}
+MEMINFO=${VERON_HEAVY_MEMINFO:-/proc/meminfo}
+MEM_MIN_GB=${VERON_HEAVY_MEM_MIN_GB:-48}
 LOAD_MAX=${VERON_HEAVY_LOAD_MAX:-48}
 LOADAVG=${VERON_HEAVY_LOADAVG:-/proc/loadavg}
 WORKERS=${VERON_HEAVY_WORKERS:-2}
@@ -56,11 +68,20 @@ setup_dir() {
   fi
 }
 
-io_avg60() {      # prints the "some" avg60 as an integer (rounded down); 0 if unreadable (an unreadable gate is open, and logged)
+psi_avg60() {     # $1 = a /proc/pressure file: its "some" avg60 as an integer (rounded down); 0 if unreadable (the gate is open)
   local line v
-  line=$(grep -m1 '^some' "$PRESSURE" 2>/dev/null) || { echo 0; return; }
-  v=${line#*avg60=}; v=${v%% *}
-  printf '%s' "${v%%.*}"
+  line=$(grep -m1 '^some' "$1" 2>/dev/null) || { echo 0; return; }
+  v=${line#*avg60=}; v=${v%% *}; v=${v%%.*}
+  [[ "$v" =~ ^[0-9]+$ ]] && printf '%s' "$v" || echo 0
+}
+io_avg60() { psi_avg60 "$PRESSURE"; }
+cpu_avg60() { psi_avg60 "$CPU_PRESSURE"; }
+
+memavail_gb() {   # MemAvailable in whole GiB (kB / 1048576, rounded down); 999999 if unreadable (the gate is open)
+  local kb
+  kb=$(awk '/^MemAvailable:/ {print $2; exit}' "$MEMINFO" 2>/dev/null)
+  [[ "$kb" =~ ^[0-9]+$ ]] || { echo 999999; return; }
+  echo $(( kb / 1048576 ))
 }
 
 load1() {         # the 1-minute load average as an integer (rounded down); 0 if unreadable
@@ -88,7 +109,7 @@ status() {
     exec 8>&-
     [ -e "$DIR/slot.$i" ] && :
   done
-  printf 'slots in use: %d of %d; io pressure some avg60=%s (gate %s); load1=%s (gate %s)\n' "$held" "$MAX" "$(io_avg60)" "$IO_MAX" "$(load1)" "$LOAD_MAX"
+  printf 'slots in use: %d of %d; io pressure some avg60=%s (gate %s); cpu pressure some avg60=%s (gate %s); MemAvailable=%s GiB (gate %s); load1=%s (gate %s)\n' "$held" "$MAX" "$(io_avg60)" "$IO_MAX" "$(cpu_avg60)" "$CPU_MAX" "$(memavail_gb)" "$MEM_MIN_GB" "$(load1)" "$LOAD_MAX"
   local w=0 p
   for p in "$DIR"/waiters/*; do [ -e "$p" ] && kill -0 "$(basename "$p")" 2>/dev/null && w=$((w + 1)); done
   printf 'waiting: %d\n' "$w"
@@ -101,12 +122,18 @@ while [ $# -gt 0 ]; do
     --max-run) MAX_RUN=${2:?}; shift 2 ;;
     --wait) WAIT=${2:?}; shift 2 ;;
     --io-max) IO_MAX=${2:?}; shift 2 ;;
+    --cpu-max) CPU_MAX=${2:?}; shift 2 ;;
+    --mem-min-gb) MEM_MIN_GB=${2:?}; shift 2 ;;
     --load-max) LOAD_MAX=${2:?}; shift 2 ;;
     --lane) LANE=${2:?}; shift 2 ;;
     --) shift; break ;;
-    -h|--help) sed -n 2,26p "$0"; exit 0 ;;
-    *) say "usage: veron-heavy [--max-run S] [--wait S] [--io-max N] [--load-max N] [--lane NAME] -- COMMAND [ARGS...] | --status"; exit 64 ;;
+    -h|--help) sed -n '2,/^[^#]/{/^#/p}' "$0"; exit 0 ;;
+    *) say "usage: veron-heavy [--max-run S] [--wait S] [--io-max N] [--cpu-max N] [--mem-min-gb N] [--load-max N] [--lane NAME] -- COMMAND [ARGS...] | --status"; exit 64 ;;
   esac
+done
+# a gate value that is not a whole number would make every test error out and open the gate: refuse it
+for g in IO_MAX CPU_MAX MEM_MIN_GB LOAD_MAX; do
+  [[ "${!g}" =~ ^[0-9]+$ ]] || { say "the $g gate (VERON_HEAVY_$g or its flag) must be a whole number, got: ${!g}"; exit 64; }
 done
 [ $# -gt 0 ] || { say "no command given (usage: veron-heavy -- COMMAND [ARGS...])"; exit 64; }
 CMD_NAME=$(basename -- "$1")
@@ -125,10 +152,14 @@ declare -i waited_logged=0
 last_say=0
 
 while :; do
-  # 1) IO gate
-  p=$(io_avg60); ld=$(load1)
+  # 1) the gates: io, cpu, memory, then load1 as a backstop
+  p=$(io_avg60); cpu=$(cpu_avg60); mg=$(memavail_gb); ld=$(load1)
   if [ "$p" -ge "$IO_MAX" ]; then
     reason="io pressure avg60=$p >= $IO_MAX"
+  elif [ "$cpu" -ge "$CPU_MAX" ]; then
+    reason="cpu pressure avg60=$cpu >= $CPU_MAX"
+  elif [ "$mg" -lt "$MEM_MIN_GB" ]; then
+    reason="MemAvailable=${mg}GiB < ${MEM_MIN_GB}GiB"
   elif [ "$ld" -ge "$LOAD_MAX" ]; then
     reason="load1=$ld >= $LOAD_MAX"
   else
@@ -156,7 +187,7 @@ done
 cleanup_wait; trap - EXIT
 HOLD="$DIR/holders/slot.$SLOT"
 printf 'user=%s lane=%s cwd=%s cmd=%s pid=%s since=%s max_run=%s\n' "$(id -un)" "$LANE" "$(pwd)" "$CMD_NAME" "$$" "$(date -u +%FT%TZ)" "$MAX_RUN" > "$HOLD" 2>/dev/null || true
-log "acquired slot=$SLOT lane=$LANE cmd=$CMD_NAME waited=$(( $(now) - start_wait ))s io=$(io_avg60) max_run=${MAX_RUN}s"
+log "acquired slot=$SLOT lane=$LANE cmd=$CMD_NAME waited=$(( $(now) - start_wait ))s io=$(io_avg60) cpu=$(cpu_avg60) mem=$(memavail_gb)GiB load1=$(load1) max_run=${MAX_RUN}s"
 export VERON_HEAVY_SLOT=$SLOT
 release() { rm -f "$HOLD" 2>/dev/null; log "released slot=$SLOT lane=$LANE cmd=$CMD_NAME ran=$(( $(now) - t0 ))s rc=${rc:-?}"; }
 t0=$(now); rc=
