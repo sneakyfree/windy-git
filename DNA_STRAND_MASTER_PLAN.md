@@ -431,6 +431,7 @@ Postgres · and `I-12 holds: env override ignored`.
 - **G11.5** ⚠️ **Do not resolve the windy-pro checkout ambiguity by guessing.** Six windy-pro-family checkouts exist with a **build counter forked three ways** (main 12, overnight 34, wave-44 56) and direct evidence conflict on HEAD (`f69d363` vs `911f5ccf`, recorded hours apart by two sessions). Resolve, write down the answer, *then* migrate.
 - **G11.6** GitHub stays the durable copy for a **full quarter** minimum after cutover. Advancing that date is a Grant decision (§7).
 - **G11.7** Nightly `git bundle` of every repo → R2, plus a periodic sync to the 3 TB HDD for a cold copy in Grant's hands.
+- **G11.8** Windy Fly vision codon (coordinating lane, BOARD 2026-11-06T19:19:22Z; the record is windy-ecosystem-chronicles `chronicles/2026-11-06-windy-fly-vision/VISION.md`). What it means for this repo: (a) the renames `windy-pro-mobile` → `windy-fly-mobile` and `windy-pro` → `windy-word` happen only in a window booked with Windy Git, and every CI list (sync, status bridge, merge audit, red-main owners, the TODO checker, runner scopes) changes in that same window, with a way back; (b) the two daughter repos of the windy-pro split, `windy-hub` and `windy-fly-desktop`, are on those lists, and Windy Git reads both move plans for their CI and deploy steps; (c) `windy-legal` and `windy-cfo` are on those lists. Where an older line in this plan says otherwise, the vision wins.
 
 ## Strand G12 — Launch hardening
 

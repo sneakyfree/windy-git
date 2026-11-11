@@ -73,6 +73,7 @@ STATE = {
     "running": "pending",
     "waiting": "pending",
     "blocked": "pending",
+    "docs_only": "success",   # a test job scripts/docs_only.py did not start; its description says so (P9)
 }
 MIRROR_TAG = "[GH#"
 # sync_from_github.sh never pushes archive/* (one-repo doctrine safety copies),
@@ -229,7 +230,15 @@ def graphql(query: str):
     return _call("https://api.github.com", f"Bearer {GITHUB_TOKEN}", "POST", "/graphql", {"query": query})
 
 
-GQL_PRS_MAX = 100  # one page: a repo with more open PRs makes the whole answer partial (-> REST)
+GQL_PRS_MAX = 100  # one page of open PRs per repo (GitHub's own limit for `first`)
+# A repo with more open PRs than one page gets its next pages by cursor, one small query each, up to
+# this many extra pages. Since 2026-11-11 windy-pro holds 124 open PRs, so one page was ALWAYS partial,
+# the whole prefetch was thrown away every pass and every repo ran on REST (about 110 more REST calls a
+# pass on the account all lanes share). The answer must still be COMPLETE to be used (Boss 11-02).
+GQL_MORE_PAGES_MAX = 4
+
+_PR_FIELDS = ("totalCount pageInfo { hasNextPage endCursor } nodes { "
+              "number title url headRefName headRefOid baseRefName headRepository { nameWithOwner } }")
 
 
 def heads_query(repos) -> str:
@@ -241,16 +250,48 @@ def heads_query(repos) -> str:
         parts.append(
             f'r{i}: repository(owner: {json.dumps(GH_OWNER)}, name: {json.dumps(repo)}) {{ '
             "defaultBranchRef { name target { oid } } "
-            f"pullRequests(states: OPEN, first: {GQL_PRS_MAX}) {{ totalCount nodes {{ "
-            "number title url headRefName headRefOid baseRefName headRepository { nameWithOwner } "
-            "} } }")
+            f"pullRequests(states: OPEN, first: {GQL_PRS_MAX}) {{ {_PR_FIELDS} }} }}")
     return "query { " + " ".join(parts) + " }"
+
+
+def more_prs_query(repo: str, after: str) -> str:
+    """The next page of ONE named repo's open PRs, after the cursor GitHub gave (never wider)."""
+    return (f"query {{ r: repository(owner: {json.dumps(GH_OWNER)}, name: {json.dumps(repo)}) {{ "
+            f"pullRequests(states: OPEN, first: {GQL_PRS_MAX}, after: {json.dumps(after)}) {{ {_PR_FIELDS} }} }} }}")
+
+
+def _all_pr_nodes(repo: str, prs: dict) -> list | None:
+    """Every open PR node of a repo: the first page plus its next pages by cursor. None on ANY doubt
+    (a failed page, no cursor, more pages than allowed, or a count that does not add up), so the
+    caller uses none of the prefetch."""
+    nodes = prs.get("nodes")
+    if not isinstance(nodes, list):
+        return None
+    nodes, page = list(nodes), prs
+    for _ in range(GQL_MORE_PAGES_MAX + 1):
+        if len(nodes) == prs.get("totalCount"):
+            return nodes
+        info = page.get("pageInfo") or {}
+        if not info.get("hasNextPage") or not isinstance(info.get("endCursor"), str):
+            return None
+        if len(nodes) // GQL_PRS_MAX > GQL_MORE_PAGES_MAX:
+            return None
+        st, out = graphql(more_prs_query(repo, info["endCursor"]))
+        if st != 200 or not isinstance(out, dict) or out.get("errors") or not isinstance(out.get("data"), dict):
+            return None
+        page = ((out["data"].get("r") or {}).get("pullRequests"))
+        if not isinstance(page, dict) or not isinstance(page.get("nodes"), list) or not page["nodes"]:
+            return None
+        if page.get("totalCount") != prs.get("totalCount"):
+            return None                                          # a PR opened or closed between pages
+        nodes += page["nodes"]
+    return None
 
 
 def prefetch(repos) -> dict | None:
     """{repo: {"prs": [REST-shaped PR dicts], "default_branch": name, "default_head": sha}} for
     EVERY repo, or None. None on ANY doubt: a non-200, an `errors` key, a missing or null repo,
-    a missing default branch, more open PRs than one page holds, or ANY exception from the call or
+    a missing default branch, open PRs whose next pages cannot all be read, or ANY exception from the call or
     the parse (a malformed body, a node missing a field: Hub #124). It runs outside the per-repo
     try, so it must never raise. The caller then runs the whole pass on today's REST path; a
     partial answer is never used (Boss 11-02)."""
@@ -273,8 +314,8 @@ def _prefetch(repos) -> dict | None:
         dbr, prs = node.get("defaultBranchRef"), node.get("pullRequests")
         if not isinstance(dbr, dict) or not (dbr.get("target") or {}).get("oid") or not isinstance(prs, dict):
             return None
-        nodes = prs.get("nodes")
-        if not isinstance(nodes, list) or prs.get("totalCount") != len(nodes):
+        nodes = _all_pr_nodes(repo, prs)
+        if nodes is None or prs.get("totalCount") != len(nodes):
             return None
         rest = []
         for n in nodes:
@@ -646,6 +687,18 @@ def post_statuses(repo: str, sha: str) -> None:
         ctx = f"windy-git/{wf}/{q['name']}"
         if ctx not in latest or q["run_number"] > latest[ctx]["run_number"]:
             latest[ctx] = {"id": 0, "status": "waiting", "run_number": q["run_number"]}
+    # Docs-only heads (scripts/docs_only.py, rule P4, Boss GO 2026-11-11T04:56:12Z): the test jobs that rule did not
+    # start read success with DOCS_ONLY_DESC, so a reader can tell a skipped test from a passed one. A real verdict
+    # or a queued re-run always wins.
+    for c in docs_only_contexts(repo, sha):
+        ctx = c["context"]
+        parts = ctx.split("/", 2)
+        if len(parts) != 3 or needs_daemon(repo, parts[1], parts[2]) or f"{parts[1]}/{parts[2]}" in NON_BLOCKING.get(repo, ()):
+            continue
+        # Only where nothing else is known: a job this rule cancelled never got a task, so it has no other record.
+        # Any task or queued job at this head for the context (a real run, a re-run) speaks for itself.
+        if ctx not in latest:
+            latest[ctx] = {"id": 0, "status": "docs_only", "run_number": c.get("run", 0)}
     bad = invalid_workflows(repo, sha)
     if not (latest or bad):
         return
@@ -692,7 +745,29 @@ def post_statuses(repo: str, sha: str) -> None:
         print(f"  {repo}@{sha[:7]} {ctx} = {state} -> {st}")
 
 
+DOCS_ONLY_DESC = "docs-only head: no test job (rule P4)"
+_DOCS_STATE: dict | None = None
+
+
+def docs_only_contexts(repo: str, sha: str) -> list[dict]:
+    """Contexts scripts/docs_only.py skipped at repo@sha (its ON mode only). Lazy and non-fatal, like the guards:
+    if the rule's state can't be read, nothing is painted."""
+    global _DOCS_STATE
+    try:
+        import importlib
+
+        d = importlib.import_module("docs_only")
+        if _DOCS_STATE is None:
+            _DOCS_STATE = d.load_state()
+        return d.contexts_for(repo, sha, _DOCS_STATE)
+    except Exception as e:  # noqa: BLE001
+        print(f"  {repo}@{sha[:7]} docs-only state skipped ({type(e).__name__})")
+        return []
+
+
 def _verdict_text(r: dict) -> str:
+    if r["status"] == "docs_only":
+        return DOCS_ONLY_DESC
     text = f"Windy Git CI on Veron 1: {r['status']}"
     if r["status"] == "failure":
         hint = failure_hint(r.get("id"))
