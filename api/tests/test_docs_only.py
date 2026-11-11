@@ -3,6 +3,7 @@
 Invariants tested here (named in the GO's three terms):
   (1) the STRICT list only: TODO.md, README*, docs/; never "any .md" (ACCESS_LOCKBOX.md, doctrine files);
   (2) repos excluded by NAME are never touched; a docs path a test or CI file reads is never skipped;
+      a push to windy-pro main always runs (Boss RULING 2026-11-11T05:06:52Z), its PR heads follow the rule;
   (3) the bridge posts each skipped context as success with "docs-only head: no test job", so a skipped
       test is never mistaken for a passed one; a real verdict always wins.
 Also: DARK by default (nothing cancelled), and the cancel is one guarded statement (waiting and unclaimed only).
@@ -155,7 +156,8 @@ def paths(tmp_path, monkeypatch):
     monkeypatch.setattr(do, "STATE", tmp_path / "state.json")
     monkeypatch.setattr(do, "LOG", tmp_path / "docs-only.log")
     monkeypatch.setattr(do, "ON_FILE", tmp_path / "docs-only.on")
-    monkeypatch.setattr(do, "EXCLUDE", {"windy-pro"})
+    monkeypatch.setattr(do, "EXCLUDE", {"windy-excluded"})
+    monkeypatch.setattr(do, "PUSH_EXCLUDE", {"windy-pro"})
     return tmp_path
 
 
@@ -181,9 +183,20 @@ def test_on_cancels_only_guarded_waiting_unclaimed_jobs_and_records_contexts(pat
 
 def test_excluded_and_unbridged_repos_are_never_touched(paths):
     (paths / "docs-only.on").touch()
-    db = DB([_row(1, repo="windy-pro"), _row(2, repo="windy-git", sha="b" * 40)])
-    do.main(query=db, post=lambda l: None, decide=lambda r, s, e: pytest.fail("decided"), repos={"windy-pro", "windy-chat"})
+    db = DB([_row(1, repo="windy-excluded"), _row(2, repo="windy-git", sha="b" * 40)])
+    do.main(query=db, post=lambda l: None, decide=lambda r, s, e: pytest.fail("decided"), repos={"windy-excluded", "windy-chat"})
     assert not any(s.lstrip().startswith("update") for s in db.sql)
+
+
+def test_windy_pro_main_push_always_runs_but_its_pr_heads_follow_the_rule(paths):
+    """Boss RULING 2026-11-11T05:06:52Z: a push to windy-pro main runs the whole suite; its PR heads follow P4."""
+    (paths / "docs-only.on").touch()
+    push = ["1", "windy-pro", "push", "refs/heads/main", SHA, "ci.yml", "gates", "7"]
+    pr = _row(2, repo="windy-pro", sha="c" * 40)
+    db = DB([push, pr])
+    do.main(query=db, post=lambda l: None, decide=lambda r, s, e: (True, "docs-only"), repos={"windy-pro"})
+    upd = [s for s in db.sql if s.lstrip().startswith("update action_run_job")]
+    assert len(upd) == 1 and "in (2)" in upd[0]
 
 
 def test_not_docs_only_head_is_left_alone(paths):

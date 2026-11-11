@@ -11,7 +11,8 @@ or docs/, and a test run on such a head can prove nothing new. So, for a WAITING
   * READ BY TESTS = some test or CI file AT THAT HEAD names a changed path (the exact path, a basename for TODO.md /
     README*, one of its docs/ folders, or a bare docs/). Then the head is NOT skipped: a docs change can break a
     test that reads it (windy-pro's tests read docs/legal, docs/contracts, the handtest ledger).
-  * EXCLUDED repos by NAME (term 2): EXCLUDE below; also every repo the bridge does not post for.
+  * EXCLUDED repos by NAME (term 2): EXCLUDE below (none today); PUSH_EXCLUDE: a default-branch push there
+    always runs the whole suite (windy-pro); also every repo the bridge does not post for.
   * KEPT workflows: any whose file stem names lint, guard, drift, doc, todo, secret, link or spell. They read
     the very files a docs head changes, so they still run.
 
@@ -41,9 +42,11 @@ STATE = Path(os.environ.get("DOCS_ONLY_STATE", "/var/lib/windygit/docs-only.json
 LOG = Path(os.environ.get("DOCS_ONLY_LOG", "/var/log/windygit/docs-only.log"))
 ON_FILE = Path(os.environ.get("DOCS_ONLY_ON", "/etc/windygit/docs-only.on"))
 OWNER = os.environ.get("WINDYGIT_OWNER", "windyadmin")
-# Term (2): repos excluded BY NAME. windy-pro: Boss's 10-27 order "the whole suite on every PR" stands until he
-# says otherwise (asked on the BOARD 2026-11-11T05:00:37Z). No repo publishes from docs/ or serves its README.
-EXCLUDE = set(os.environ.get("DOCS_ONLY_EXCLUDE", "windy-pro").split())
+# Term (2): repos excluded BY NAME (none today: no repo publishes from docs/ or serves its README).
+EXCLUDE = set(os.environ.get("DOCS_ONLY_EXCLUDE", "").split())
+# Repos whose DEFAULT-BRANCH PUSH always runs the whole suite, docs-only or not (Boss RULING 2026-11-11T05:06:52Z:
+# windy-pro's release cut reads main's own green). Their PR heads follow the rule like every other repo.
+PUSH_EXCLUDE = set(os.environ.get("DOCS_ONLY_PUSH_EXCLUDE", "windy-pro").split())
 DESC = "docs-only head: no test job (rule P4)"
 KEEP_WF = re.compile(r"lint|guard|drift|doc|todo|secret|link|spell", re.IGNORECASE)
 MAX_HEADS = int(os.environ.get("DOCS_ONLY_MAX_HEADS", "40"))   # per pass: bounded git work
@@ -208,6 +211,8 @@ def main(query=cs.psql, post=cs.board, decide=docs_head, repos=None, now=time.ti
             continue
         repo, sha = r[1], r[4]
         if repo in EXCLUDE or repo not in repos or not (SAFE_NAME.match(repo) and SAFE_SHA.match(sha)):
+            continue
+        if r[2] == "push" and repo in PUSH_EXCLUDE:
             continue
         heads.setdefault((repo, sha), []).append(r)
     st = load_state()
