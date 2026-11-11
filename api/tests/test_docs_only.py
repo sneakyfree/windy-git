@@ -97,14 +97,16 @@ def test_any_md_that_is_not_docs_runs_the_tests(repo):
 
 def test_term2_a_docs_path_a_test_reads_is_never_skipped(repo):
     (repo / "tests" / "test_legal.py").write_text("open('docs/legal/terms.md')\n")
-    _g(repo, "add", "-A"); _g(repo, "commit", "-q", "-m", "legal test")
+    _g(repo, "add", "-A")
+    _g(repo, "commit", "-q", "-m", "legal test")
     sha = _branch_commit(repo, {"docs/legal/terms.md": "t\n"})
     assert do.docs_head("windy-chat", sha, "pull_request") == (False, "docs-only but read by tests")
 
 
 def test_term2_a_bare_docs_folder_read_counts_too(repo):
     (repo / "tests" / "walk.test.js").write_text("fs.readdirSync('docs/')\n")
-    _g(repo, "add", "-A"); _g(repo, "commit", "-q", "-m", "walk")
+    _g(repo, "add", "-A")
+    _g(repo, "commit", "-q", "-m", "walk")
     sha = _branch_commit(repo, {"docs/guide.md": "g2\n"})
     assert do.docs_head("windy-chat", sha, "pull_request")[0] is False
 
@@ -113,7 +115,8 @@ def test_term2_a_test_that_reads_TODO_keeps_TODO_heads_running(repo):
     (repo / ".github").mkdir()
     (repo / ".github" / "workflows").mkdir()
     (repo / ".github" / "workflows" / "todo.yml").write_text("run: python check.py TODO.md\n")
-    _g(repo, "add", "-A"); _g(repo, "commit", "-q", "-m", "wf")
+    _g(repo, "add", "-A")
+    _g(repo, "commit", "-q", "-m", "wf")
     sha = _branch_commit(repo, {"TODO.md": "- [x] a\n"})
     assert do.docs_head("windy-chat", sha, "pull_request")[0] is False
 
@@ -124,7 +127,8 @@ def test_unreadable_head_never_skips(repo):
 
 def test_push_uses_the_commits_own_diff(repo):
     (repo / "README.md").write_text("r\n")
-    _g(repo, "add", "-A"); _g(repo, "commit", "-q", "-m", "readme")
+    _g(repo, "add", "-A")
+    _g(repo, "commit", "-q", "-m", "readme")
     assert do.docs_head("windy-chat", _g(repo, "rev-parse", "HEAD"), "push")[0] is True
 
 
@@ -184,7 +188,7 @@ def test_on_cancels_only_guarded_waiting_unclaimed_jobs_and_records_contexts(pat
 def test_excluded_and_unbridged_repos_are_never_touched(paths):
     (paths / "docs-only.on").touch()
     db = DB([_row(1, repo="windy-excluded"), _row(2, repo="windy-git", sha="b" * 40)])
-    do.main(query=db, post=lambda l: None, decide=lambda r, s, e: pytest.fail("decided"), repos={"windy-excluded", "windy-chat"})
+    do.main(query=db, post=lambda line: None, decide=lambda r, s, e: pytest.fail("decided"), repos={"windy-excluded", "windy-chat"})
     assert not any(s.lstrip().startswith("update") for s in db.sql)
 
 
@@ -194,7 +198,7 @@ def test_windy_pro_main_push_always_runs_but_its_pr_heads_follow_the_rule(paths)
     push = ["1", "windy-pro", "push", "refs/heads/main", SHA, "ci.yml", "gates", "7"]
     pr = _row(2, repo="windy-pro", sha="c" * 40)
     db = DB([push, pr])
-    do.main(query=db, post=lambda l: None, decide=lambda r, s, e: (True, "docs-only"), repos={"windy-pro"})
+    do.main(query=db, post=lambda line: None, decide=lambda r, s, e: (True, "docs-only"), repos={"windy-pro"})
     upd = [s for s in db.sql if s.lstrip().startswith("update action_run_job")]
     assert len(upd) == 1 and "in (2)" in upd[0]
 
@@ -202,14 +206,14 @@ def test_windy_pro_main_push_always_runs_but_its_pr_heads_follow_the_rule(paths)
 def test_not_docs_only_head_is_left_alone(paths):
     (paths / "docs-only.on").touch()
     db = DB([_row(1)])
-    do.main(query=db, post=lambda l: None, decide=lambda r, s, e: (False, "not docs-only"), repos={"windy-chat"})
+    do.main(query=db, post=lambda line: None, decide=lambda r, s, e: (False, "not docs-only"), repos={"windy-chat"})
     assert not any(s.lstrip().startswith("update") for s in db.sql)
 
 
 def test_a_db_error_never_fails_the_sync(paths):
     def boom(sql):
         raise RuntimeError("db down")
-    assert do.main(query=boom, post=lambda l: None, repos={"windy-chat"}) == 0
+    assert do.main(query=boom, post=lambda line: None, repos={"windy-chat"}) == 0
 
 
 # --- term (3): the bridge ---------------------------------------------------------------------------------------
