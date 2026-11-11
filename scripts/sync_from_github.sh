@@ -228,6 +228,10 @@ fi
 # main, tag or schedule. Never fails the sync.
 timeout -k 5 90 python3 "$(dirname "$0")/cancel_superseded.py" || log "cancel-superseded failed or timed out (non-fatal)"
 
+# Docs-only heads start no test job (rule P4, Boss GO 2026-11-11T04:56:12Z): DARK (log only) until
+# /etc/windygit/docs-only.on exists. The bridge posts the skipped contexts on its next pass. Never fails the sync.
+timeout -k 5 120 python3 "$(dirname "$0")/docs_only.py" || log "docs-only failed or timed out (non-fatal)"
+
 # Queue order (Boss 10-28 09:18Z): jobs of fully-approved PRs go first, oldest first, at most
 # one per runner slot per pass. Never fails the sync.
 timeout -k 5 120 python3 "$(dirname "$0")/approved_first.py" || log "approved-first failed or timed out (non-fatal)"

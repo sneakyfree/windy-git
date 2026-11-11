@@ -73,6 +73,7 @@ STATE = {
     "running": "pending",
     "waiting": "pending",
     "blocked": "pending",
+    "docs_only": "success",   # a test job scripts/docs_only.py did not start; its description says so (P9)
 }
 MIRROR_TAG = "[GH#"
 # sync_from_github.sh never pushes archive/* (one-repo doctrine safety copies),
@@ -646,6 +647,18 @@ def post_statuses(repo: str, sha: str) -> None:
         ctx = f"windy-git/{wf}/{q['name']}"
         if ctx not in latest or q["run_number"] > latest[ctx]["run_number"]:
             latest[ctx] = {"id": 0, "status": "waiting", "run_number": q["run_number"]}
+    # Docs-only heads (scripts/docs_only.py, rule P4, Boss GO 2026-11-11T04:56:12Z): the test jobs that rule did not
+    # start read success with DOCS_ONLY_DESC, so a reader can tell a skipped test from a passed one. A real verdict
+    # or a queued re-run always wins.
+    for c in docs_only_contexts(repo, sha):
+        ctx = c["context"]
+        parts = ctx.split("/", 2)
+        if len(parts) != 3 or needs_daemon(repo, parts[1], parts[2]) or f"{parts[1]}/{parts[2]}" in NON_BLOCKING.get(repo, ()):
+            continue
+        # Only where nothing else is known: a job this rule cancelled never got a task, so it has no other record.
+        # Any task or queued job at this head for the context (a real run, a re-run) speaks for itself.
+        if ctx not in latest:
+            latest[ctx] = {"id": 0, "status": "docs_only", "run_number": c.get("run", 0)}
     bad = invalid_workflows(repo, sha)
     if not (latest or bad):
         return
@@ -692,7 +705,29 @@ def post_statuses(repo: str, sha: str) -> None:
         print(f"  {repo}@{sha[:7]} {ctx} = {state} -> {st}")
 
 
+DOCS_ONLY_DESC = "docs-only head: no test job (rule P4)"
+_DOCS_STATE: dict | None = None
+
+
+def docs_only_contexts(repo: str, sha: str) -> list[dict]:
+    """Contexts scripts/docs_only.py skipped at repo@sha (its ON mode only). Lazy and non-fatal, like the guards:
+    if the rule's state can't be read, nothing is painted."""
+    global _DOCS_STATE
+    try:
+        import importlib
+
+        d = importlib.import_module("docs_only")
+        if _DOCS_STATE is None:
+            _DOCS_STATE = d.load_state()
+        return d.contexts_for(repo, sha, _DOCS_STATE)
+    except Exception as e:  # noqa: BLE001
+        print(f"  {repo}@{sha[:7]} docs-only state skipped ({type(e).__name__})")
+        return []
+
+
 def _verdict_text(r: dict) -> str:
+    if r["status"] == "docs_only":
+        return DOCS_ONLY_DESC
     text = f"Windy Git CI on Veron 1: {r['status']}"
     if r["status"] == "failure":
         hint = failure_hint(r.get("id"))
