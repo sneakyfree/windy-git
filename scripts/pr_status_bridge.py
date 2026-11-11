@@ -229,7 +229,15 @@ def graphql(query: str):
     return _call("https://api.github.com", f"Bearer {GITHUB_TOKEN}", "POST", "/graphql", {"query": query})
 
 
-GQL_PRS_MAX = 100  # one page: a repo with more open PRs makes the whole answer partial (-> REST)
+GQL_PRS_MAX = 100  # one page of open PRs per repo (GitHub's own limit for `first`)
+# A repo with more open PRs than one page gets its next pages by cursor, one small query each, up to
+# this many extra pages. Since 2026-11-11 windy-pro holds 124 open PRs, so one page was ALWAYS partial,
+# the whole prefetch was thrown away every pass and every repo ran on REST (about 110 more REST calls a
+# pass on the account all lanes share). The answer must still be COMPLETE to be used (Boss 11-02).
+GQL_MORE_PAGES_MAX = 4
+
+_PR_FIELDS = ("totalCount pageInfo { hasNextPage endCursor } nodes { "
+              "number title url headRefName headRefOid baseRefName headRepository { nameWithOwner } }")
 
 
 def heads_query(repos) -> str:
@@ -241,16 +249,48 @@ def heads_query(repos) -> str:
         parts.append(
             f'r{i}: repository(owner: {json.dumps(GH_OWNER)}, name: {json.dumps(repo)}) {{ '
             "defaultBranchRef { name target { oid } } "
-            f"pullRequests(states: OPEN, first: {GQL_PRS_MAX}) {{ totalCount nodes {{ "
-            "number title url headRefName headRefOid baseRefName headRepository { nameWithOwner } "
-            "} } }")
+            f"pullRequests(states: OPEN, first: {GQL_PRS_MAX}) {{ {_PR_FIELDS} }} }}")
     return "query { " + " ".join(parts) + " }"
+
+
+def more_prs_query(repo: str, after: str) -> str:
+    """The next page of ONE named repo's open PRs, after the cursor GitHub gave (never wider)."""
+    return (f"query {{ r: repository(owner: {json.dumps(GH_OWNER)}, name: {json.dumps(repo)}) {{ "
+            f"pullRequests(states: OPEN, first: {GQL_PRS_MAX}, after: {json.dumps(after)}) {{ {_PR_FIELDS} }} }} }}")
+
+
+def _all_pr_nodes(repo: str, prs: dict) -> list | None:
+    """Every open PR node of a repo: the first page plus its next pages by cursor. None on ANY doubt
+    (a failed page, no cursor, more pages than allowed, or a count that does not add up), so the
+    caller uses none of the prefetch."""
+    nodes = prs.get("nodes")
+    if not isinstance(nodes, list):
+        return None
+    nodes, page = list(nodes), prs
+    for _ in range(GQL_MORE_PAGES_MAX + 1):
+        if len(nodes) == prs.get("totalCount"):
+            return nodes
+        info = page.get("pageInfo") or {}
+        if not info.get("hasNextPage") or not isinstance(info.get("endCursor"), str):
+            return None
+        if len(nodes) // GQL_PRS_MAX > GQL_MORE_PAGES_MAX:
+            return None
+        st, out = graphql(more_prs_query(repo, info["endCursor"]))
+        if st != 200 or not isinstance(out, dict) or out.get("errors") or not isinstance(out.get("data"), dict):
+            return None
+        page = ((out["data"].get("r") or {}).get("pullRequests"))
+        if not isinstance(page, dict) or not isinstance(page.get("nodes"), list) or not page["nodes"]:
+            return None
+        if page.get("totalCount") != prs.get("totalCount"):
+            return None                                          # a PR opened or closed between pages
+        nodes += page["nodes"]
+    return None
 
 
 def prefetch(repos) -> dict | None:
     """{repo: {"prs": [REST-shaped PR dicts], "default_branch": name, "default_head": sha}} for
     EVERY repo, or None. None on ANY doubt: a non-200, an `errors` key, a missing or null repo,
-    a missing default branch, more open PRs than one page holds, or ANY exception from the call or
+    a missing default branch, open PRs whose next pages cannot all be read, or ANY exception from the call or
     the parse (a malformed body, a node missing a field: Hub #124). It runs outside the per-repo
     try, so it must never raise. The caller then runs the whole pass on today's REST path; a
     partial answer is never used (Boss 11-02)."""
@@ -273,8 +313,8 @@ def _prefetch(repos) -> dict | None:
         dbr, prs = node.get("defaultBranchRef"), node.get("pullRequests")
         if not isinstance(dbr, dict) or not (dbr.get("target") or {}).get("oid") or not isinstance(prs, dict):
             return None
-        nodes = prs.get("nodes")
-        if not isinstance(nodes, list) or prs.get("totalCount") != len(nodes):
+        nodes = _all_pr_nodes(repo, prs)
+        if nodes is None or prs.get("totalCount") != len(nodes):
             return None
         rest = []
         for n in nodes:

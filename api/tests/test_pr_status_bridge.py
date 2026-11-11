@@ -1295,3 +1295,76 @@ def test_pr_list_page_cap_raises(monkeypatch):
     monkeypatch.setattr(bridge, "github", lambda m, p, b=None: (200, [_gh_pr(i) for i in range(100)]))
     with pytest.raises(RuntimeError):
         bridge.github_open_pulls("r")
+
+
+# ── GraphQL next pages (2026-11-11: windy-pro passed 100 open PRs, so every prefetch was partial) ──
+def _page(nums, total, next_cursor=None):
+    nodes = [{"number": n, "title": f"t{n}", "url": f"https://github.com/sneakyfree/r/pull/{n}",
+              "headRefName": f"b{n}", "headRefOid": SHA_A, "baseRefName": "main",
+              "headRepository": {"nameWithOwner": "sneakyfree/windy-pro"}} for n in nums]
+    return {"totalCount": total, "nodes": nodes,
+            "pageInfo": {"hasNextPage": next_cursor is not None, "endCursor": next_cursor}}
+
+
+def _big_repo_world(monkeypatch, second_page):
+    """windy-pro with 124 open PRs (a first page of 100), windy-chat with none; records each query."""
+    monkeypatch.setattr(bridge, "GITHUB_TOKEN", "x")
+    queries = []
+
+    def graphql(q):
+        bridge.CALLS["graphql"] += 1
+        queries.append(q)
+        if q.startswith("query { r0:"):
+            first = {"defaultBranchRef": {"name": "main", "target": {"oid": SHA_B}},
+                     "pullRequests": _page(range(1, 101), 124, "CUR1")}
+            return 200, {"data": {"r0": first, "r1": _gql_repo()}}
+        return second_page
+    monkeypatch.setattr(bridge, "graphql", graphql)
+    return queries
+
+
+def test_the_query_asks_for_the_page_cursor():
+    q = bridge.heads_query(["windy-pro"])
+    assert "pageInfo { hasNextPage endCursor }" in q and "pullRequests(states: OPEN, first: 100)" in q
+
+
+def test_more_than_one_page_of_open_prs_is_read_by_cursor_and_used_whole(monkeypatch):
+    queries = _big_repo_world(monkeypatch, (200, {"data": {"r": {"pullRequests": _page(range(101, 125), 124)}}}))
+    got = bridge.prefetch(["windy-pro", "windy-chat"])
+    assert got is not None and len(got["windy-pro"]["prs"]) == 124 and got["windy-chat"]["prs"] == []
+    assert [p["number"] for p in got["windy-pro"]["prs"]] == list(range(1, 125))
+    assert len(queries) == 2
+    nxt = queries[1]                                     # ONE named repo, after GitHub's own cursor, never wider
+    assert 'r: repository(owner: "sneakyfree", name: "windy-pro")' in nxt and 'after: "CUR1"' in nxt
+    for wide in ("search(", "organization(", "viewer", "repositories("):
+        assert wide not in nxt
+
+
+def test_a_failed_next_page_means_no_prefetch_at_all(monkeypatch):
+    _big_repo_world(monkeypatch, (502, None))
+    assert bridge.prefetch(["windy-pro", "windy-chat"]) is None
+
+
+def test_a_count_that_moved_between_pages_means_no_prefetch(monkeypatch):
+    _big_repo_world(monkeypatch, (200, {"data": {"r": {"pullRequests": _page(range(101, 126), 125)}}}))
+    assert bridge.prefetch(["windy-pro", "windy-chat"]) is None
+
+
+def test_a_short_answer_with_no_next_page_means_no_prefetch(monkeypatch):
+    _big_repo_world(monkeypatch, (200, {"data": {"r": {"pullRequests": _page(range(101, 120), 124)}}}))
+    assert bridge.prefetch(["windy-pro", "windy-chat"]) is None
+
+
+def test_pages_stop_at_the_limit(monkeypatch):
+    monkeypatch.setattr(bridge, "GITHUB_TOKEN", "x")
+    calls = []
+
+    def graphql(q):
+        calls.append(q)
+        if q.startswith("query { r0:"):
+            return 200, {"data": {"r0": {"defaultBranchRef": {"name": "main", "target": {"oid": SHA_B}},
+                                          "pullRequests": _page(range(1, 101), 10_000, "C")}}}
+        return 200, {"data": {"r": {"pullRequests": _page(range(1, 101), 10_000, "C")}}}
+    monkeypatch.setattr(bridge, "graphql", graphql)
+    assert bridge.prefetch(["windy-pro"]) is None
+    assert len(calls) == 1 + bridge.GQL_MORE_PAGES_MAX
