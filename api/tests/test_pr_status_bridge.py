@@ -91,6 +91,8 @@ def _fresh_cache(monkeypatch):
     # Never the network: GraphQL "unavailable" unless a test says otherwise (-> today's REST path).
     monkeypatch.setattr(bridge, "graphql", lambda query: (503, None))
     monkeypatch.setattr(bridge, "failure_hint", lambda task_id: None)
+    # Never the host's docs-only state (scripts/docs_only.py): its own tests drive that path.
+    monkeypatch.setattr(bridge, "docs_only_contexts", lambda repo, sha: [])
 
 
 @pytest.fixture
