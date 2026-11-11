@@ -183,7 +183,8 @@ def test_board_say_refusal_or_an_odd_answer_is_a_failed_post_and_the_line_goes_t
 
 def test_sweep_board_strips_the_time_and_lane_and_needs_ok(tmp_path):
     import subprocess as sp
-    fake = tmp_path / "bin"; fake.mkdir()
+    fake = tmp_path / "bin"
+    fake.mkdir()
     log = tmp_path / "ssh.log"
     (fake / "ssh").write_text('#!/bin/sh\nfor a in "$@"; do last="$a"; done\nprintf "%s|" "$last" >> "' + str(log)
                               + '"\ncat >> "' + str(log) + '"\n[ -n "$FAIL" ] && { echo "REFUSED: x" >&2; exit 2; }\necho "OK t 1 line(s)"\n')
