@@ -17,7 +17,12 @@ get_page() {
   "${SSH[@]}" "cat ~/windy-orchestra/$1" > "$2"
 }
 
-# board <line>: append one line to the BOARD.
+# board <line>: one BOARD line through board-say (BOARD STANDARD, Windy Boss 2026-11-10T18:29:46Z), which adds
+# "- [time Windy Git]" with Windy 0's clock. The callers' leading "<time> Windy Git" / "Windy Git:" is dropped
+# (board-say refuses a line that starts with a time), so "<time> Windy Git -> Boss: x" posts as "-> Boss: x".
+# Fails (non-zero) unless board-say answers "OK ...".
 board() {
-  printf '%s\n' "$1" | "${SSH[@]}" 'cat >> ~/windy-orchestra/BOARD.md'
+  local t
+  t=$(printf '%s' "$1" | sed -E '1s/^(- )?\[?20[0-9]{2}-[0-9]{2}-[0-9]{2}T[0-9:]{5,8}Z\]? *//; 1s/^Windy Git:? *//')
+  printf '%s\n' "$t" | "${SSH[@]}" '~/windy-orchestra/bin/board-say "Windy Git"' | grep -q '^OK '
 }
