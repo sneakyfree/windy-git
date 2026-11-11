@@ -84,17 +84,28 @@ def psql(sql: str) -> list[list[str]]:
     return [line.split("|") for line in out.splitlines() if line and "|" in line]
 
 
+BOARD_SAY = '~/windy-orchestra/bin/board-say "Windy Git"'
+LANE_PREFIX = "[Windy Git] "
+
+
 def board(line: str) -> bool:
     """One BOARD line: Windy 0 over ssh as the lane user; while Windy 0 is down, the fallback board.
-    True only when the line was written somewhere (ssh rc 0, or a fallback file); callers that must
-    not lose a line check it (red_main, Hub #112)."""
+    True only when the line was written somewhere (board-say said OK, or a fallback file); callers that
+    must not lose a line check it (red_main, Hub #112).
+    BOARD STANDARD (Windy Boss 2026-11-10T18:29:46Z, Grant's GO): every line goes through board-say, which
+    adds "- [time Windy Git]" with Windy 0's clock; so the "[Windy Git] " prefix the callers write is
+    dropped here and no time is sent (board-say refuses a line that starts with one). A refusal or any
+    answer other than "OK ..." is a failed post and the line goes to the fallback board, never lost."""
     stamped = f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} {line}\n"
+    text = line[len(LANE_PREFIX):] if line.startswith(LANE_PREFIX) else line
     try:
         r = subprocess.run(["runuser", "-u", BOARD_USER, "--", "timeout", "25", "ssh", "-o", "BatchMode=yes",
-                            "-o", "ConnectTimeout=8", "eth-windy0", "cat >> ~/windy-orchestra/BOARD.md"],
-                           input=stamped, text=True, capture_output=True, timeout=40)
-        if r.returncode == 0:
+                            "-o", "ConnectTimeout=8", "eth-windy0", BOARD_SAY],
+                           input=text + "\n", text=True, capture_output=True, timeout=40)
+        if r.returncode == 0 and (getattr(r, "stdout", "") or "").startswith("OK "):
             return True
+        if r.returncode == 2:   # board-say REFUSED the text: say why in the journal; the fallback keeps the line
+            print(f"  board-say refused: {(getattr(r, 'stderr', '') or '').strip()[:200]}")
     except (subprocess.SubprocessError, OSError):
         pass
     # TODAY's fallback file (Boss 11-02), not the newest existing one: an old file (BOARD-FALLBACK-

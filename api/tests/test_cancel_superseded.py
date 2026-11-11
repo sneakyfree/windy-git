@@ -140,3 +140,62 @@ def test_gitea_28_closes_the_attempt_rows_too_and_never_touches_running_or_cance
     assert cs.main(query, lambda line: True) == 0
     att = [s for s in seen if "action_run_attempt a set" in s]
     assert len(att) == 1 and "a.run_id in (601)" in att[0] and "j.run_attempt_id = a.id and j.status <> 3" in att[0]
+
+
+# --- BOARD STANDARD (Windy Boss 2026-11-10T18:29:46Z): every line goes through board-say -------------------
+
+def _ssh_answers(monkeypatch, rc, out="", err=""):
+    import pwd as _pwd
+    seen = {}
+
+    class R:
+        returncode = rc
+        stdout = out
+        stderr = err
+
+    def run(args, **kw):
+        seen["args"], seen["input"] = args, kw.get("input")
+        return R()
+    monkeypatch.setattr(cs.subprocess, "run", run)
+    monkeypatch.setattr(cs, "BOARD_USER", _pwd.getpwuid(cs.os.getuid()).pw_name)
+    return seen
+
+
+def test_board_goes_through_board_say_without_the_prefix_or_a_time(tmp_path, monkeypatch):
+    seen = _ssh_answers(monkeypatch, 0, "OK 2026-11-11T03:40:00Z 1 line(s)\n")
+    monkeypatch.setattr(cs, "FALLBACK_DIR", str(tmp_path))
+    assert cs.board("[Windy Git] approved-first: 2 job(s) moved") is True
+    assert seen["args"][-1] == '~/windy-orchestra/bin/board-say "Windy Git"'
+    assert not any("BOARD.md" in a for a in seen["args"])          # no more cat >> BOARD.md
+    assert seen["input"] == "approved-first: 2 job(s) moved\n"     # board-say adds "- [time Windy Git]"
+    assert list(tmp_path.iterdir()) == []                          # nothing in the fallback
+
+
+def test_board_say_refusal_or_an_odd_answer_is_a_failed_post_and_the_line_goes_to_the_fallback(tmp_path, monkeypatch):
+    for rc, out in ((2, ""), (0, "something else\n")):
+        _ssh_answers(monkeypatch, rc, out, "REFUSED: a line already starts with a time")
+        monkeypatch.setattr(cs, "FALLBACK_DIR", str(tmp_path))
+        monkeypatch.setattr(cs.time, "gmtime", lambda *a: cs.time.struct_time((2026, 11, 2, 9, 0, 0, 0, 306, 0)))
+        assert cs.board(f"[Windy Git] rc{rc}") is True
+    text = (tmp_path / "BOARD-FALLBACK-20261102.md").read_text()
+    assert "[Windy Git] rc2" in text and "[Windy Git] rc0" in text
+
+
+def test_sweep_board_strips_the_time_and_lane_and_needs_ok(tmp_path):
+    import subprocess as sp
+    fake = tmp_path / "bin"; fake.mkdir()
+    log = tmp_path / "ssh.log"
+    (fake / "ssh").write_text('#!/bin/sh\nfor a in "$@"; do last="$a"; done\nprintf "%s|" "$last" >> "' + str(log)
+                              + '"\ncat >> "' + str(log) + '"\n[ -n "$FAIL" ] && { echo "REFUSED: x" >&2; exit 2; }\necho "OK t 1 line(s)"\n')
+    (fake / "ssh").chmod(0o755)
+    common = ROOT / "deploy" / "sweep" / "common.sh"
+    def run(line, fail=""):
+        env = {"PATH": f"{fake}:/usr/bin:/bin", "HOME": str(tmp_path), "FAIL": fail}
+        return sp.run(["bash", "-c", f'. "{common}"; board "$1"', "x", line], env=env).returncode
+    assert run("2026-11-11T03:40Z Windy Git -> Boss: ✅ GUARD READY") == 0
+    assert run("2026-11-11T03:41Z Windy Git: \U0001f6a8 runner-guard: 1 NEW") == 0
+    assert run("plain text", fail="1") != 0                       # a refusal fails the step (never silent)
+    got = log.read_text()
+    assert '~/windy-orchestra/bin/board-say "Windy Git"|-> Boss: ✅ GUARD READY\n' in got
+    assert '~/windy-orchestra/bin/board-say "Windy Git"|\U0001f6a8 runner-guard: 1 NEW\n' in got
+    assert "BOARD.md" not in got
