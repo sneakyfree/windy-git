@@ -237,6 +237,18 @@ GQL_PRS_MAX = 100  # one page of open PRs per repo (GitHub's own limit for `firs
 # pass on the account all lanes share). The answer must still be COMPLETE to be used (Boss 11-02).
 GQL_MORE_PAGES_MAX = 4
 
+# Why the last prefetch gave None, for the pass's log line (2026-11-11: the first pass on #172's code fell back
+# and the line could not say why). One short phrase with the repo; "" after a whole prefetch.
+PREFETCH_WHY = ""
+
+
+def _no(why: str) -> None:
+    """Record why the prefetch is refused and refuse it (returns None for the caller to return)."""
+    global PREFETCH_WHY
+    PREFETCH_WHY = why
+    return None
+
+
 _PR_FIELDS = ("totalCount pageInfo { hasNextPage endCursor } nodes { "
               "number title url headRefName headRefOid baseRefName headRepository { nameWithOwner } }")
 
@@ -266,26 +278,26 @@ def _all_pr_nodes(repo: str, prs: dict) -> list | None:
     caller uses none of the prefetch."""
     nodes = prs.get("nodes")
     if not isinstance(nodes, list):
-        return None
+        return _no(f"{repo}: no PR list in the answer")
     nodes, page = list(nodes), prs
     for _ in range(GQL_MORE_PAGES_MAX + 1):
         if len(nodes) == prs.get("totalCount"):
             return nodes
         info = page.get("pageInfo") or {}
         if not info.get("hasNextPage") or not isinstance(info.get("endCursor"), str):
-            return None
+            return _no(f"{repo}: {len(nodes)} of {prs.get('totalCount')} open PRs and no next page")
         if len(nodes) // GQL_PRS_MAX > GQL_MORE_PAGES_MAX:
-            return None
+            return _no(f"{repo}: more than {GQL_MORE_PAGES_MAX + 1} pages of open PRs")
         st, out = graphql(more_prs_query(repo, info["endCursor"]))
         if st != 200 or not isinstance(out, dict) or out.get("errors") or not isinstance(out.get("data"), dict):
-            return None
+            return _no(f"{repo}: a next page failed (HTTP {st}{', errors' if isinstance(out, dict) and out.get('errors') else ''})")
         page = ((out["data"].get("r") or {}).get("pullRequests"))
         if not isinstance(page, dict) or not isinstance(page.get("nodes"), list) or not page["nodes"]:
-            return None
-        if page.get("totalCount") != prs.get("totalCount"):
-            return None                                          # a PR opened or closed between pages
+            return _no(f"{repo}: a next page came back empty")
+        if page.get("totalCount") != prs.get("totalCount"):            # a PR opened or closed between pages
+            return _no(f"{repo}: open PR count moved between pages ({prs.get('totalCount')} -> {page.get('totalCount')})")
         nodes += page["nodes"]
-    return None
+    return _no(f"{repo}: more than {GQL_MORE_PAGES_MAX + 1} pages of open PRs")
 
 
 def prefetch(repos) -> dict | None:
@@ -295,28 +307,35 @@ def prefetch(repos) -> dict | None:
     the parse (a malformed body, a node missing a field: Hub #124). It runs outside the per-repo
     try, so it must never raise. The caller then runs the whole pass on today's REST path; a
     partial answer is never used (Boss 11-02)."""
+    global PREFETCH_WHY
+    PREFETCH_WHY = ""
     try:
         return _prefetch(repos)
     except Exception as e:  # noqa: BLE001 - any surprise means "no prefetch", never a dead pass
         print(f"  bridge: GraphQL prefetch raised {type(e).__name__}: REST this pass")
-        return None
+        return _no(f"raised {type(e).__name__}")
 
 
 def _prefetch(repos) -> dict | None:
     st, out = graphql(heads_query(repos))
     if st != 200 or not isinstance(out, dict) or out.get("errors") or not isinstance(out.get("data"), dict):
-        return None
+        return _no(f"the first query failed (HTTP {st}{', errors' if isinstance(out, dict) and out.get('errors') else ''})")
     got = {}
     for i, repo in enumerate(repos):
         node = out["data"].get(f"r{i}")
         if not isinstance(node, dict):
-            return None
+            return _no(f"{repo}: missing from the answer")
         dbr, prs = node.get("defaultBranchRef"), node.get("pullRequests")
         if not isinstance(dbr, dict) or not (dbr.get("target") or {}).get("oid") or not isinstance(prs, dict):
-            return None
+            return _no(f"{repo}: no default branch or PR list")
         nodes = _all_pr_nodes(repo, prs)
-        if nodes is None or prs.get("totalCount") != len(nodes):
-            return None
+        if nodes is None:
+            return None                                              # _all_pr_nodes said why
+        if prs.get("totalCount") != len(nodes):
+            return _no(f"{repo}: {len(nodes)} PRs read, {prs.get('totalCount')} counted")
+        nums = [n.get("number") for n in nodes]
+        if len(set(nums)) != len(nums):                            # Hub 2026-11-11T07:31:44Z: a PR on two pages
+            return _no(f"{repo}: a PR number appears twice across pages ({len(nums) - len(set(nums))} repeat)")
         rest = []
         for n in nodes:
             hr = n.get("headRepository")
@@ -1020,7 +1039,8 @@ def main() -> int:
     _STATUSES_CACHE.clear()
     pre = prefetch(REPOS)
     if pre is None:
-        print("  bridge: GraphQL prefetch unavailable or partial: this pass uses REST (nothing taken from it)")
+        print(f"  bridge: GraphQL prefetch unavailable or partial: this pass uses REST (nothing taken from it); "
+              f"why: {PREFETCH_WHY or 'unknown'}")
     now = time.time()
     state = load_state(rules_fingerprint())
     seen: set[str] = set()

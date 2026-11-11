@@ -1370,3 +1370,46 @@ def test_pages_stop_at_the_limit(monkeypatch):
     monkeypatch.setattr(bridge, "graphql", graphql)
     assert bridge.prefetch(["windy-pro"]) is None
     assert len(calls) == 1 + bridge.GQL_MORE_PAGES_MAX
+
+
+# ── Why the prefetch was refused (2026-11-11: the first pass on #172's code fell back and could not say why) ──
+def test_a_moved_count_names_its_reason(monkeypatch):
+    _big_repo_world(monkeypatch, (200, {"data": {"r": {"pullRequests": _page(range(101, 126), 125)}}}))
+    assert bridge.prefetch(["windy-pro", "windy-chat"]) is None
+    assert bridge.PREFETCH_WHY == "windy-pro: open PR count moved between pages (124 -> 125)"
+
+
+def test_a_failed_next_page_names_its_reason(monkeypatch):
+    _big_repo_world(monkeypatch, (502, None))
+    assert bridge.prefetch(["windy-pro", "windy-chat"]) is None
+    assert bridge.PREFETCH_WHY == "windy-pro: a next page failed (HTTP 502)"
+
+
+def test_a_short_answer_names_its_reason(monkeypatch):
+    _big_repo_world(monkeypatch, (200, {"data": {"r": {"pullRequests": _page(range(101, 120), 124)}}}))
+    assert bridge.prefetch(["windy-pro", "windy-chat"]) is None
+    assert bridge.PREFETCH_WHY == "windy-pro: 119 of 124 open PRs and no next page"
+
+
+def test_a_pr_number_on_two_pages_means_no_prefetch(monkeypatch):
+    # Hub 2026-11-11T07:31:44Z: GitHub can shift a page while PRs open and close; the count adds up, the set does not.
+    _big_repo_world(monkeypatch, (200, {"data": {"r": {"pullRequests": _page(list(range(100, 123)) + [124], 124)}}}))
+    assert bridge.prefetch(["windy-pro", "windy-chat"]) is None
+    assert bridge.PREFETCH_WHY == "windy-pro: a PR number appears twice across pages (1 repeat)"
+
+
+def test_a_whole_prefetch_clears_the_reason(monkeypatch):
+    _big_repo_world(monkeypatch, (502, None))
+    bridge.prefetch(["windy-pro", "windy-chat"])
+    _big_repo_world(monkeypatch, (200, {"data": {"r": {"pullRequests": _page(range(101, 125), 124)}}}))
+    assert bridge.prefetch(["windy-pro", "windy-chat"]) is not None
+    assert bridge.PREFETCH_WHY == ""
+
+
+def test_the_fallback_line_says_why(monkeypatch, tmp_path, capsys):
+    partial = (200, {"data": {"r0": _gql_repo([(7, SHA_A, "sneakyfree/windy-pro")])}})   # windy-chat missing
+    _pass_world(monkeypatch, tmp_path, partial)
+    bridge.main()
+    out = capsys.readouterr().out
+    assert "GraphQL prefetch unavailable or partial: this pass uses REST" in out   # the old words stay (greps)
+    assert "why: windy-chat: missing from the answer" in out
