@@ -272,3 +272,108 @@ def test_bridge_without_docs_state_paints_nothing(monkeypatch, tmp_path):
     monkeypatch.setattr(do, "STATE", tmp_path / "missing.json")
     monkeypatch.setattr(bridge, "_DOCS_STATE", None)
     assert bridge.docs_only_contexts("windy-chat", SHA) == []
+
+
+# --- the push guard (MISSES/ASK 2026-11-12T10:02:54Z: 14 of 110 docs-only main pushes failed in the dark day) ---
+
+P1, P2 = "1" * 40, "2" * 40
+
+
+def _push(i, sha=SHA, repo="windy-chat", wf="ci.yml", job="test"):
+    return [str(i), repo, "push", "refs/heads/main", sha, wf, job, "7"]
+
+
+class PushDB(DB):
+    """DB with the parent job's (id, status) per parent sha."""
+    def __init__(self, rows, parents):
+        super().__init__(rows)
+        self.parents = parents
+
+    def __call__(self, sql):
+        if "and r.event = 'push' and r.ref =" in sql:
+            self.sql.append(sql)
+            for sha, row in self.parents.items():
+                if f"j.commit_sha = '{sha}'" in sql:
+                    return [row] if row else []
+            return []
+        return super().__call__(sql)
+
+
+@pytest.fixture
+def chain(monkeypatch):
+    monkeypatch.setattr(do, "parent_sha", lambda repo, sha: {SHA: P1, P1: P2}.get(sha))
+    monkeypatch.setattr(do, "PUSHES", "guarded")
+
+
+def _updates(db):
+    return [s for s in db.sql if s.lstrip().startswith("update action_run_job")]
+
+
+def test_push_skips_when_the_parents_same_job_ended_success(paths, chain):
+    (paths / "docs-only.on").touch()
+    db = PushDB([_push(1)], {P1: ["50", "1"]})
+    do.main(query=db, post=lambda line: None, decide=lambda r, s, e: (True, "docs-only"), repos={"windy-chat"})
+    assert len(_updates(db)) == 1 and "in (1)" in _updates(db)[0]
+
+
+@pytest.mark.parametrize("status", ["2", "3", "4"])
+def test_push_runs_when_the_parents_same_job_did_not_end_success(paths, chain, status):
+    """P9: a TODO-only push carries the code before it; a red parent must not be painted green."""
+    (paths / "docs-only.on").touch()
+    db = PushDB([_push(1)], {P1: ["50", status]})
+    do.main(query=db, post=lambda line: None, decide=lambda r, s, e: (True, "docs-only"), repos={"windy-chat"})
+    assert _updates(db) == []
+    assert do.load_state()[f"windy-chat@{SHA}"]["why"].startswith("push:")
+
+
+def test_push_with_no_parent_job_runs(paths, chain):
+    (paths / "docs-only.on").touch()
+    db = PushDB([_push(1)], {})
+    do.main(query=db, post=lambda line: None, decide=lambda r, s, e: (True, "docs-only"), repos={"windy-chat"})
+    assert _updates(db) == []
+
+
+def test_push_waits_while_the_parents_job_still_waits_then_decides(paths, chain):
+    (paths / "docs-only.on").touch()
+    db = PushDB([_push(1)], {P1: ["50", "5"]})
+    do.main(query=db, post=lambda line: None, decide=lambda r, s, e: (True, "docs-only"), repos={"windy-chat"})
+    assert _updates(db) == [] and f"windy-chat@{SHA}" not in do.load_state()    # nothing decided yet
+    db.parents[P1] = ["50", "1"]
+    do.main(query=db, post=lambda line: None, decide=lambda r, s, e: (True, "docs-only"), repos={"windy-chat"})
+    assert len(_updates(db)) == 1
+
+
+def test_push_follows_a_parent_this_rule_skipped_to_a_green_grandparent(paths, chain):
+    (paths / "docs-only.on").touch()
+    do.save_state({f"windy-chat@{P1}": {"at": __import__("time").time(), "skip": True, "mode": "on", "jobs": [50]}})
+    db = PushDB([_push(1)], {P1: ["50", "3"], P2: ["40", "1"]})
+    do.main(query=db, post=lambda line: None, decide=lambda r, s, e: (True, "docs-only"), repos={"windy-chat"})
+    assert len(_updates(db)) == 1
+
+
+def test_a_cancelled_parent_this_rule_did_not_skip_is_not_green(paths, chain):
+    (paths / "docs-only.on").touch()
+    db = PushDB([_push(1)], {P1: ["50", "3"], P2: ["40", "1"]})
+    do.main(query=db, post=lambda line: None, decide=lambda r, s, e: (True, "docs-only"), repos={"windy-chat"})
+    assert _updates(db) == []
+
+
+def test_pushes_off_skips_no_push_but_pr_heads_still_follow_the_rule(paths, chain, monkeypatch):
+    monkeypatch.setattr(do, "PUSHES", "off")
+    (paths / "docs-only.on").touch()
+    db = PushDB([_push(1), _row(2, sha="c" * 40)], {P1: ["50", "1"]})
+    do.main(query=db, post=lambda line: None, decide=lambda r, s, e: (True, "docs-only"), repos={"windy-chat"})
+    assert len(_updates(db)) == 1 and "in (2)" in _updates(db)[0]
+
+
+def test_a_job_name_with_a_quote_is_escaped_in_the_parent_read():
+    sql = do.parent_job_sql("windy-chat", "refs/heads/main", P1, "ci.yml", "it's (3.12)")
+    assert "j.name = 'it''s (3.12)'" in sql
+
+
+def test_parent_sha_reads_the_first_parent(repo):
+    first = _g(repo, "rev-parse", "HEAD")
+    (repo / "TODO.md").write_text("- [ ] x\n")
+    _g(repo, "add", "-A")
+    _g(repo, "commit", "-q", "-m", "todo")
+    assert do.parent_sha("windy-chat", _g(repo, "rev-parse", "HEAD")) == first
