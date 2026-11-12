@@ -88,9 +88,9 @@ def api_sources() -> dict[str, str]:
     out: dict[str, str] = {}
     for i in range(0, len(paths), 50):                       # one GraphQL request per 50 files
         part = paths[i:i + 50]
-        q = "query{repository(owner:%s,name:%s){%s}}" % (json.dumps(OWNER), json.dumps(NAME), "".join(
-            "f%d:object(expression:%s){...on Blob{text isBinary isTruncated}}" % (j, json.dumps(f"{sha}:{p}"))
-            for j, p in enumerate(part)))
+        fields = "".join(f"f{j}:object(expression:{json.dumps(f'{sha}:{p}')})"
+                         "{...on Blob{text isBinary isTruncated}}" for j, p in enumerate(part))
+        q = f"query{{repository(owner:{json.dumps(OWNER)},name:{json.dumps(NAME)}){{{fields}}}}}"
         data = gh(["graphql", "--input", "-"], stdin=json.dumps({"query": q}).encode())["data"]["repository"]
         for j, p in enumerate(part):
             o = data.get(f"f{j}")
