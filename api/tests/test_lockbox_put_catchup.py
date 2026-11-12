@@ -149,9 +149,19 @@ def test_main_edited_in_the_middle_is_kept_and_the_put_still_lands(tmp_path):
     git(d, "commit", "-qam", "an edit in the middle of main")
     git(d, "push", "-q", "origin", "main")
     assert merge_to_main(tmp_path, bare, b1)
+    main_before = main_text(bare)  # the edit in the middle + the first put
+    base = subprocess.run(["git", "-C", str(bare), "merge-base", "main", b2], check=True, capture_output=True,
+                          text=True).stdout.strip()
+    show = lambda rev: subprocess.run(["git", "-C", str(bare), "show", f"{rev}:ACCESS_LOCKBOX.md"], check=True,  # noqa: E731
+                                      capture_output=True, text=True).stdout
+    block = show(b2)[len(show(base)):]  # the second put's own block, as lockbox-put wrote it
+    assert show(b2).startswith(show(base)) and block.count("\n") == 4
+    assert not main_before.startswith(show(base))  # the case the proposal refused: main is NOT an append of the base
     rc, out = catchup(tmp_path, bare, b2, "TEST_TWO_20261112")
-    assert rc == 0 and "NO" not in out, out
+    assert rc == 0 and "NO" not in out and out.count(": yes") == 9, out
+    assert show(b2) == main_before + block  # the caught-up branch: main byte for byte, then the block, nothing else
     assert merge_to_main(tmp_path, bare, b2)
+    assert main_text(bare) == main_before + block  # and so is main after the merge: nothing lost, nothing reordered
     assert values(bare, "TEST_ONE_20261112") == [V1] and values(bare, "TEST_TWO_20261112") == [V2]
     assert values(bare, "FAKE_KEY_0300")[0].startswith("fake-value-0300-EDITED-")  # the edit is kept
     assert len(values(bare, "FAKE_KEY_0299")) == 1 and len(values(bare, "FAKE_KEY_0301")) == 1
