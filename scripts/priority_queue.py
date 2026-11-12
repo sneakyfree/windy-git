@@ -18,6 +18,10 @@ Rules (each one tested):
     dated more than 5 min in the future is ignored; the token expires by itself; only the last 2,000 BOARD lines are read;
   * at most 3 PRs at once (the newest tokens win); the LAST line for one repo#PR wins, so a line with a past
     `until` revokes it;
+  * a QUOTED token (right after ' " ` or a curly quote, or anywhere inside "...", `...` or a curly quote) is a
+    description, never a grant; a Boss line that says
+    NO PRIORITY grants nothing, but its past-`until` tokens still revoke (Boss 11-08 22:28:41Z: his 21:16:44Z line
+    ruled "NO PRIORITY token for windy-pro #1718" and quoted the fallback's text, which was read as live);
   * only WAITING (status 5), unclaimed (task_id 0) jobs of the NEWEST run on that PR's ref (a superseded head is
     cancelled by cancel_superseded, never promoted); never a running job, never another repo, never a cancel;
   * the BOARD cannot be read (Windy 0 down and no fallback file): do nothing and say so (exit 1, never "ok");
@@ -57,6 +61,19 @@ OWNER = "windyadmin"
 
 HEADER = re.compile(r"^[\s\-*\[]*(\d{4}-\d\d-\d\dT\d\d:\d\d(?::\d\d)?Z)[\],\s]+\[?\s*Windy Boss\b")
 TOKEN = re.compile(r"\bPRIORITY ([A-Za-z0-9._-]{1,100})#(\d{1,7}) until (\d{4}-\d\d-\d\dT\d\d:\d\d(?::\d\d)?Z)(?![\w:])")
+NO_PRIORITY = re.compile(r"\bNO[\s-]+PRIORITY\b", re.IGNORECASE)
+QUOTES = set("'\"`\u2018\u201c")   # a token right after one of these opens a quote: never a grant
+
+
+def quoted(before: str) -> bool:
+    """Is a token that starts after `before` (its line's text up to it) inside a quote? Right after an opening quote,
+    or after an ODD count of " or of backticks, or with a curly open quote not yet closed (Hub's #162 read: a token
+    in the MIDDLE of a quote must not grant either). A straight ' counts only right before the token, because of
+    possessives (Cell's): a stray apostrophe must not hide a real token, and an odd ' count would."""
+    if before.rstrip()[-1:] in QUOTES:
+        return True
+    return (before.count('"') % 2 == 1 or before.count("`") % 2 == 1
+            or before.count("\u201c") > before.count("\u201d") or before.count("\u2018") > before.count("\u2019"))
 
 
 def ts(s: str) -> int:
@@ -75,10 +92,23 @@ def _parse(text: str, now: int):
         if line_ts > now + 300:
             notes.append("ignored a token on a line dated in the future")
             continue
-        for repo, pr, until_s in TOKEN.findall(line[h.end():]):
+        body = line[h.end():]
+        refuses = bool(NO_PRIORITY.search(body))
+        for m in TOKEN.finditer(body):
+            repo, pr, until_s = m.groups()
+            # A QUOTED token is a description, not a grant (11-08: Boss ruled "NO PRIORITY token ... tonight" and
+            # quoted the fallback's full text "PRIORITY windy-pro#1718 until ..."; the quote was read as live).
+            if quoted(body[:m.start()]):
+                notes.append(f"ignored a quoted token ({repo}#{pr})")
+                continue
             # never more than 24 h from the EARLIER of the line's own time and now (Hub #130): a forged, far-future
             # line time cannot buy more than 24 h, and a line dated in the future is dropped above
             until = min(ts(until_s), min(line_ts, now) + MAX_HOURS * 3600)
+            # A line that says NO PRIORITY grants nothing; it can still REVOKE (an until at or before its own
+            # time), so a ruling against a token never keeps one alive.
+            if refuses and until > line_ts:
+                notes.append(f"ignored a grant on a NO PRIORITY line ({repo}#{pr})")
+                continue
             out[(repo, int(pr))] = (line_ts, until, idx)   # a later line replaces an earlier one
     keep = {k: v for k, v in out.items()}
     # newest MAX_PRS tokens (by line time) among the still-active ones

@@ -1,7 +1,7 @@
 """deploy/veron-heavy: the fleet-wide semaphore for heavy jobs (Boss's VERON LOAD RULE + the 11-05 caps).
 
 The behaviour is proved by the shell suite next to the script (private temp dir, fake pressure and loadavg files):
-slot counting, IO and LOAD gates that WAIT, nice/ionice, worker caps, timeout, SIGKILL release, privacy. This file runs it.
+slot counting, IO, CPU, MEMORY and LOAD gates that WAIT, nice/ionice, worker caps, timeout, SIGKILL release, privacy. This file runs it.
 """
 
 from __future__ import annotations
@@ -26,8 +26,12 @@ def test_the_shell_suite_passes():
 
 def test_the_script_pins_the_ruled_numbers():
     s = (DIR / "veron-heavy").read_text()
-    assert 'LOAD_MAX=${VERON_HEAVY_LOAD_MAX:-48}' in s and 'IO_MAX=${VERON_HEAVY_IO_MAX:-30}' in s
+    assert 'LOAD_MAX=${VERON_HEAVY_LOAD_MAX:-48}' in s and 'IO_MAX=${VERON_HEAVY_IO_MAX:-20}' in s
     assert '"$ld" -ge "$LOAD_MAX"' in s and '"$p" -ge "$IO_MAX"' in s            # >=, not >
+    # 11-09 (Test Boss's CAPACITY plan, Boss 10:16:12Z): cpu PSI and MemAvailable (GiB) gates; load1 48 is the backstop
+    assert 'CPU_MAX=${VERON_HEAVY_CPU_MAX:-25}' in s and 'MEM_MIN_GB=${VERON_HEAVY_MEM_MIN_GB:-48}' in s
+    assert '"$cpu" -ge "$CPU_MAX"' in s and '"$mg" -lt "$MEM_MIN_GB"' in s        # cpu: >=; memory: below the floor waits
+    assert "kb / 1048576" in s                                                     # GiB, the CAPACITY.md unit
     assert "nice -n 10" in s and "ionice -c2 -n7" in s
     assert 'WORKERS=${VERON_HEAVY_WORKERS:-2}' in s and 'MAKEFLAGS="-j$WORKERS"' in s
     assert "JEST_MAX_WORKERS" in s and "PYTEST_XDIST_AUTO_NUM_WORKERS" in s and "PYTEST_XDIST_WORKERS" in s

@@ -1,0 +1,5 @@
+# /var/lib/windygit/keep-main.txt: main commits the main supersede pass NEVER cancels (Boss 2026-11-12T02:56:14Z).
+# One line per sha: <full 40-hex sha, lower case> <lane name> <BOARD time of the booking/ask, YYYY-MM-DDTHH:MM:SSZ>
+# A lane with a booked deploy at an OLDER main sha adds its line (or uses Boss's identical-tree rule, 02:56:14Z).
+# A line in any other shape is ignored (and counted in the sync journal). Remove a line after its deploy's AFTER.
+# Owner user1-gpu, mode 0644: Veron lanes append with echo; lanes on other machines ask Windy Git on the BOARD.
