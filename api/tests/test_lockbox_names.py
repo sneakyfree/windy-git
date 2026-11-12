@@ -82,8 +82,8 @@ if "graphql" in a:
     out = {}
     for j, expr in enumerate(re.findall(r'expression:"([^"]+)"', q)):
         p = expr.split(":", 1)[1]
-        out[f"f{j}"] = {"text": open(os.path.join(root, p)).read(), "isBinary": False, "isTruncated": False}
-    print(json.dumps({"data": {"repository": out}}))
+        out[f"f{j}"] = {"text": open(os.path.join(root, p)).read(), "isBinary": mode == "binary", "isTruncated": False}
+    print(json.dumps({"data": None if mode == "nulldata" else {"repository": out}}))
 elif any("/git/ref/heads/" in x for x in a):
     print(json.dumps({"object": {"sha": SHA}}))
 elif any("/git/trees/" in x for x in a):
@@ -151,3 +151,13 @@ def test_bad_source_and_explicit_clone(tmp_path):
     assert rc == 2 and "LOCKBOX_SOURCE must be api or clone" in out
     rc, out = run_env({**env, "LOCKBOX_SOURCE": "clone", "LOCKBOX_REPO": str(r), "LOCKBOX_REF": "WORKTREE"}, "FILE")
     assert rc == 0 and "| FILE_KEY | file | yes" in out
+
+
+def test_api_null_data_and_binary_env_stop_with_a_reason(tmp_path):
+    r = make(tmp_path)
+    env, _ = fake_gh(tmp_path, r, mode="nulldata")
+    rc, out = run_env(env)
+    assert rc == 2 and "no repository data" in out and "Traceback" not in out
+    env, _ = fake_gh(tmp_path, r, mode="binary")
+    rc, out = run_env(env)
+    assert rc == 2 and "came back as binary" in out and "Traceback" not in out and "FILE_KEY" not in out

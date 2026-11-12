@@ -91,13 +91,16 @@ def api_sources() -> dict[str, str]:
         fields = "".join(f"f{j}:object(expression:{json.dumps(f'{sha}:{p}')})"
                          "{...on Blob{text isBinary isTruncated}}" for j, p in enumerate(part))
         q = f"query{{repository(owner:{json.dumps(OWNER)},name:{json.dumps(NAME)}){{{fields}}}}}"
-        data = gh(["graphql", "--input", "-"], stdin=json.dumps({"query": q}).encode())["data"]["repository"]
+        data = ((gh(["graphql", "--input", "-"], stdin=json.dumps({"query": q}).encode()) or {}).get("data") or {}).get("repository")
+        if not isinstance(data, dict):
+            raise ReadError("the GraphQL reply carried no repository data")
         for j, p in enumerate(part):
             o = data.get(f"f{j}")
-            if o is None or o.get("isTruncated"):
+            if not isinstance(o, dict) or o.get("isTruncated"):
                 raise ReadError(f"could not read {p} whole")
-            if not o.get("isBinary"):
-                out[p] = o.get("text") or ""
+            if o.get("isBinary"):
+                raise ReadError(f"{p} came back as binary, so its names cannot be listed")
+            out[p] = o.get("text") or ""
     md = gh(["-H", "Accept: application/vnd.github.raw", f"{repo}/contents/{LOCKBOX}?ref={sha}"], raw=True)
     return {LOCKBOX: md.decode("utf-8", "ignore"), **out}
 
