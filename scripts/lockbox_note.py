@@ -20,8 +20,12 @@ A NOTE IS NEVER A SECRET AND NEVER A NAME. Refused, with nothing pushed: a title
 over 300 characters; any character outside letters, digits, space and . , : ; ( ) ' / _ + - # ? !
 (so no backtick, no equals sign, no asterisk: a note cannot define a name in either form the
 lockbox reads); anything secret-shaped (secret_shapes, the shapes secret-guard knows); any run of
-24 or more characters that is not a plain UPPER_CASE name. The text is given on the command line
-on purpose: it is public words, and what is typed there is what is checked.
+24 or more characters that is not a plain UPPER_CASE name; 7 or more digits in a row with spaces,
+dashes, dots or brackets between them, dates, times and digits inside a word or name aside (a phone number); a web address ("://"). The text is given on
+the command line on purpose: it is public words, and what is typed there is what is checked.
+
+lockbox-names lists each note's "Note" label as one label row of the note's own heading: that row is
+the note, not a secret.
 
 Checked before the push: one file, 3 lines added, 0 removed, main's bytes kept, no name defined
 by the block. Then the road of every lockbox PR: Boss's shape stamp, the Hub's merge.
@@ -48,6 +52,9 @@ F = "ACCESS_LOCKBOX.md"
 WORDS = re.compile(r"^[A-Za-z0-9 .,:;()'/_+#?!-]+$")
 RUN = re.compile(r"[A-Za-z0-9_+/-]{24,}")
 PLAIN_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
+PHONE = re.compile(r"\d(?:[\s.()-]*\d){6,}")
+WORDY = re.compile(r"\w*[A-Za-z_]\w*")  # a token with a letter or underscore (a name, an id) is not a phone number
+DATE_TIME = re.compile(r"\b\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2})?Z?)?\b|\b\d{1,2}:\d{2}(?::\d{2})?Z?\b")  # dates and times are not phone numbers
 DEFINES = re.compile(rb"^\s*[-*]?\s*\*\*`|^(?:export[ \t]+)?[A-Z][A-Z0-9_]{2,63}=", re.M)
 WHO = ("-c", "user.name=lockbox-put", "-c", "user.email=lockbox-put@windy.invalid")
 
@@ -79,6 +86,8 @@ def refuse(what: str, text: str, limit: int) -> str | None:
                 f". , : ; ( ) ' / _ + - # ? ! only; no backtick, equals sign or asterisk)")
     if ss.find(text):
         return f"the {what} holds something secret-shaped: a note is never a secret"
+    if PHONE.search(WORDY.sub(" ", DATE_TIME.sub(" ", text))) or "://" in text:
+        return f"the {what} holds a phone-number-like run of 7 or more digits or a web address: a note names no person or place"
     if any(not PLAIN_NAME.match(m) for m in RUN.findall(text)):
         return f"the {what} holds a long run that is not a plain UPPER_CASE name: it could be a value"
     return None

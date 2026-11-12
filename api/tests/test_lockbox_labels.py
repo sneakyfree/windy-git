@@ -199,6 +199,11 @@ def test_note_refuses_anything_that_could_be_a_secret_or_a_name(tmp_path):
     out = note_refused(tmp_path, bare, ok_title, f"the key {fake_aws} is old", "secret-shaped")
     assert fake_aws not in out
     note_refused(tmp_path, bare, f"about {fake_aws}", ok_text, "secret-shaped")
+    for words in ("call +1 555 012 3456 now", "ring 555-0123-456", "see https://example.invalid/x"):  # synthetic
+        out = note_refused(tmp_path, bare, ok_title, words, "phone-number-like")
+        assert words not in out
+    rc, out = run(tmp_path, bare, NOTE, "--lane", "test", "--title", "a title", "dated 2026-11-16 at 11:00Z, 3 keys")
+    assert rc == 0, out  # a date, a time and a small count still pass
 
 
 def test_note_needs_a_lane_and_never_a_traceback(tmp_path):
