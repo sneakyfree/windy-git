@@ -50,6 +50,7 @@ RED = ("failure", "error")
 # the rest (lane session names). An owner not known for sure says so instead of guessing.
 OWNERS = {**gr.OWNERS,
           "windy-mind": "Windy Mind",   # gr.OWNERS spells it "WIndy Mind"; lanes grep BOARD for their name
+          "windy-drops-site": "Windy Drops", "windy-control-panel": "Windy Drops",
           "windy-text": "Windy Text", "windy-text-site": "Windy Text", "windy-hand-site": "Windy Hand",
           "windy-calendar-site": "Windy Calender", "windy-vault": "Windy Vault", "windy-uptime": "Windy Git",
           "windy-pro-mobile": "Windy Fly Mobile", "windy-mind-acp": "Windy Mind", "windy-mind-site": "Windy Mind",
