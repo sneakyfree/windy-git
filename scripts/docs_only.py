@@ -15,6 +15,9 @@ or docs/, and a test run on such a head can prove nothing new. So, for a WAITING
     always runs the whole suite (windy-pro); also every repo the bridge does not post for.
   * PUSH GUARD: any other default-branch push skips a job only when the same job ENDED SUCCESS at its first parent
     (through parents this rule skipped); a red, cancelled or missing parent job means the push runs. PUSHES below.
+  * PER EVENT (Boss note 2026-11-12T10:15:45Z): a sha can be a PR head AND a default-branch push; each job is
+    decided by ITS OWN event (the PR diff vs the push diff; the push guard on push jobs only), one state entry
+    per kind ("<repo>@<sha>" for PR heads, "<repo>@<sha>#push" for pushes).
   * KEPT workflows: any whose file stem names lint, guard, drift, doc, todo, secret, link or spell. They read
     the very files a docs head changes, so they still run.
 
@@ -199,8 +202,8 @@ def parent_green(query, st: dict, repo: str, ref: str, sha: str, wf: str, job: s
             return True
         if status in ("5", "6", "7", "9"):
             return None
-        e = st.get(f"{repo}@{p}")
-        if status == "3" and isinstance(e, dict) and e.get("mode") == "on" and jid.isdigit() and int(jid) in e.get("jobs", []):
+        if status == "3" and jid.isdigit() and any(e.get("mode") == "on" and int(jid) in e.get("jobs", [])
+                                                    for e in _entries(st, repo, p)):
             cur = p
             continue
         return False
@@ -215,6 +218,21 @@ update action_run_job j set status = 3, stopped = extract(epoch from now())::big
 where j.id in ({lst}) and j.status in (5, 7, 9) and j.task_id = 0
 returning j.id, j.run_id;
 """
+
+
+def _kind(event: str) -> str:
+    return "push" if event == "push" else "pr"
+
+
+def _key(repo: str, sha: str, kind: str) -> str:
+    """One decision per (repo, sha, EVENT KIND) (Boss note 2026-11-12T10:15:45Z): a sha can be a PR head AND a
+    default-branch push (a fast-forward merge), and the two diffs differ (PR: against the merge-base; push: the
+    commit's own). PR heads keep the plain key (the bridge reads it); a push decision is "<repo>@<sha>#push"."""
+    return f"{repo}@{sha}" + ("#push" if kind == "push" else "")
+
+
+def _entries(st: dict, repo: str, sha: str) -> list[dict]:
+    return [e for e in (st.get(f"{repo}@{sha}"), st.get(f"{repo}@{sha}#push")) if isinstance(e, dict)]
 
 
 def load_state() -> dict:
@@ -273,14 +291,20 @@ def main(query=cs.psql, post=cs.board, decide=docs_head, repos=None, now=time.ti
     stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now()))
     lines: list[str] = []
     cancelled_total: dict[str, int] = {}
-    for (repo, sha), jobs in list(heads.items())[:MAX_HEADS]:
-        key = f"{repo}@{sha}"
+    work: list[tuple[str, str, str, list[list[str]]]] = []
+    for (repo, sha), all_jobs in list(heads.items())[:MAX_HEADS]:
+        by_kind: dict[str, list[list[str]]] = {}
+        for j in all_jobs:                       # each job by ITS OWN event, never the group's first row
+            by_kind.setdefault(_kind(j[2]), []).append(j)
+        work += [(repo, sha, kind, by_kind[kind]) for kind in sorted(by_kind)]
+    for repo, sha, kind, jobs in work:
+        key = _key(repo, sha, kind)
         prev = st.get(key)
         if prev and (prev.get("mode") == "on" or (prev.get("mode") == "dark" and not on) or prev.get("skip") is False):
-            continue   # decided before (a head's diff never changes)
+            continue   # decided before (a head's diff for one event kind never changes)
         skip, why = decide(repo, sha, jobs[0][2])
         victims = [j for j in jobs if not KEEP_WF.search(j[5].rsplit(".", 1)[0])]
-        if skip and victims and jobs[0][2] == "push":
+        if skip and victims and kind == "push":
             if PUSHES == "off":
                 victims, why = [], "push: DOCS_ONLY_PUSHES=off"
             else:
@@ -331,10 +355,16 @@ def main(query=cs.psql, post=cs.board, decide=docs_head, repos=None, now=time.ti
 
 def contexts_for(repo: str, sha: str, state: dict | None = None) -> list[dict]:
     """For the bridge: the contexts this rule skipped at repo@sha (ON mode only), [] otherwise."""
-    e = (state if state is not None else load_state()).get(f"{repo}@{sha}")
-    if not isinstance(e, dict) or e.get("mode") != "on":
-        return []
-    return [c for c in e.get("contexts", []) if isinstance(c, dict) and isinstance(c.get("context"), str)]
+    st = state if state is not None else load_state()
+    out, seen = [], set()
+    for e in _entries(st, repo, sha):            # a commit status is per sha: both event kinds count
+        if e.get("mode") != "on":
+            continue
+        for c in e.get("contexts", []):
+            if isinstance(c, dict) and isinstance(c.get("context"), str) and c["context"] not in seen:
+                seen.add(c["context"])
+                out.append(c)
+    return out
 
 
 if __name__ == "__main__":
