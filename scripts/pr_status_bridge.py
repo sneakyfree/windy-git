@@ -747,6 +747,12 @@ def post_statuses(repo: str, sha: str) -> None:
         state = STATE.get(r["status"])
         if state is None:
             continue
+        # A docs-only skip NEVER overwrites a real verdict already on GitHub (Hub 2026-11-13T17:33:28Z, for the
+        # DOCS-ONLY ON ask): a context name carries no event, so a sha's PR-kind skip and its push-kind run share
+        # it; while that run is in the 250-run window above it wins anyway, and once it falls out, its red must
+        # still not be painted green. A skip paints only where GitHub shows nothing, or already the skip.
+        if r["status"] == "docs_only" and ctx in current and current_text.get(ctx) != DOCS_ONLY_DESC:
+            continue
         # waiting / running / blocked all map to `pending`: compare the words too, or a job that
         # got picked kept saying "waiting" on GitHub for its whole run (windy-admin #829, 10-29).
         if current.get(ctx) == state and (state != "pending" or current_text.get(ctx) == _verdict_text(r)[:140]):
