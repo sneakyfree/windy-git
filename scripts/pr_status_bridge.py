@@ -911,14 +911,43 @@ MIN_BUDGET = int(os.environ.get("BRIDGE_MIN_BUDGET", "1500"))
 # windy-job heartbeat alerts (Boss 10-28: a quiet CI must never pass for a calm one).
 SKIPS_FILE = Path(os.environ.get("BRIDGE_SKIPS_FILE", "/var/lib/windygit/bridge-skips"))
 SKIP_WARN = 3
+# 11-12 (Legal + Support): 17:41-17:50Z three skips posted no guards and two lanes merged without them; the WARN
+# reached only the journal. Now the 2nd skip in a row writes ONE BOARD line (no GitHub call) naming the minutes
+# with no statuses, and the first full pass after it writes one line that it resumed.
+SKIP_BOARD = 2
 
 
-def _write_skips(n: int) -> None:
+def _read_skips() -> tuple[int, int | None]:
+    """(skips in a row, epoch of the first of them). The file is "N" (before 11-13) or "N EPOCH"."""
+    try:
+        parts = SKIPS_FILE.read_text().split()
+        n = int(parts[0]) if parts else 0
+        first = int(parts[1]) if len(parts) > 1 else None
+        return max(n, 0), first
+    except (OSError, ValueError):
+        return 0, None
+
+
+def _write_skips(n: int, first: int | None = None) -> None:
     try:
         SKIPS_FILE.parent.mkdir(parents=True, exist_ok=True)
-        SKIPS_FILE.write_text(f"{n}\n")
+        SKIPS_FILE.write_text(f"{n} {first}\n" if n and first else f"{n}\n")
     except OSError:
         pass  # a counter that can't be saved must not stop the statuses
+
+
+def _skip_board(line: str) -> None:
+    """A BOARD line that must never stop or fail the pass (cancel_superseded.board: board-say, else the fallback)."""
+    try:
+        import cancel_superseded as cs  # noqa: PLC0415  (only when a line is due; it needs nothing from GitHub)
+        if not cs.board(line):
+            print("  bridge: BOARD line not written (no board-say, no fallback)")
+    except Exception as e:  # noqa: BLE001
+        print(f"  bridge: BOARD line not written: {type(e).__name__}")
+
+
+def _hhmm(epoch: int) -> str:
+    return time.strftime("%H:%MZ", time.gmtime(epoch))
 
 
 def api_budget() -> int | None:
@@ -1019,15 +1048,19 @@ def main() -> int:
         sys.exit("GITEA_SYNC_TOKEN and GITHUB_TOKEN are required")
     CALLS.update(rest=0, graphql=0)   # this pass's count includes the budget check itself
     budget = api_budget()
-    try:
-        skips = int(SKIPS_FILE.read_text().strip() or 0)
-    except (OSError, ValueError):
-        skips = 0
+    skips, first = _read_skips()
+    now_s = int(time.time())
     if budget is not None and budget < MIN_BUDGET:
         skips += 1
-        _write_skips(skips)
+        first = first or now_s
+        _write_skips(skips, first)
         print(f"  bridge pass SKIPPED: GitHub API budget {budget} < {MIN_BUDGET} (kept for stamps and lanes); "
               f"{skips} in a row")
+        if skips == SKIP_BOARD:
+            _skip_board(f"[Windy Git] BRIDGE PAUSED: {skips} passes in a row skipped since {_hhmm(first)} (GitHub API "
+                        f"budget {budget} < {MIN_BUDGET}, kept for stamps and lanes): NO CI statuses or guards posted "
+                        f"for {max((now_s - first) // 60, 1)}+ min. A PR merged now has no fresh guards: wait for the "
+                        f"RESUMED line. Budget resets hourly.")
         if skips >= SKIP_WARN:
             print(f"  WARN: the bridge has skipped {skips} passes in a row; NO CI statuses posted for "
                   f"{skips * 5}+ min (WARN to Boss and Windy Git)")
@@ -1035,6 +1068,11 @@ def main() -> int:
         return 0
     if skips:
         _write_skips(0)
+        if skips >= SKIP_BOARD:
+            since = f" since {_hhmm(first)} ({max((now_s - first) // 60, 1)} min)" if first else ""
+            _skip_board(f"[Windy Git] BRIDGE RESUMED: a full pass now, after {skips} skipped passes{since}; "
+                        f"GitHub API budget {budget if budget is not None else 'unread'}. Guards post again "
+                        f"within one pass (5 min).")
     failed = 0
     _STATUSES_CACHE.clear()
     pre = prefetch(REPOS)

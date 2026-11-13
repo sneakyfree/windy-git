@@ -918,7 +918,16 @@ def test_autorerun_note_is_posted_once(tmp_path, monkeypatch):
     assert len(posted) == 1
 
 
-def test_a_pass_is_skipped_below_the_budget_floor(monkeypatch, capsys, tmp_path):
+@pytest.fixture
+def board_lines(monkeypatch):
+    """The skip/resume BOARD lines, caught (never board-say or the fallback from a test)."""
+    import cancel_superseded as cs
+    lines = []
+    monkeypatch.setattr(cs, "board", lambda line: lines.append(line) or True)
+    return lines
+
+
+def test_a_pass_is_skipped_below_the_budget_floor(monkeypatch, capsys, tmp_path, board_lines):
     """10-28: the bridge (about 345 calls a pass) shares the user quota with stamps and lanes."""
     monkeypatch.setattr(bridge, "SKIPS_FILE", tmp_path / "skips")
     calls = []
@@ -937,7 +946,78 @@ def test_a_pass_is_skipped_below_the_budget_floor(monkeypatch, capsys, tmp_path)
     assert "WARN: the bridge has skipped 3 passes in a row" in capsys.readouterr().out
 
 
-def test_a_full_pass_resets_the_skip_count(monkeypatch, tmp_path):
+def _budget_world(monkeypatch, tmp_path, remaining):
+    calls = []
+
+    def github(method, path, body=None):
+        calls.append(path)
+        return (200, {"resources": {"core": {"remaining": remaining[0]}}}) if path == "/rate_limit" else (404, {})
+    monkeypatch.setattr(bridge, "github", github)
+    monkeypatch.setattr(bridge, "SKIPS_FILE", tmp_path / "skips")
+    monkeypatch.setattr(bridge, "STATE_FILE", tmp_path / "state.json")
+    monkeypatch.setattr(bridge, "REPOS", [])
+    monkeypatch.setattr(bridge, "GITEA_TOKEN", "x")
+    monkeypatch.setattr(bridge, "GITHUB_TOKEN", "x")
+    return calls
+
+
+def test_the_second_skip_in_a_row_reaches_the_board_once_and_the_resume_too(monkeypatch, tmp_path, board_lines):
+    """11-12 17:41-17:50Z (Legal, Support): three skips, no guards, two merges without them; only the journal knew."""
+    remaining = [900]
+    calls = _budget_world(monkeypatch, tmp_path, remaining)
+    clock = [1_794_597_600]                                      # 2026-11-13T19:20:00Z
+    monkeypatch.setattr(bridge.time, "time", lambda: clock[0])
+    assert bridge.main() == 0 and board_lines == []              # one skip: quiet (a 5-min blip)
+    clock[0] += 300
+    assert bridge.main() == 0 and len(board_lines) == 1          # the 2nd: ONE line
+    assert "BRIDGE PAUSED: 2 passes in a row skipped since 19:20Z" in board_lines[0]
+    assert "900 < 1500" in board_lines[0] and "for 5+ min" in board_lines[0]
+    clock[0] += 300
+    assert bridge.main() == 1 and len(board_lines) == 1          # the 3rd fails the pass (journal WARN), no 2nd line
+    assert calls == ["/rate_limit"] * 3                          # a skip never calls GitHub beyond the free budget read
+    remaining[0] = 4800
+    clock[0] += 300
+    assert bridge.main() == 0 and len(board_lines) == 2
+    assert board_lines[1].startswith("[Windy Git] BRIDGE RESUMED: a full pass now, after 3 skipped passes "
+                                      "since 19:20Z (15 min); GitHub API budget 4800")
+    assert (tmp_path / "skips").read_text().strip() == "0"
+    clock[0] += 300
+    assert bridge.main() == 0 and len(board_lines) == 2          # an ordinary pass: nothing
+
+
+def test_a_single_skip_then_a_pass_writes_no_line(monkeypatch, tmp_path, board_lines):
+    remaining = [1000]
+    _budget_world(monkeypatch, tmp_path, remaining)
+    assert bridge.main() == 0
+    remaining[0] = 5000
+    assert bridge.main() == 0 and board_lines == []
+
+
+def test_a_board_failure_never_stops_the_skip_or_the_pass(monkeypatch, tmp_path, capsys):
+    import cancel_superseded as cs
+
+    def boom(line):
+        raise OSError("windy 0 down")
+    monkeypatch.setattr(cs, "board", boom)
+    remaining = [10]
+    _budget_world(monkeypatch, tmp_path, remaining)
+    assert bridge.main() == 0 and bridge.main() == 0
+    assert "BOARD line not written: OSError" in capsys.readouterr().out
+    assert (tmp_path / "skips").read_text().split()[0] == "2"
+    remaining[0] = 5000
+    assert bridge.main() == 0 and (tmp_path / "skips").read_text().strip() == "0"
+
+
+def test_the_old_skips_file_still_reads(monkeypatch, tmp_path, board_lines):
+    """A file written before this change holds only "N": the resume line then names no start time."""
+    _budget_world(monkeypatch, tmp_path, [5000])
+    (tmp_path / "skips").write_text("2\n")
+    assert bridge.main() == 0
+    assert board_lines == ["[Windy Git] BRIDGE RESUMED: a full pass now, after 2 skipped passes; GitHub API "
+                           "budget 5000. Guards post again within one pass (5 min)."]
+
+
+def test_a_full_pass_resets_the_skip_count(monkeypatch, tmp_path, board_lines):
     monkeypatch.setattr(bridge, "SKIPS_FILE", tmp_path / "skips")
     monkeypatch.setattr(bridge, "STATE_FILE", tmp_path / "state.json")
     (tmp_path / "skips").write_text("2\n")
