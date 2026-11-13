@@ -135,10 +135,10 @@ def test_gitea_28_closes_the_attempt_rows_too_and_never_touches_running_or_cance
         if sql is cs.CANCEL_SQL:
             return [["21", "windy-pro", "refs/pull/9/head", "aaaaaaaa", "gates", "601"]]
         if sql is cs.HAS_ATTEMPTS_SQL:
-            return [["t"]]
+            return [["attempts", "t"]]
         return []
     assert cs.main(query, lambda line: True) == 0
-    att = [s for s in seen if "action_run_attempt a set" in s]
+    att = [s for s in seen if "action_run_attempt a set" in s and s is not cs.HEAL_ATTEMPTS_SQL]
     assert len(att) == 1 and "a.run_id in (601)" in att[0] and "j.run_attempt_id = a.id and j.status <> 3" in att[0]
 
 

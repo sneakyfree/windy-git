@@ -151,7 +151,7 @@ class DB:
             ids = sql.split("in (", 1)[1].split(")", 1)[0].split(",")
             return [[i, "77"] for i in ids]
         if "to_regclass" in sql:
-            return [["t"]]
+            return [["attempts", "t"]]
         return []
 
 
@@ -323,7 +323,7 @@ def test_push_runs_when_the_parents_same_job_did_not_end_success(paths, chain, s
     db = PushDB([_push(1)], {P1: ["50", status]})
     do.main(query=db, post=lambda line: None, decide=lambda r, s, e: (True, "docs-only"), repos={"windy-chat"})
     assert _updates(db) == []
-    assert do.load_state()[f"windy-chat@{SHA}"]["why"].startswith("push:")
+    assert do.load_state()[f"windy-chat@{SHA}#push"]["why"].startswith("push:")
 
 
 def test_push_with_no_parent_job_runs(paths, chain):
@@ -337,7 +337,7 @@ def test_push_waits_while_the_parents_job_still_waits_then_decides(paths, chain)
     (paths / "docs-only.on").touch()
     db = PushDB([_push(1)], {P1: ["50", "5"]})
     do.main(query=db, post=lambda line: None, decide=lambda r, s, e: (True, "docs-only"), repos={"windy-chat"})
-    assert _updates(db) == [] and f"windy-chat@{SHA}" not in do.load_state()    # nothing decided yet
+    assert _updates(db) == [] and f"windy-chat@{SHA}#push" not in do.load_state()    # nothing decided yet
     db.parents[P1] = ["50", "1"]
     do.main(query=db, post=lambda line: None, decide=lambda r, s, e: (True, "docs-only"), repos={"windy-chat"})
     assert len(_updates(db)) == 1
@@ -377,3 +377,54 @@ def test_parent_sha_reads_the_first_parent(repo):
     _g(repo, "add", "-A")
     _g(repo, "commit", "-q", "-m", "todo")
     assert do.parent_sha("windy-chat", _g(repo, "rev-parse", "HEAD")) == first
+
+
+# --- PER-JOB EVENT (Boss note 2026-11-12T10:15:45Z on #177): main() read jobs[0][2] for the whole (repo, sha) group ---
+
+def test_a_sha_that_is_both_a_pr_head_and_a_push_decides_each_by_its_own_event(paths, chain):
+    """Push row FIRST: the old code took 'push' for the whole group, so the PR job got the push diff and the push
+    guard (red parent -> the PR job ran too). Now each kind is decided by its own event and diff."""
+    (paths / "docs-only.on").touch()
+    db = PushDB([_push(1), _row(2)], {P1: ["50", "2"]})          # the parent's same job is RED
+    events = []
+
+    def decide(r, s, e):
+        events.append(e)
+        return True, "docs-only"
+    do.main(query=db, post=lambda line: None, decide=decide, repos={"windy-chat"})
+    assert sorted(events) == ["pull_request_sync", "push"]
+    assert len(_updates(db)) == 1 and "in (2)" in _updates(db)[0]   # the PR job skipped, the push job runs
+    st = do.load_state()
+    assert st[f"windy-chat@{SHA}"]["mode"] == "on" and st[f"windy-chat@{SHA}#push"]["why"].startswith("push:")
+
+
+def test_pr_row_first_never_lets_the_push_job_skip_the_push_guard(paths, chain):
+    (paths / "docs-only.on").touch()
+    db = PushDB([_row(2), _push(1)], {P1: ["50", "3"]})          # cancelled parent this rule did not skip
+    do.main(query=db, post=lambda line: None, decide=lambda r, s, e: (True, "docs-only"), repos={"windy-chat"})
+    assert len(_updates(db)) == 1 and "in (2)" in _updates(db)[0] and "1" not in _updates(db)[0].split("in (")[1].split(")")[0].split(",")
+
+
+def test_the_diff_is_decided_per_event_kind(paths, chain):
+    """A PR diff (against the merge-base) can carry code while the push commit's own diff is docs-only."""
+    (paths / "docs-only.on").touch()
+    db = PushDB([_row(2), _push(1)], {P1: ["50", "1"]})
+    do.main(query=db, post=lambda line: None,
+            decide=lambda r, s, e: (e == "push", "docs-only" if e == "push" else "not docs-only"), repos={"windy-chat"})
+    assert len(_updates(db)) == 1 and "in (1)" in _updates(db)[0]
+    assert do.load_state()[f"windy-chat@{SHA}"]["skip"] is False
+
+
+def test_each_kind_is_decided_once(paths, chain):
+    db = PushDB([_push(1), _row(2)], {P1: ["50", "1"]})
+    do.main(query=db, post=lambda line: None, decide=lambda r, s, e: (True, "docs-only"), repos={"windy-chat"})
+    do.main(query=db, post=lambda line: None, decide=lambda r, s, e: pytest.fail("decided twice"), repos={"windy-chat"})
+
+
+def test_contexts_for_reads_both_event_kinds_once_each():
+    st = {f"windy-chat@{SHA}": {"mode": "on", "contexts": [{"context": "windy-git/ci/test", "run": 7}]},
+          f"windy-chat@{SHA}#push": {"mode": "on", "contexts": [{"context": "windy-git/ci/test", "run": 7},
+                                                                {"context": "windy-git/ci/e2e", "run": 8}]},
+          f"windy-chat@{P1}#push": {"mode": "dark", "contexts": [{"context": "windy-git/ci/x", "run": 1}]}}
+    assert [c["context"] for c in do.contexts_for("windy-chat", SHA, st)] == ["windy-git/ci/test", "windy-git/ci/e2e"]
+    assert do.contexts_for("windy-chat", P1, st) == []
