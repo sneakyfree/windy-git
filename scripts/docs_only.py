@@ -331,7 +331,7 @@ def main(query=cs.psql, post=cs.board, decide=docs_head, repos=None, now=time.ti
             run_ids = sorted({d[1] for d in done if len(d) > 1 and d[1].isdigit()})
             if run_ids:
                 query(cs.CLOSE_RUNS_SQL.format(ids=",".join(run_ids)))
-                if query(cs.HAS_ATTEMPTS_SQL) == [["t"]]:
+                if cs._has_attempts(query):
                     query(cs.CLOSE_ATTEMPTS_SQL.format(ids=",".join(run_ids)))
         except Exception as e:  # noqa: BLE001
             print(f"  docs-only: {repo}@{sha[:8]} cancel skipped ({type(e).__name__})")
