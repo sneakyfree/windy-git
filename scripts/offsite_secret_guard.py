@@ -12,10 +12,12 @@ offsite runner (name null0-* or w0-*):
   * the egress unit of each host that has runners must not be in a failed state (its filter broke).
 On ANY violation it cuts the offsite runners off at once, fail closed:
   1. ssh each host that has runners and stop them (reversible), then READ BACK that none runs;
-     a stop that matched nothing, or fewer runners than there are live rows, is a failed stop. Null 0:
+     a stop that leaves one running, or that matched fewer runners than there are live rows while some ran,
+     is a failed stop; a host with NONE running before reads as stopped (Boss 2026-11-12T08:45:27Z (5)). Null 0:
      `docker compose -p windy-git-runner-offsite stop runner-1 runner-2 runner-3`; Windy 0: stop the
      user units act-runner@*.service of the windygit-ci user;
-  2. if a stop fails, soft-delete the null0-*/w0-* runner rows in Gitea, so they can't fetch jobs (they must
+  2. if a host's stop fails, soft-delete THAT host's runner rows in Gitea (null0-* or w0-*, never the other
+     host's), so they can't fetch jobs (they must
      then be re-registered through register.sh, which re-checks the secrets).
 A host whose egress unit cannot be read prints "offsite guard: UNKNOWN" (the heartbeat alerts) and
 becomes a violation after 3 passes in a row. Runner names: null0-N is fixed by the compose file and
@@ -114,34 +116,48 @@ def egress_failed(run=subprocess.run, prefix: str = "null0-") -> bool | None:
 
 
 def stopped(r, expected: int) -> bool:
-    """A stop counts only if it exited 0 AND the read-back shows >= `expected` runners were running
-    before and none after."""
+    """A stop counts only if it exited 0 AND the read-back shows none running after, AND either >= `expected`
+    runners were running before (Hub #133 MED-1: a stop that matched fewer than the live rows is not a stop) or
+    NONE was running before: a host already at 0 reads as STOPPED (Boss RULED 2026-11-12T08:45:27Z (5), after a
+    hand stop at 08:32:19Z made the 08:39:52Z pass read '0 0' as a failed stop)."""
     if r.returncode != 0:
         return False
     try:
         before, after = (int(x) for x in r.stdout.split()[-2:])
     except ValueError:
         return False
-    return after == 0 and before >= expected
+    return after == 0 and (before >= expected or before == 0)
 
 
-def stop_runners(run=subprocess.run, prefixes: list[str] | None = None, rows: list[list[str]] | None = None) -> bool:
-    """Stop the runners on every host in `prefixes` (default: all). True only if EVERY stop was
-    read back as done."""
-    ok = True
+def failed_stops(run=subprocess.run, prefixes: list[str] | None = None, rows: list[list[str]] | None = None) -> list[str]:
+    """Stop the runners on every host in `prefixes` (default: all); return the prefixes whose stop was NOT read
+    back as done (each host on its own: one host's failed stop never touches the other's rows, Hub 08:44:09Z)."""
+    failed = []
     for prefix in (prefixes if prefixes is not None else list(HOSTS)):
         host, _unit, stop, _label = HOSTS[prefix]
         expected = sum(1 for r in (rows or []) if len(r) > 1 and r[1].startswith(prefix))
         try:
-            ok = stopped(ssh(stop, run, host), expected) and ok
+            ok = stopped(ssh(stop, run, host), expected)
         except (subprocess.SubprocessError, OSError):
             ok = False
-    return ok
+        if not ok:
+            failed.append(prefix)
+    return failed
 
 
-def soft_delete(query) -> list[str]:
+def stop_runners(run=subprocess.run, prefixes: list[str] | None = None, rows: list[list[str]] | None = None) -> bool:
+    """True only if EVERY stop was read back as done."""
+    return not failed_stops(run, prefixes, rows)
+
+
+def soft_delete(query, prefixes: list[str] | None = None) -> list[str]:
+    """Soft-delete the live runner rows of the hosts in `prefixes` ONLY (default: every offsite host)."""
+    names = [p for p in (prefixes if prefixes is not None else list(HOSTS)) if p in HOSTS]   # only known prefixes
+    if not names:
+        return []
+    cond = " or ".join(f"name like '{p}%'" for p in names)
     rows = query("update action_runner set deleted = extract(epoch from now())::bigint "
-                 "where coalesce(deleted, 0) = 0 and (name like 'null0-%' or name like 'w0-%') returning id, name;")
+                 f"where coalesce(deleted, 0) = 0 and ({cond}) returning id, name;")
     return [f"{r[1]} (id {r[0]})" for r in rows]
 
 
@@ -185,10 +201,14 @@ def main(query=cs.psql, run=subprocess.run, post=cs.board) -> int:
             return 0
         print(f"offsite guard: ok ({len(rows)} offsite runner(s), each repo-scoped and secret-free)")
         return 0
-    how = ("stopped on " + " and ".join(HOSTS[p][3] for p in fams)) if stop_runners(run, fams, rows) else ""
-    if not how:
-        gone = soft_delete(query)
-        how = f"ssh stop FAILED; soft-deleted in Gitea: {', '.join(gone) or 'none left'}"
+    failed = failed_stops(run, fams, rows)
+    done = [p for p in fams if p not in failed]
+    parts = (["stopped on " + " and ".join(HOSTS[p][3] for p in done)] if done else [])
+    if failed:
+        gone = soft_delete(query, failed)
+        parts.append(f"ssh stop FAILED on {' and '.join(HOSTS[p][3] for p in failed)}; soft-deleted in Gitea: "
+                     f"{', '.join(gone) or 'none left'}")
+    how = "; ".join(parts)
     key = sorted(bad)
     line = ("[Windy Git] OFFSITE RUNNERS CUT OFF (offsite guard, Hub #121): " + "; ".join(key)
             + f". Action: {how}. Back only after the cause is gone and Hub reads it.")

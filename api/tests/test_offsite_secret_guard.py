@@ -125,10 +125,10 @@ def test_ssh_failure_falls_back_to_soft_delete_in_gitea(state, capsys):
     run, posts = Run(**{"systemctl show": (255, ""), "docker compose": (255, "")}), []
     q = db([["23", "null0-1", "1", "0", "", "0"]])
     assert g.main(q, run, lambda line: posts.append(line) or True) == 0
-    assert any(s.lstrip().startswith("update action_runner set deleted") and "name like 'null0-%'" in s
-               and "name like 'w0-%'" in s for s in q.seen)
+    upd = [s for s in q.seen if s.lstrip().startswith("update action_runner set deleted")]
+    assert len(upd) == 1 and "name like 'null0-%'" in upd[0] and "w0-" not in upd[0]   # only the failed host
     out = capsys.readouterr().out
-    assert "ssh stop FAILED; soft-deleted in Gitea: null0-1 (id 23)" in out and "CUT OFF" in out
+    assert "ssh stop FAILED on Null 0; soft-deleted in Gitea: null0-1 (id 23)" in out and "CUT OFF" in out
 
 
 def test_a_failed_egress_unit_on_null0_cuts_off_too(state, capsys):
@@ -190,7 +190,7 @@ def test_only_windy0_rows_never_ssh_null0(state, capsys):
 
 
 @pytest.mark.parametrize("answer", [
-    (0, "0 0\n"),      # the glob matched nothing: exit 0, but fewer runners ran than there are rows
+    (0, "1 0\n"),      # fewer ran than there are live rows (2): the stop matched less than it should (MED-1)
     (0, "2 1\n"),      # one still runs after the stop
     (0, ""),           # no read-back at all
     (0, "garbage\n"),
@@ -231,3 +231,32 @@ def test_unit_expects_ok_and_the_timer_is_at_least_hourly():
     assert '--expect "^offsite guard: ok [(]"' in unit and "--owner 13" in unit
     timer = (ROOT / "deploy" / "systemd" / "windygit-offsite-guard.timer").read_text()
     assert "OnUnitActiveSec=10min" in timer
+
+
+# --- Hub 2026-11-12T08:44:09Z ONE FOLLOW-UP, Boss RULED 08:45:27Z (5) --------------------------------------------
+
+def test_a_host_already_at_zero_reads_as_stopped_not_a_failed_stop(state, capsys):
+    run = Run(**{"act-runner@": (0, "0 0\n")})          # a hand stop earlier: none running before, none after
+    bad = ["32", "w0-2", "1", "51", "windy-connect", "1"]
+    q = db([W1, bad])
+    assert g.main(q, run, lambda line: True) == 0
+    assert not any(s.lstrip().startswith("update action_runner set deleted") for s in q.seen)
+    assert "stopped on Windy 0" in capsys.readouterr().out
+
+
+def test_one_host_failing_its_stop_soft_deletes_only_its_own_rows(state, capsys):
+    run = Run(**{"act-runner@": (0, "2 1\n")})          # Windy 0: one still runs; Null 0: the default clean stop
+    bad = ["32", "w0-2", "1", "51", "windy-connect", "1"]
+    q = db([OK1, OK2, W1, bad], deleted=[["31", "w0-1"], ["32", "w0-2"]])
+    assert g.main(q, run, lambda line: True) == 0
+    upd = [s for s in q.seen if s.lstrip().startswith("update action_runner set deleted")]
+    assert len(upd) == 1 and "name like 'w0-%'" in upd[0] and "null0-" not in upd[0]
+    out = capsys.readouterr().out
+    assert "stopped on Null 0; ssh stop FAILED on Windy 0; soft-deleted in Gitea: w0-1 (id 31), w0-2 (id 32)" in out
+
+
+def test_soft_delete_only_takes_known_prefixes():
+    seen = []
+    assert g.soft_delete(lambda sql: seen.append(sql) or [], ["evil' or 1=1 --"]) == [] and seen == []
+    g.soft_delete(lambda sql: seen.append(sql) or [], ["null0-"])
+    assert "name like 'null0-%'" in seen[0] and "w0-" not in seen[0]
