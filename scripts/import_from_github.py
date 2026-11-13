@@ -162,13 +162,42 @@ def list_candidates() -> None:
     print("\nwindy-pro is excluded on purpose — see G11.5.")
 
 
+# LASTING FIX (incident 2026-11-12, my MISSES 22:02Z): a PULL MIRROR keeps its clone URL WITH the auth_token in the
+# Gitea repo's git config for every 10-minute pull, so the sync's GitHub token sat in a world-readable mortgagerecruiter
+# config from 2026-11-11T21:49Z to 2026-11-12T22:03:45Z. A mirror is now made ONLY for a repo GitHub serves without
+# a token, and the token is never sent: a private repo (or one whose visibility cannot be read) is REFUSED.
+SAFE_PRIVATE_PATH = ("copy a private repo with the sync instead (scripts/sync_from_github.sh: root-only bare cache, "
+                     "token only in a header, pushed to Windy Git): add it to SYNC_REPOS")
+
+
+def github_is_public(name: str) -> bool | None:
+    """An UNAUTHENTICATED read of the repo on GitHub: True = public, False = private or missing (404), None = unreadable."""
+    req = urllib.request.Request(f"https://api.github.com/repos/{GITHUB_OWNER}/{name}",
+                                 headers={"Accept": "application/vnd.github+json", "User-Agent": "windy-git-import"})
+    try:
+        with urllib.request.urlopen(req, timeout=20) as r:
+            body = json.loads(r.read().decode() or "{}")
+            return r.status == 200 and body.get("private") is False
+    except urllib.error.HTTPError as e:
+        return False if e.code == 404 else None
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+
+
 def import_repo(name: str, mirror: bool = False) -> bool:
     existing_status, _ = _api("GET", f"/repos/{OWNER}/{name}")
     if existing_status == 200:
         print(f"  {name:24} already present — skipping (idempotent)")
         return True
 
-    if not GITHUB_TOKEN:
+    if mirror:
+        public = github_is_public(name)
+        if public is not True:
+            why = "private on GitHub" if public is False else "GitHub visibility unreadable"
+            print(f"  {name:24} REFUSED as a mirror ({why}): a pull mirror would keep a token in the Gitea repo "
+                  f"config; {SAFE_PRIVATE_PATH}")
+            return False
+    elif not GITHUB_TOKEN:
         sys.exit("GITHUB_TOKEN is unset; private repos cannot be read without it.")
 
     status, body = _api(
@@ -176,7 +205,8 @@ def import_repo(name: str, mirror: bool = False) -> bool:
         "/repos/migrate",
         {
             "clone_addr": f"https://github.com/{GITHUB_OWNER}/{name}.git",
-            "auth_token": GITHUB_TOKEN,
+            # never for a mirror: Gitea would keep it in the repo config (public repos need none)
+            **({} if mirror else {"auth_token": GITHUB_TOKEN}),
             "repo_name": name,
             "repo_owner": OWNER,
             "service": "github",
