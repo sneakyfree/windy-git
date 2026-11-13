@@ -128,3 +128,45 @@ def test_main_runs_heal_after_the_cancels(monkeypatch):
     query, seen = _fake([])
     assert cs.main(query, lambda line: True) == 0
     assert seen.index(cs.CANCEL_SQL) < seen.index(cs.HEAL_ATTEMPTS_SQL)
+
+
+def test_the_bump_names_gitea_28s_column_updated_unix():
+    """11-13 18:36:40Z: the first live release woke windy-chat 44269, then the bump died on a column "updated"
+    that action_tasks_version does not have (Gitea 28: id, owner_id, repo_id, version, created_unix, updated_unix)."""
+    sql = " ".join(cs.BUMP_SQL.split())
+    assert "updated_unix = extract(epoch from now())::bigint" in sql
+    assert re.search(r"[ ,]updated =", sql) is None
+
+
+def test_a_failed_bump_still_logs_and_posts_the_release_with_the_reason(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("RELEASE_BLOCKED", "on")
+    monkeypatch.setattr(cs, "LOG", tmp_path / "log")
+    inner, seen = _fake([["release", "44269", "windy-chat", "ci-db", "147", "1", "1"]])
+
+    def query(sql):
+        if "action_tasks_version" in sql:
+            e = cs.subprocess.CalledProcessError(1, "psql")
+            e.stderr = 'ERROR:  column "updated" of relation "action_tasks_version" does not exist\nLINE 2: ...'
+            raise e
+        return inner(sql)
+    posts = []
+    cs.heal_and_release(query, posts.append)
+    assert len(posts) == 1 and "windy-chat 44269" in posts[0] and "bump FAILED (CalledProcessError: ERROR:" in posts[0]
+    log = (tmp_path / "log").read_text()
+    assert "released run 44269 windy-chat" in log and "bump FAILED" in log
+    assert 'bump failed (CalledProcessError: ERROR:  column "updated"' in capsys.readouterr().out
+
+
+def test_a_failed_release_names_psqls_reason(monkeypatch, capsys):
+    monkeypatch.setenv("RELEASE_BLOCKED", "on")
+    inner, _ = _fake([])
+
+    def query(sql):
+        if sql is cs.RELEASE_SQL:
+            e = cs.subprocess.CalledProcessError(1, "psql")
+            e.stderr = "ERROR:  deadlock detected\n"
+            raise e
+        return inner(sql)
+    posts = []
+    cs.heal_and_release(query, posts.append)
+    assert posts == [] and "(release): skipped (CalledProcessError: ERROR:  deadlock detected)" in capsys.readouterr().out
