@@ -23,6 +23,12 @@ _spec = importlib.util.spec_from_file_location(
 bridge = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(bridge)
 
+
+@pytest.fixture(autouse=True)
+def _no_guard_only_repos(monkeypatch):
+    """The guard-only pass reads the real sync list; tests that set REPOS set GUARD_ONLY themselves."""
+    monkeypatch.setattr(bridge, "GUARD_ONLY", [])
+
 SHA = "a" * 40
 
 
