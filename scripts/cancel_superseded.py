@@ -317,10 +317,18 @@ select 'release', run.id, p.name, v.concurrency_group, run.repo_id, run.owner_id
 from run join victims v on v.run_id = run.id join repository p on p.id = run.repo_id order by p.name, run.id;
 """
 
+# Gitea 28's action_tasks_version names its time column updated_unix (not "updated" as the run tables do):
+# 11-13 18:36:40Z the first live RELEASE woke windy-chat 44269 and then this bump failed on "updated".
 BUMP_SQL = """
-update action_tasks_version set version = version + 1, updated = extract(epoch from now())::bigint
+update action_tasks_version set version = version + 1, updated_unix = extract(epoch from now())::bigint
 where (owner_id = 0 and repo_id = 0) or (owner_id in ({owners}) and repo_id = 0) or (owner_id = 0 and repo_id in ({repos}));
 """
+
+
+def _why(e: Exception) -> str:
+    """The error class plus psql's first stderr line (a Postgres message: SQL and names, never a value)."""
+    err = (getattr(e, "stderr", "") or "").strip().splitlines()
+    return f"{type(e).__name__}: {err[0][:160]}" if err else type(e).__name__
 
 
 def heal_and_release(query, post) -> None:
@@ -346,17 +354,24 @@ def heal_and_release(query, post) -> None:
                       + ", ".join(f"{r[2]} {r[1]}" for r in rows))
             return
         rows = query(RELEASE_SQL)
-        if rows:
-            repos = sorted({r[4] for r in rows if r[4].isdigit()}, key=int)
-            owners = sorted({r[5] for r in rows if r[5].isdigit()}, key=int)
-            if repos and owners:
-                query(BUMP_SQL.format(owners=",".join(owners), repos=",".join(repos)))
     except Exception as e:  # noqa: BLE001
-        print(f"  cancel-superseded (release): skipped ({type(e).__name__})")
+        print(f"  cancel-superseded (release): skipped ({_why(e)})")
         return
+    # The release is COMMITTED by now: whatever the bump does, the woken runs are logged and posted (11-13: a
+    # failed bump used to skip both, so the first live release reached neither the log nor the BOARD).
+    bump = ""
+    if rows:
+        repos = sorted({r[4] for r in rows if r[4].isdigit()}, key=int)
+        owners = sorted({r[5] for r in rows if r[5].isdigit()}, key=int)
+        if repos and owners:
+            try:
+                query(BUMP_SQL.format(owners=",".join(owners), repos=",".join(repos)))
+            except Exception as e:  # noqa: BLE001
+                bump = f"; runner-scope bump FAILED ({_why(e)}): idle runners see them at the next version change"
+                print(f"  cancel-superseded (release): bump failed ({_why(e)})")
     if rows:
         stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        lines = [f"{stamp} released run {r[1]} {r[2]} group {r[3]} jobs {r[6]}" for r in rows]
+        lines = [f"{stamp} released run {r[1]} {r[2]} group {r[3]} jobs {r[6]}{bump}" for r in rows]
         print("\n".join("  " + x for x in lines))
         try:
             LOG.parent.mkdir(parents=True, exist_ok=True)
@@ -365,7 +380,7 @@ def heal_and_release(query, post) -> None:
         except OSError:
             pass
         post(f"[Windy Git] cancel-superseded (release): {len(rows)} run(s) blocked behind a cancelled run woken "
-             f"({', '.join(f'{r[2]} {r[1]}' for r in rows)}); nothing else held their group. Log: {LOG}")
+             f"({', '.join(f'{r[2]} {r[1]}' for r in rows)}); nothing else held their group{bump}. Log: {LOG}")
 
 
 def main_pass(query, post) -> None:
