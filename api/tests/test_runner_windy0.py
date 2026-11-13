@@ -83,7 +83,7 @@ def test_the_runner_unit_is_a_per_number_user_unit_on_the_podman_socket():
 def test_the_runner_config_runs_one_job_unprivileged_with_its_own_limits():
     c = (D / "config.yaml.in").read_text()
     assert "capacity: 1" in c and "privileged: false" in c and "--cpus=2" in c and "--memory=4g" in c
-    assert "--memory-swap=4g" in c and "timeout: 150m" in c and c.count("@N@") == 2
+    assert "--memory-swap=4g" in c and "timeout: 150m" in c and c.count("@N@") == 3  # .runner file, cache dir, action clones (host.workdir_parent)
     assert "windy-git-ci/ubuntu:22.04-1" in c and "valid_volumes: []" in c
 
 
@@ -177,3 +177,12 @@ def test_probe_fails_on_a_reachable_private_v4_and_on_a_too_tight_public_side(tm
 def test_probe_with_no_lan_neighbour_warns_and_still_proves_the_public_v6_drop(tmp_path):
     rc, out = probe(tmp_path, FAKE_NO_NEIGH="1")
     assert rc == 0 and "WARN: no global v6 neighbour" in out and "PASS (6 private v4 + 1 v6 targets" in out
+
+
+def test_each_w0_runner_keeps_its_own_action_clones():
+    """All w0 runners are one user with one HOME; act_runner's action clones default to $HOME/.cache/act,
+    so without a per-runner host.workdir_parent two jobs refreshing the same action break each other."""
+    import yaml
+    cfg = yaml.safe_load((D / "config.yaml.in").read_text())
+    assert cfg["host"]["workdir_parent"] == "/var/lib/windygit-ci/runner-@N@/act"
+    assert cfg["cache"]["dir"] != cfg["host"]["workdir_parent"]

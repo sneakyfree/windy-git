@@ -15,7 +15,7 @@ SECRET-FREE repos only. Today: w0-1 windy-text, w0-2 windy-connect, w0-3 windy-m
 | `egress-probe.sh` | ON WINDY 0 as root: proves the block (6 private v4 targets + a LAN host's global v6 (from the neighbour table) + a public v6 refused, both drop counters rose, a public v4 address still connects) |
 
 Install: `sudo bash install.sh` on Windy 0 (checks the uid, renders and `nft -c`-validates the rules, enables the egress unit;
-starts no runner). Then per runner N: `mkdir -p /var/lib/windygit-ci/runner-N/cache` as windygit-ci, render `config.yaml.in`,
+starts no runner). Then per runner N: `mkdir -p /var/lib/windygit-ci/runner-N/cache /var/lib/windygit-ci/runner-N/act` as windygit-ci, render `config.yaml.in`,
 `bash register.sh N repo` on Veron, `chmod 600 runner-N/.runner`, and as windygit-ci `systemctl --user enable --now act-runner@N`.
 The CI image is built separately as windygit-ci with `podman build --format docker` (OCI format drops the Dockerfile `SHELL`).
 
@@ -23,3 +23,9 @@ The offsite guard (`scripts/offsite_secret_guard.py`, every 10 min on Veron) cov
 malformed row, or a failed egress unit stops the runners and soft-deletes the rows. The image's `python3` is 3.10 (Ubuntu 22.04).
 
 Tests: `api/tests/test_runner_windy0.py`.
+
+Action clones (11-07): each runner keeps its clones of actions in `runner-N/act` (`host.workdir_parent`). Left empty,
+act_runner uses `$HOME/.cache/act`, which every w0 runner shares (one user), and two jobs refreshing the same action
+break each other. Apply: render `config.yaml.in` again per runner, then restart each runner ONLY when it is idle.
+(The 11-05 `XDG_CACHE_HOME` line in the installed unit never moved that directory; when applying this, put the unit
+back to this repo's version.)
