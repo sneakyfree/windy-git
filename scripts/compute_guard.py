@@ -203,9 +203,12 @@ def scan_line(path: str, text: str) -> list[tuple[str, str]]:
 
 
 def _git(bare: Path, *args: str) -> str:
+    # errors="replace": a file that is not UTF-8 but holds no NUL byte (an 8 kHz phone clip) is diffed by git as
+    # text; a strict decode made every guard SKIP on such a head (2026-11-13, 20 skips on windytalk). A replaced
+    # byte can never form a secret or a provider shape, and every other line is still scanned.
     return subprocess.run(
         ["git", "--git-dir", str(bare), *args],
-        capture_output=True, text=True, check=True, timeout=120,
+        capture_output=True, text=True, encoding="utf-8", errors="replace", check=True, timeout=120,
     ).stdout
 
 

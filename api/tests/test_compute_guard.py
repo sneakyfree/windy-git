@@ -415,3 +415,31 @@ def test_legal_prose_exemption_in_a_real_diff():
 """
     fs = cg.parse_added("windy-pro", diff, ALLOW)
     assert {f.path for f in fs} == {"account-server/src/legal/render.ts"}
+
+
+def test_a_non_utf8_file_in_the_diff_or_tree_never_skips_the_guards(tmp_path):
+    """MISSES 2026-11-13T03:10:17Z: an 8 kHz phone clip (bytes 0xff..., no NUL, so git diffs it as text) made
+    every guard raise UnicodeDecodeError and SKIP: 20 skips on windytalk heads, no status ever posted. The guard
+    must still scan the other files and find what is there."""
+    work = tmp_path / "w"
+    work.mkdir()
+    run = lambda *a: subprocess.run(["git", *a], cwd=work, check=True, capture_output=True)  # noqa: E731
+    run("init", "-q", "-b", "main")
+    (work / "app").mkdir()
+    (work / "app" / "ok.py").write_text("X = 1\n")
+    run("add", "-A")
+    run("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base")
+    run("checkout", "-q", "-b", "pr")
+    (work / "assets").mkdir()
+    (work / "assets" / "hold.ulaw").write_bytes(bytes([0xFF, 0x7F, 0xFE, 0x80, 0x0A]) * 400)  # no NUL byte
+    (work / "app" / "llm.py").write_text("import os\nKEY = os.environ['OPENAI_API_KEY']\n")
+    run("add", "-A")
+    run("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "pr")
+    bare = tmp_path / "r.git"
+    subprocess.run(["git", "clone", "-q", "--bare", str(work), str(bare)], check=True)
+    sha = subprocess.run(["git", "--git-dir", str(bare), "rev-parse", "pr"],
+                         capture_output=True, text=True, check=True).stdout.strip()
+    added = cg.scan_added("windy-chat", bare, "refs/heads/main", sha, ALLOW)
+    assert [(f.path, f.line, f.kind) for f in added] == [("app/llm.py", 2, "provider key")]
+    tree = cg.scan_tree("windy-chat", bare, sha, ALLOW)
+    assert [(f.path, f.line, f.kind) for f in tree] == [("app/llm.py", 2, "provider key")]
