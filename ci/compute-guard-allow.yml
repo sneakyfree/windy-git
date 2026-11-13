@@ -217,3 +217,31 @@ allow:
     approved_by: windy-hub
     approved_on: 2026-10-23
     expires: 2027-01-21
+
+  - repo: windy-iron
+    paths:
+      - "src/web/src/pages/CodeSamplesPage.tsx"
+      - "src/web/src/pages/MigrationGuidePage.tsx"
+      - "src/web/src/pages/PlaygroundPage.tsx"
+      - "src/web/src/pages/QuickstartPage.tsx"
+      - "src/web/src/pages/SdkDocsPage.tsx"
+    # Code SAMPLES shown to the reader ("from openai import OpenAI", "pip install openai") that point the
+    # openai package at Windy Iron's own api.windyiron.com/v1; the migration guide shows the old OpenAI and
+    # Together lines as the "before". No Windy code calls a provider from these pages; src/api and infra
+    # have 0 hits. Any new hit outside these five files stays red.
+    reason: "Docs-page code samples aimed at Windy Iron's own API, read by Mind at windy-iron main cb2c57df (Mind BOARD 2026-11-12T18:38:00Z (a), Boss's call 18:17:11Z (3))."
+    exemption: owner-approved
+    approved_by: windy-mind
+    approved_on: 2026-11-12
+    expires: 2027-02-10
+
+  - repo: windy-mail-site
+    paths:
+      - "public/privacy.html"
+    # The key NAMES on the privacy page are setting names for a person's own computer, with no value
+    # anywhere (Legal 2026-11-12T18:24:33Z). This one file only; any other hit stays red.
+    reason: "Privacy page names settings for a person's own computer, no values (Legal 2026-11-12T18:24:33Z; Mind BOARD 2026-11-12T18:38:00Z (b))."
+    exemption: owner-approved
+    approved_by: windy-mind
+    approved_on: 2026-11-12
+    expires: 2027-02-10
