@@ -93,7 +93,7 @@ def test_register_refuses_a_repo_with_any_actions_secret_and_keeps_the_token_off
     assert "s.repo_id=0 and s.owner_id=p.owner_id" in r and "s.owner_id=0 and s.repo_id=0" in r      # owner + instance level
     assert re.search(r"printf '%s\\n' \"\$tok\" \| ssh", r)                                       # stdin, not argv
     assert "--token" not in r and "REGISTRATION_TOKEN=" not in r.replace('"$T"', "")
-    assert '[[ "$tok" =~ ^[A-Za-z0-9]{30,80}$ ]]' in r and '[[ "$n" =~ ^[1-4]$ ]]' in r
+    assert '[[ "$tok" =~ ^[A-Za-z0-9]{30,80}$ ]]' in r and '[[ "$n" =~ ^[1-6]$ ]]' in r
 
 
 def test_the_probe_proves_the_block_by_refusals_and_by_the_drop_counter_and_checks_the_open_side():
@@ -177,3 +177,50 @@ def test_probe_fails_on_a_reachable_private_v4_and_on_a_too_tight_public_side(tm
 def test_probe_with_no_lan_neighbour_warns_and_still_proves_the_public_v6_drop(tmp_path):
     rc, out = probe(tmp_path, FAKE_NO_NEIGH="1")
     assert rc == 0 and "WARN: no global v6 neighbour" in out and "PASS (6 private v4 + 1 v6 targets" in out
+
+
+
+# --- MISSES 2026-11-12T08:54:34Z: an old .runner made register a no-op that still printed "registered" --------------
+
+def _stubbed(tmp_path, readback):
+    """sudo answers a plain token, ssh records the remote command and eats stdin, WGQ answers by query."""
+    b = tmp_path / "bin"
+    b.mkdir()
+    (b / "sudo").write_text("#!/bin/sh\necho " + "A" * 40 + "\n")
+    (b / "ssh").write_text(f"#!/bin/sh\ncat >/dev/null\nfor a; do last=\"$a\"; done\nprintf '%s' \"$last\" > {tmp_path}/remote\n")
+    (b / "wgq").write_text(
+        "#!/bin/sh\nq=$(cat)\ncase \"$q\" in\n"
+        "  *'from secret s'*) echo 0;;\n"
+        "  *'from repository where'*) echo 1;;\n"
+        f"  *'from action_runner r'*) printf '%s' '{readback}'; [ -n '{readback}' ] && echo;;\n"
+        "esac\n")
+    for f in ("sudo", "ssh", "wgq"):
+        (b / f).chmod(0o755)
+    import os
+    env = {**os.environ, "PATH": f"{b}:{os.environ['PATH']}", "WGQ": str(b / "wgq"), "WINDY0_SSH": "w0"}
+    return subprocess.run(["bash", str(D / "register.sh"), "5", "windycloud"], env=env, capture_output=True, text=True)
+
+
+def test_register_moves_an_old_runner_file_aside_before_act_runner_register(tmp_path):
+    _stubbed(tmp_path, "27 windycloud")
+    remote = (tmp_path / "remote").read_text()
+    assert "mv .runner .runner.bak-" in remote
+    assert remote.index("mv .runner") < remote.index("act_runner register")
+
+
+def test_no_new_forge_row_means_not_registered_whatever_the_folder_says(tmp_path):
+    r = _stubbed(tmp_path, "")
+    assert r.returncode == 1
+    assert "NOT REGISTERED" in r.stdout and "registered w0-" not in r.stdout
+
+
+def test_the_proof_is_the_forge_row_id_and_its_repo_scope(tmp_path):
+    r = _stubbed(tmp_path, "27 windycloud")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "registered w0-5 for windycloud: forge row id 27 (repo scope windycloud)" in r.stdout
+
+
+def test_the_readback_sql_asks_for_a_new_live_row_scoped_to_the_repo():
+    r = (D / "register.sh").read_text()
+    assert "from action_runner r join repository p on p.id = r.repo_id" in r
+    assert "r.name = 'w0-%s'" in r and "r.created >= %s" in r and "coalesce(r.deleted, 0) = 0" in r
