@@ -22,6 +22,9 @@ ONE SQL statement selects and cancels together and RETURNS what it cancelled, so
 claims in between is never touched. A run whose jobs are now all cancelled is closed. Each
 cancel is printed (the sync's journal) and appended to LOG; one BOARD line per pass when
 the count is above 0. Never fails the sync.
+HEAL + RELEASE (11-13): every pass closes attempt rows a DB cancel left WAITING on cancelled runs (Gitea 28
+counts them as concurrency holders, so the next run of the group sat BLOCKED forever); RELEASE_BLOCKED=dry|on
+(off by default) then wakes the newest run per (repo, group) that nothing else holds. See heal_and_release().
 """
 
 from __future__ import annotations
@@ -142,7 +145,10 @@ def keep_shas() -> tuple[set[str], int]:
 # (action_run_attempt; run.status mirrors it), so they are closed too. On 1.24 neither 9 nor that table
 # exists, so this is the same SQL as before there. Source: models/actions/status.go, services/actions/run.go
 # (insertRunJob: Waiting + needs -> Pending), models/actions/run_attempt.go at v28.3.0.
-HAS_ATTEMPTS_SQL = "select to_regclass('public.action_run_attempt') is not null;"
+# TWO columns on purpose: psql() keeps only lines with a "|" in them (it drops psql's command tags), so a
+# one-column answer ("t") came back as [] and the attempt rows were NEVER closed (11-13: 1360 attempts of
+# cancelled runs still read waiting, and Gitea counted them as holders of their concurrency group).
+HAS_ATTEMPTS_SQL = "select 'attempts', to_regclass('public.action_run_attempt') is not null;"
 
 CLOSE_ATTEMPTS_SQL = """
 update action_run_attempt a set status = 3, stopped = extract(epoch from now())::bigint,
@@ -238,8 +244,128 @@ def _close_runs(query, rows: list[list[str]]) -> None:
     runs = sorted({r[5] for r in rows if r[5].isdigit()})
     if runs:
         query(CLOSE_RUNS_SQL.format(ids=",".join(runs)))
-        if query(HAS_ATTEMPTS_SQL) == [["t"]]:
+        if _has_attempts(query):
             query(CLOSE_ATTEMPTS_SQL.format(ids=",".join(runs)))
+
+
+def _has_attempts(query) -> bool:
+    return query(HAS_ATTEMPTS_SQL) == [["attempts", "t"]]
+
+
+# HEAL (11-13): an attempt row still WAITING/BLOCKED/PENDING whose run is CANCELLED and whose own jobs are all
+# cancelled is left over from a DB-write cancel (the parse bug above). Gitea 28 counts a waiting attempt as a
+# HOLDER of its concurrency group (models/actions/run.go GetConcurrencyHolders: waiting, running, cancelling),
+# so every later run in that group is BLOCKED (status 7) and never runs: windy-pro main 44273 and windy-chat
+# main 44269 on 11-13, behind cancelled runs 41489 and 42822. Only cancelled runs; never a running or
+# cancelling attempt; RETURNING says exactly what changed.
+HEAL_ATTEMPTS_SQL = """
+update action_run_attempt a set status = 3, stopped = extract(epoch from now())::bigint,
+       updated = extract(epoch from now())::bigint
+from action_run r
+where r.id = a.run_id and r.status = 3 and a.status in (5, 7, 9)
+  and not exists (select 1 from action_run_job j where j.run_attempt_id = a.id and j.status <> 3)
+returning 'healed', a.id, a.run_id;
+"""
+
+# RELEASE (RELEASE_BLOCKED=dry|on, off by default): what Gitea's checkRunConcurrency would have done had the
+# holder finished through Gitea. A run BLOCKED by run-level concurrency is woken when NO other run holds its
+# group (no attempt and no job of another run waiting, running or cancelling, the same test as Gitea's
+# shouldBlockRunByConcurrency). The newest blocked run per (repo, group) only. Never a run awaiting approval.
+# Refused (left for Gitea or a person) when any job of it has job-level concurrency (raw_concurrency) or a
+# no-needs job carries a job-level `if:` (4-space key in its payload): Gitea evaluates those, a DB write
+# cannot. Jobs with no needs -> 5 (waiting); jobs with needs -> 9 (pending: Gitea's resolver moves them on as
+# their needs finish). Then +1 on action_tasks_version for the global, owner and repo runner scopes, so idle
+# runners fetch again (FetchTask only queries when the version moved).
+RELEASE_VICTIMS = r"""
+with blocked as (
+  select a.id as att, a.run_id, a.repo_id, a.concurrency_group, r.owner_id
+  from action_run_attempt a join action_run r on r.id = a.run_id and r.latest_attempt_id = a.id
+  where a.status = 7 and r.status = 7 and not r.need_approval and coalesce(a.concurrency_group, '') <> ''
+    and not exists (select 1 from action_run_attempt h where h.repo_id = a.repo_id
+                    and h.concurrency_group = a.concurrency_group and h.status in (5, 6, 8) and h.run_id <> a.run_id)
+    and not exists (select 1 from action_run_job hj where hj.repo_id = a.repo_id
+                    and hj.concurrency_group = a.concurrency_group and hj.status in (5, 6, 8) and hj.run_id <> a.run_id)
+    and not exists (select 1 from action_run_job x where x.run_attempt_id = a.id and x.status = 7
+                    and (coalesce(x.raw_concurrency, '') <> ''
+                         or (coalesce(x.needs, '') in ('', 'null', '[]')
+                             and convert_from(x.workflow_payload, 'UTF8') ~ E'\n    if:')))
+), victims as (
+  select distinct on (repo_id, concurrency_group) * from blocked order by repo_id, concurrency_group, run_id desc
+)"""
+
+RELEASE_DRY_SQL = RELEASE_VICTIMS + """
+select 'release', v.run_id, p.name, v.concurrency_group from victims v join repository p on p.id = v.repo_id
+order by p.name, v.run_id;
+"""
+
+RELEASE_SQL = RELEASE_VICTIMS + """, att as (
+  update action_run_attempt a set status = 5, updated = extract(epoch from now())::bigint
+  from victims v where a.id = v.att and a.status = 7
+  returning a.id, a.run_id
+), run as (
+  update action_run r set status = 5, updated = extract(epoch from now())::bigint
+  from att where r.id = att.run_id and r.status = 7
+  returning r.id, r.repo_id, r.owner_id
+), jobs as (
+  update action_run_job j set status = case when coalesce(j.needs, '') in ('', 'null', '[]') then 5 else 9 end,
+         updated = extract(epoch from now())::bigint
+  from att where j.run_attempt_id = att.id and j.status = 7
+  returning j.id, j.run_id
+)
+select 'release', run.id, p.name, v.concurrency_group, run.repo_id, run.owner_id,
+       (select count(*) from jobs where jobs.run_id = run.id)
+from run join victims v on v.run_id = run.id join repository p on p.id = run.repo_id order by p.name, run.id;
+"""
+
+BUMP_SQL = """
+update action_tasks_version set version = version + 1, updated = extract(epoch from now())::bigint
+where (owner_id = 0 and repo_id = 0) or (owner_id in ({owners}) and repo_id = 0) or (owner_id = 0 and repo_id in ({repos}));
+"""
+
+
+def heal_and_release(query, post) -> None:
+    """Never fails the sync. HEAL always (it is the close that should have happened); RELEASE per RELEASE_BLOCKED."""
+    try:
+        if not _has_attempts(query):
+            return
+        healed = query(HEAL_ATTEMPTS_SQL)
+    except Exception as e:  # noqa: BLE001
+        print(f"  cancel-superseded (heal): skipped ({type(e).__name__})")
+        return
+    if healed:
+        print(f"  cancel-superseded (heal): {len(healed)} attempt row(s) of cancelled runs closed "
+              f"(runs {', '.join(sorted({r[2] for r in healed}, key=int)[:20])}{' ...' if len(healed) > 20 else ''})")
+    mode = os.environ.get("RELEASE_BLOCKED", "off").strip().lower()
+    if mode not in ("dry", "on"):
+        return
+    try:
+        if mode == "dry":
+            rows = query(RELEASE_DRY_SQL)
+            if rows:
+                print(f"  cancel-superseded (release) DRY RUN: would wake {len(rows)} blocked run(s): "
+                      + ", ".join(f"{r[2]} {r[1]}" for r in rows))
+            return
+        rows = query(RELEASE_SQL)
+        if rows:
+            repos = sorted({r[4] for r in rows if r[4].isdigit()}, key=int)
+            owners = sorted({r[5] for r in rows if r[5].isdigit()}, key=int)
+            if repos and owners:
+                query(BUMP_SQL.format(owners=",".join(owners), repos=",".join(repos)))
+    except Exception as e:  # noqa: BLE001
+        print(f"  cancel-superseded (release): skipped ({type(e).__name__})")
+        return
+    if rows:
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        lines = [f"{stamp} released run {r[1]} {r[2]} group {r[3]} jobs {r[6]}" for r in rows]
+        print("\n".join("  " + x for x in lines))
+        try:
+            LOG.parent.mkdir(parents=True, exist_ok=True)
+            with open(LOG, "a") as f:
+                f.write("\n".join(lines) + "\n")
+        except OSError:
+            pass
+        post(f"[Windy Git] cancel-superseded (release): {len(rows)} run(s) blocked behind a cancelled run woken "
+             f"({', '.join(f'{r[2]} {r[1]}' for r in rows)}); nothing else held their group. Log: {LOG}")
 
 
 def main_pass(query, post) -> None:
@@ -295,6 +421,7 @@ def main(query=psql, post=board) -> int:
                       "[Windy Git] cancel-superseded: {n} waiting/blocked PR jobs on replaced commits cancelled "
                       "({repos}).")
     main_pass(query, post)
+    heal_and_release(query, post)
     return 0
 
 

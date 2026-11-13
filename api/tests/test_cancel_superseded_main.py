@@ -79,7 +79,7 @@ def test_off_by_default_the_main_pass_never_runs(paths, monkeypatch):
     monkeypatch.delenv("MAIN_SUPERSEDE", raising=False)
     seen = []
     assert cs.main(lambda sql: seen.append(sql) or [], lambda line: None) == 0
-    assert seen == [cs.CANCEL_SQL]                                         # the PR pass only, as before
+    assert [q for q in seen if q is not cs.HAS_ATTEMPTS_SQL] == [cs.CANCEL_SQL]                                         # the PR pass only, as before
 
 
 ROWS = [["21", "windy-pro", "refs/heads/main", "1111aaaa", "test", "701"],
@@ -124,4 +124,4 @@ def test_an_unknown_mode_runs_nothing(paths, monkeypatch):
     monkeypatch.setenv("MAIN_SUPERSEDE", "yes please")
     seen = []
     assert cs.main(lambda sql: seen.append(sql) or [], lambda line: None) == 0
-    assert seen == [cs.CANCEL_SQL]
+    assert [q for q in seen if q is not cs.HAS_ATTEMPTS_SQL] == [cs.CANCEL_SQL]
