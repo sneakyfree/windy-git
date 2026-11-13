@@ -151,7 +151,7 @@ class DB:
             ids = sql.split("in (", 1)[1].split(")", 1)[0].split(",")
             return [[i, "77"] for i in ids]
         if "to_regclass" in sql:
-            return [["t"]]
+            return [["attempts", "t"]]
         return []
 
 
