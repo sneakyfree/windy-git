@@ -19,6 +19,17 @@ _spec.loader.exec_module(af)
 
 A, B, C = "a" * 40, "b" * 40, "c" * 40
 
+import pytest  # noqa: E402
+
+PATHS: dict = {}
+
+
+@pytest.fixture(autouse=True)
+def _code_heads(monkeypatch):
+    """Every head is a code head (app.py) unless a test puts its diff in PATHS."""
+    PATHS.clear()
+    monkeypatch.setattr(af, "head_paths", lambda repo, sha: PATHS.get(sha, ["app.py"]))
+
 
 def _world(monkeypatch, tmp_path, statuses, budget=4000):
     monkeypatch.setattr(af, "STATE", tmp_path / "approved.json")
@@ -36,8 +47,8 @@ def _ok(*ctxs):
 
 def test_only_fully_approved_heads_are_moved_and_approvals_are_cached(monkeypatch, tmp_path):
     statuses = {A: _ok("windy-hub/approved", "windy-boss/approved"),
-                B: _ok("windy-hub/approved"),                                    # Boss missing
-                C: [{"context": "windy-boss/approved", "state": "failure"}] + _ok("windy-hub/approved", "windy-boss/approved")}
+                B: _ok("windy-boss/approved"),                                   # no reader stamp
+                C: [{"context": "windy-hub/approved", "state": "failure"}] + _ok("windy-hub/approved")}
     reads = _world(monkeypatch, tmp_path, statuses)
     sqls, posts = [], []
 
@@ -56,8 +67,15 @@ def test_only_fully_approved_heads_are_moved_and_approvals_are_cached(monkeypatc
     assert A not in reads                                         # cached: not re-read within the TTL
 
 
-def test_windy_git_needs_only_hubs_approval():
-    assert af.APPROVALS["windy-git"] == ("windy-hub/approved",)
+def test_windy_git_needs_hub_and_boss_on_code_and_boss_on_docs(monkeypatch):
+    """Boss 2026-11-13T05:07:40Z: windy-git keeps his context (it holds the guards); 13:48:46Z: he stamps its TODO PRs."""
+    statuses = {A: _ok("windy-hub/approved"), B: _ok("windy-hub/approved", "windy-boss/approved"),
+                C: _ok("windy-boss/approved")}
+    monkeypatch.setattr(af.b, "commit_statuses", lambda repo, sha: statuses[sha])
+    assert not af.approved("windy-git", A, {}, now=1000.0)                       # Hub alone: not on windy-git
+    assert af.approved("windy-git", B, {}, now=1000.0)
+    PATHS[C] = ["TODO.md"]
+    assert af.approved("windy-git", C, {}, now=1000.0)                           # docs head: Boss's stamp, no guards here
 
 
 def test_the_move_never_touches_main_schedules_or_running_jobs():
@@ -85,10 +103,10 @@ def test_a_cached_approval_expires_and_a_withdrawn_one_leaves_the_cache():
     mp.setattr(af.b, "commit_statuses", lambda repo, sha: reads.append(sha) or statuses[sha])
     try:
         cache: dict = {}
-        assert af.approved("windy-git", A, cache, now=1000.0) and cache == {A: 1000.0}
-        assert af.approved("windy-git", A, cache, now=1000.0 + af.APPROVAL_TTL_S - 1) and reads == [A]
+        assert af.approved("windy-mail", A, cache, now=1000.0) and cache == {A: 1000.0}
+        assert af.approved("windy-mail", A, cache, now=1000.0 + af.APPROVAL_TTL_S - 1) and reads == [A]
         statuses[A] = [{"context": "windy-hub/approved", "state": "failure"}] + _ok("windy-hub/approved")
-        assert not af.approved("windy-git", A, cache, now=1000.0 + af.APPROVAL_TTL_S)    # expired: re-read
+        assert not af.approved("windy-mail", A, cache, now=1000.0 + af.APPROVAL_TTL_S)    # expired: re-read
         assert reads == [A, A] and A not in cache
     finally:
         mp.undo()
@@ -112,10 +130,11 @@ def test_a_read_time_in_the_future_is_expired_not_trusted_forever(monkeypatch):
 
 
 def test_traveler_repos_take_agents_read_in_place_of_the_hubs(monkeypatch):
-    """Boss 2026-11-09T05:57:38Z: windy-boss/approved AND (windy-hub OR windy-agent) on the 2 Traveler repos only."""
-    statuses = {A: _ok("windy-boss/approved", "windy-agent/approved"),
-                B: _ok("windy-agent/approved"),                                   # no Boss stamp
-                C: _ok("windy-boss/approved", "windy-hub/approved")}
+    """Boss 2026-11-09T05:57:38Z: (windy-hub OR windy-agent) on the 2 Traveler repos only; since 2026-11-13T01:44:24Z (2)
+    that ONE reader stamp is the whole approval for code (no Boss stamp)."""
+    statuses = {A: _ok("windy-agent/approved"),
+                B: _ok("windy-boss/approved"),                                    # Boss alone: no reader
+                C: _ok("windy-hub/approved")}
     monkeypatch.setattr(af.b, "commit_statuses", lambda repo, sha: statuses[sha])
     for repo in ("windy-traveler", "windytraveler-site"):
         assert af.approved(repo, A, {}, now=1000.0)
@@ -128,10 +147,10 @@ def test_traveler_repos_take_agents_read_in_place_of_the_hubs(monkeypatch):
 
 
 def test_windy_pro_takes_admins_read_in_place_of_the_hubs(monkeypatch):
-    """Boss 2026-11-09T06:45:55Z: on windy-pro, windy-boss/approved AND (windy-hub OR windy-admin); no other repo."""
-    statuses = {A: _ok("windy-boss/approved", "windy-admin/approved"),
-                B: _ok("windy-admin/approved"),                                   # no Boss stamp
-                C: _ok("windy-boss/approved", "windy-hub/approved")}
+    """Boss 2026-11-09T06:45:55Z: on windy-pro, windy-hub OR windy-admin; no other repo. No Boss stamp since 01:44:24Z (2)."""
+    statuses = {A: _ok("windy-admin/approved"),
+                B: _ok("windy-boss/approved"),                                    # Boss alone: no reader
+                C: _ok("windy-hub/approved")}
     monkeypatch.setattr(af.b, "commit_statuses", lambda repo, sha: statuses[sha])
     assert af.approved("windy-pro", A, {}, now=1000.0)
     assert not af.approved("windy-pro", B, {}, now=1000.0)
@@ -140,3 +159,53 @@ def test_windy_pro_takes_admins_read_in_place_of_the_hubs(monkeypatch):
         assert not af.approved(repo, A, {}, now=1000.0)
     statuses[A] = [{"context": "windy-admin/approved", "state": "failure"}] + statuses[A]
     assert not af.approved("windy-pro", A, {}, now=1000.0)                        # a withdrawn read: newest wins
+
+
+def test_a_code_head_needs_only_the_hub_stamp_unless_boss_ask(monkeypatch):
+    """Boss 2026-11-13T01:44:24Z (2): code = ONE stamp, the Hub's; windy-boss/approved only on BOSS ASK titles
+    (and windy-git / kit-army-config). Windy Log 04:30:05Z: windy-contracts #358 was Hub-only and not counted."""
+    statuses = {A: _ok("windy-hub/approved"), B: _ok("windy-boss/approved"),
+                C: _ok("windy-hub/approved", "windy-boss/approved")}
+    monkeypatch.setattr(af.b, "commit_statuses", lambda repo, sha: statuses[sha])
+    assert af.approved("windy-contracts", A, {}, now=1000.0)
+    assert not af.approved("windy-contracts", B, {}, now=1000.0)                 # Boss is not the reader
+    assert not af.approved("windy-contracts", A, {}, now=1000.0, boss_ask=True)  # BOSS ASK: his stamp too
+    assert af.approved("windy-contracts", C, {}, now=1000.0, boss_ask=True)
+    assert not af.approved("kit-army-config", A, {}, now=1000.0)                 # the lockbox keeps Boss
+
+
+def test_a_docs_only_head_counts_on_the_three_guards_by_name_and_nothing_less(monkeypatch):
+    """Boss 2026-11-13T01:44:24Z (1): TODO/docs-only heads merge (and so go first) on the three guards by name."""
+    three = ("windy-git/secret-guard", "windy-git/compute-guard", "windy-git/ci-hygiene")
+    statuses = {A: _ok(*three), B: _ok(*three[:2]), C: _ok("windy-hub/approved")}
+    monkeypatch.setattr(af.b, "commit_statuses", lambda repo, sha: statuses[sha])
+    for sha in (A, B, C):
+        PATHS[sha] = ["TODO.md", "docs/plan.md", "README.md"]
+    assert af.approved("windy-mail", A, {}, now=1000.0)
+    assert not af.approved("windy-mail", B, {}, now=1000.0)                      # one guard missing: not yet
+    assert not af.approved("windy-mail", C, {}, now=1000.0)                      # a stamp is not a guard
+    statuses[A] = [{"context": "windy-git/ci-hygiene", "state": "failure"}] + statuses[A]
+    assert not af.approved("windy-mail", A, {}, now=1000.0)                      # newest wins
+
+
+def test_a_head_with_one_code_file_or_an_unreadable_diff_is_code(monkeypatch):
+    three = ("windy-git/secret-guard", "windy-git/compute-guard", "windy-git/ci-hygiene")
+    statuses = {A: _ok(*three), B: _ok(*three)}
+    monkeypatch.setattr(af.b, "commit_statuses", lambda repo, sha: statuses[sha])
+    PATHS[A] = ["TODO.md", "api/app.py"]
+    PATHS[B] = None
+    assert not af.approved("windy-mail", A, {}, now=1000.0)                      # guards alone never move code
+    assert not af.approved("windy-mail", B, {}, now=1000.0)
+
+
+def test_the_boss_ask_flag_comes_from_the_run_title_in_sql(monkeypatch, tmp_path):
+    reads = _world(monkeypatch, tmp_path, {A: _ok("windy-hub/approved")})
+    seen = []
+    def query(sql):
+        seen.append(sql)
+        if "group by p.name" in sql:
+            return [["windy-contracts", A, "1", "t"]]
+        return []
+    af.main(query, lambda line: None)
+    assert "like '%BOSS ASK%'" in seen[0] and reads == [A]
+    assert len(seen) == 1                                                        # BOSS ASK + Hub only: not moved
