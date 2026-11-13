@@ -4,11 +4,15 @@
 #   - any file under the sync work dir holds a sync token (raw or its Basic-auth base64),
 #   - any bare repo's remote URL carries credentials,
 #   - any process's argv holds one (a sync running right now would show here),
-#   - the work dir is not root:root 0750, or any repo config is group/world readable.
+#   - the work dir is not root:root 0750, or any repo config is group/world readable,
+#   - any GITEA repo config (GITEA_REPOS/<owner>/<repo>.git/config) holds a credential URL or a sync token
+#     (LASTING FIX after 2026-11-12: a pull mirror kept the GitHub token in its config). A missing GITEA_REPOS
+#     is skipped (a host without Gitea); one that exists but cannot be read is a failure.
 set -uo pipefail
 umask 077
 WORK="${SYNC_WORK:-/srv/windygit/sync}"
 ENV_FILE="${SYNC_ENV_FILE:-/etc/windygit/sync.env}"
+GITEA_REPOS="${GITEA_REPOS:-/srv/windygit/git/git/repositories}"
 EXPECT_OWNER="${EXPECT_OWNER:-root:root}"
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
 ( set -a; . "$ENV_FILE"; set +a
@@ -27,5 +31,15 @@ argv=0
 for f in /proc/[0-9]*/cmdline; do grep -qaf "$T/pats" "$f" 2>/dev/null && argv=$((argv+1)); done
 owner=$(stat -c '%U:%G' "$WORK"); mode=$(stat -c '%a' "$WORK")
 loose=$(find "$WORK" -maxdepth 2 -path '*.git/config' -perm /044 | wc -l)
-echo "sync token hygiene: files=$files remote-creds=$creds argv=$argv dir=$owner/$mode loose-configs=$loose"
-[[ $files == 0 && $creds == 0 && $argv == 0 && $owner == "$EXPECT_OWNER" && $mode == 750 && $loose == 0 ]]
+if [[ ! -e $GITEA_REPOS ]]; then
+  gitea=skipped
+elif [[ ! -r $GITEA_REPOS || ! -x $GITEA_REPOS ]]; then
+  gitea=unreadable
+else
+  find "$GITEA_REPOS" -mindepth 3 -maxdepth 3 -path '*.git/config' -type f -print0 2>/dev/null > "$T/cfgs"
+  gitea=$( { xargs -0 -r grep -lE '^[[:space:]]*url[[:space:]]*=[[:space:]]*[A-Za-z][A-Za-z0-9+.-]*://[^/@[:space:]]+@' < "$T/cfgs"
+             xargs -0 -r grep -laf "$T/pats" < "$T/cfgs"; } 2>/dev/null | sort -u | wc -l)
+fi
+echo "sync token hygiene: files=$files remote-creds=$creds argv=$argv dir=$owner/$mode loose-configs=$loose gitea-creds=$gitea"
+[[ $files == 0 && $creds == 0 && $argv == 0 && $owner == "$EXPECT_OWNER" && $mode == 750 && $loose == 0 \
+   && ( $gitea == 0 || $gitea == skipped ) ]]
