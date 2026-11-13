@@ -13,6 +13,8 @@ or docs/, and a test run on such a head can prove nothing new. So, for a WAITING
     test that reads it (windy-pro's tests read docs/legal, docs/contracts, the handtest ledger).
   * EXCLUDED repos by NAME (term 2): EXCLUDE below (none today); PUSH_EXCLUDE: a default-branch push there
     always runs the whole suite (windy-pro); also every repo the bridge does not post for.
+  * PUSH GUARD: any other default-branch push skips a job only when the same job ENDED SUCCESS at its first parent
+    (through parents this rule skipped); a red, cancelled or missing parent job means the push runs. PUSHES below.
   * KEPT workflows: any whose file stem names lint, guard, drift, doc, todo, secret, link or spell. They read
     the very files a docs head changes, so they still run.
 
@@ -47,6 +49,13 @@ EXCLUDE = set(os.environ.get("DOCS_ONLY_EXCLUDE", "").split())
 # Repos whose DEFAULT-BRANCH PUSH always runs the whole suite, docs-only or not (Boss RULING 2026-11-11T05:06:52Z:
 # windy-pro's release cut reads main's own green). Their PR heads follow the rule like every other repo.
 PUSH_EXCLUDE = set(os.environ.get("DOCS_ONLY_PUSH_EXCLUDE", "windy-pro").split())
+# A default-branch push carries the code before it, so a docs-only PUSH may skip a job only when the SAME job (workflow
+# file + job name, a push to the same ref) at its first parent ENDED SUCCESS, or was itself skipped by this rule at a
+# parent that did (P9: never paint a code red green; dark day 2026-11-11/12: 14 of 110 such push jobs failed). While
+# that parent job still waits or runs, nothing is decided and the next pass looks again.
+# DOCS_ONLY_PUSHES=off: no push is ever skipped (PR heads only).
+PUSHES = os.environ.get("DOCS_ONLY_PUSHES", "guarded").strip().lower()
+PARENT_DEPTH = 5
 DESC = "docs-only head: no test job (rule P4)"
 KEEP_WF = re.compile(r"lint|guard|drift|doc|todo|secret|link|spell", re.IGNORECASE)
 MAX_HEADS = int(os.environ.get("DOCS_ONLY_MAX_HEADS", "40"))   # per pass: bounded git work
@@ -153,6 +162,51 @@ order by j.id;
 """
 
 
+def _q(v: str) -> str:
+    return "'" + v.replace("'", "''") + "'"
+
+
+def parent_sha(repo: str, sha: str) -> str | None:
+    rc, out = _git(repo, "rev-parse", "--verify", "-q", f"{sha}^1")
+    p = out.strip()
+    return p if rc == 0 and SAFE_SHA.match(p) else None
+
+
+def parent_job_sql(repo: str, ref: str, sha: str, wf: str, job: str) -> str:
+    return f"""
+select j.id, j.status from action_run_job j join action_run r on r.id = j.run_id
+join repository p on p.id = j.repo_id join "user" o on o.id = p.owner_id
+where o.lower_name = {_q(OWNER.lower())} and p.name = {_q(repo)} and r.event = 'push' and r.ref = {_q(ref)}
+  and j.commit_sha = {_q(sha)} and r.workflow_id = {_q(wf)} and j.name = {_q(job)}
+order by j.id desc limit 1;
+"""
+
+
+def parent_green(query, st: dict, repo: str, ref: str, sha: str, wf: str, job: str, parent=None) -> bool | None:
+    """True: the same job ended success at the first parent (through parents this rule skipped, at most PARENT_DEPTH).
+    None: that job still waits or runs, decide later. False: anything else (red, cancelled, missing, unreadable)."""
+    parent = parent or parent_sha
+    cur = sha
+    for _ in range(PARENT_DEPTH):
+        p = parent(repo, cur)
+        if not p:
+            return False
+        rows = query(parent_job_sql(repo, ref, p, wf, job))
+        if not rows or len(rows[0]) < 2:
+            return False
+        jid, status = rows[0][0], rows[0][1]
+        if status == "1":
+            return True
+        if status in ("5", "6", "7", "9"):
+            return None
+        e = st.get(f"{repo}@{p}")
+        if status == "3" and isinstance(e, dict) and e.get("mode") == "on" and jid.isdigit() and int(jid) in e.get("jobs", []):
+            cur = p
+            continue
+        return False
+    return False
+
+
 def cancel_sql(ids: list[int]) -> str:
     lst = ",".join(str(int(i)) for i in ids)
     return f"""
@@ -226,8 +280,23 @@ def main(query=cs.psql, post=cs.board, decide=docs_head, repos=None, now=time.ti
             continue   # decided before (a head's diff never changes)
         skip, why = decide(repo, sha, jobs[0][2])
         victims = [j for j in jobs if not KEEP_WF.search(j[5].rsplit(".", 1)[0])]
+        if skip and victims and jobs[0][2] == "push":
+            if PUSHES == "off":
+                victims, why = [], "push: DOCS_ONLY_PUSHES=off"
+            else:
+                try:
+                    green = {j[0]: parent_green(query, st, repo, j[3], sha, j[5], j[6]) for j in victims}
+                except Exception as e:  # noqa: BLE001 - never fails the sync; the push runs
+                    print(f"  docs-only: {repo}@{sha[:8]} parent read skipped ({type(e).__name__})")
+                    continue
+                if any(v is None for v in green.values()):
+                    continue   # a parent job still waits or runs: decide on a later pass
+                victims = [j for j in victims if green[j[0]]]
+                if not victims:
+                    why = "push: the parent's same job did not end success"
         if not skip or not victims:
-            st[key] = {"at": now(), "skip": False, "why": why if not skip else "only kept workflows"}
+            st[key] = {"at": now(), "skip": False,
+                       "why": why if not skip or why.startswith("push:") else "only kept workflows"}
             continue
         if not on:
             st[key] = {"at": now(), "skip": True, "mode": "dark", "why": why, "would": [int(j[0]) for j in victims]}
