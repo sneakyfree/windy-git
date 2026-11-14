@@ -63,6 +63,34 @@ REPOS = os.environ.get(
     " windy-inbox windy-text windy-hand-site windy-calendar-site windy-contracts windy-vault windy-uptime windy-pro-mobile windy-text-site windy-mind-acp windy-admin Windy-Clone-site windy-mind-site windyword-site windy-cell windycloud-site eternitas-site eternitas-authenticator windy-legal windy-cfo windy-board windy-log windy-log-site windy-hub windy-fly-desktop windy-support windy-mobile windy-mobile-site windy-os windy-os-site windy-seo",
 ).split()
 
+# GUARDS ON EVERY SYNCED REPO (Boss 2026-11-12T17:56:52Z (b); my LIST 18:11:51Z). Every repo the sync carries gets
+# the four guards (secret-guard, compute-guard, ci-hygiene, birth-terms), so a lane that merges "on the three guards by
+# name" never waits on a guard that cannot post. Repos outside REPOS get them GUARD-ONLY: no mirror PR, no Gitea CI,
+# no windy-git/<workflow>/<job> verdict (a public repo keeps its own GitHub Actions verdict). OUT, by name, each
+# with its reason; any other synced repo left unguarded fails test_every_synced_repo_is_guarded_or_out_by_name.
+# Never here: kit-army-config and the *-soul repos (never synced), and repos outside the sync (not fetched).
+GUARD_OUT = {
+    "windy-ads": "archived on GitHub: takes no merges (back in first if it is ever unarchived: Marketing)",
+    "windy-fix-me": "archived on GitHub: takes no merges",
+    "windy-chat-site": "archived on GitHub: takes no merges",
+    "windy-ecosystem-chronicles": "audit text, not code (Boss road (A) 2026-11-12T18:17:11Z)",
+}
+
+
+def synced_repos() -> list[str]:
+    """The sync's own list: SYNC_REPOS if set, else the default in sync_from_github.sh (one list, P6)."""
+    env = os.environ.get("SYNC_REPOS", "").split()
+    if env:
+        return env
+    sh = (Path(__file__).resolve().parent / "sync_from_github.sh").read_text()
+    m = re.search(r'REPOS="\$\{SYNC_REPOS:-([^}]*)\}"', sh)
+    return m.group(1).split() if m else []
+
+
+GUARD_ONLY = os.environ.get("BRIDGE_GUARD_ONLY_REPOS", "").split() or [
+    r for r in synced_repos() if r not in REPOS and r not in GUARD_OUT]
+
+
 # Gitea run status -> GitHub status state. `skipped` is deliberately absent: a
 # job skipped by its own `if:` (e.g. substrate-drift's no-secrets path) has no
 # verdict, and painting it green would be a claim nobody tested.
@@ -1014,6 +1042,57 @@ def save_state(st: dict) -> None:
         print(f"  bridge state not saved ({type(e).__name__}); next pass re-reads every head")
 
 
+def default_ref(repo: str, pre: dict | None, state: dict, now: float) -> tuple[str, str | None]:
+    """(default branch, its head sha or None): from this pass's prefetch, else REST (branch name cached)."""
+    if pre:
+        return pre[repo]["default_branch"], pre[repo]["default_head"]
+    cached = state["branches"].get(repo)
+    if cached and now - cached["read"] < BRANCH_TTL_S:
+        default_branch = cached["name"]
+    else:
+        default_branch = "main"
+        st, br = github("GET", f"/repos/{GH_OWNER}/{repo}")
+        if st == 200:
+            default_branch = br["default_branch"]
+            state["branches"][repo] = {"name": default_branch, "read": now}
+    st, b = github("GET", f"/repos/{GH_OWNER}/{repo}/branches/{default_branch}")
+    return default_branch, (b["commit"]["sha"] if st == 200 else None)
+
+
+def post_guards(repo: str, sha: str, default_branch: str, is_default_head: bool) -> None:
+    post_compute_guard(repo, sha, default_branch, is_default_head)
+    post_ci_hygiene(repo, sha, default_branch, is_default_head)
+    post_birth_terms(repo, sha, default_branch, is_default_head)
+    post_secret_guard(repo, sha, default_branch, is_default_head)
+
+
+def guard_only_pass(repo: str, pre: dict | None, state: dict, now: float, seen: set) -> tuple[int, int]:
+    """The four guards on a guard-only repo's open same-repo PR heads and its default head. (read, cached)."""
+    prs = pre[repo]["prs"] if pre else github_open_pulls(repo)
+    default_branch, default_head = default_ref(repo, pre, state, now)
+    heads = [p["head"]["sha"] for p in prs
+             if p["head"]["repo"] and p["head"]["repo"]["full_name"] == f"{GH_OWNER}/{repo}"]   # never a fork
+    if default_head:
+        heads.append(default_head)
+    read = cached = 0
+    for sha in dict.fromkeys(heads):
+        key = f"guard|{repo}|{sha}"
+        seen.add(key)
+        sig = f"guards|default={sha == default_head}|fetched={fetched(repo, sha)}"
+        prev = state["heads"].get(key)
+        if prev and prev["sig"] == sig and now - prev["read"] < _backstop(key):
+            cached += 1
+            continue
+        fails = POST_FAILS[0]
+        post_guards(repo, sha, default_branch, sha == default_head)
+        read += 1
+        if POST_FAILS[0] == fails and (repo, sha) in _STATUSES_CACHE:
+            state["heads"][key] = {"sig": sig, "read": now}
+        else:
+            state["heads"].pop(key, None)
+    return read, cached
+
+
 def main() -> int:
     if not (GITEA_TOKEN and GITHUB_TOKEN):
         sys.exit("GITEA_SYNC_TOKEN and GITHUB_TOKEN are required")
@@ -1037,7 +1116,7 @@ def main() -> int:
         _write_skips(0)
     failed = 0
     _STATUSES_CACHE.clear()
-    pre = prefetch(REPOS)
+    pre = prefetch(REPOS + [r for r in GUARD_ONLY if r not in REPOS])
     if pre is None:
         print(f"  bridge: GraphQL prefetch unavailable or partial: this pass uses REST (nothing taken from it); "
               f"why: {PREFETCH_WHY or 'unknown'}")
@@ -1048,25 +1127,9 @@ def main() -> int:
     for repo in REPOS:
         try:
             shas = sync_prs(repo, pre[repo]["prs"]) if pre else sync_prs(repo)
-            default_head = None
-            if pre:
-                default_branch = pre[repo]["default_branch"]
-                default_head = pre[repo]["default_head"]
+            default_branch, default_head = default_ref(repo, pre, state, now)
+            if default_head:
                 shas.append(default_head)
-            else:
-                cached = state["branches"].get(repo)
-                if cached and now - cached["read"] < BRANCH_TTL_S:
-                    default_branch = cached["name"]
-                else:
-                    default_branch = "main"
-                    st, br = github("GET", f"/repos/{GH_OWNER}/{repo}")
-                    if st == 200:
-                        default_branch = br["default_branch"]
-                        state["branches"][repo] = {"name": default_branch, "read": now}
-                st, b = github("GET", f"/repos/{GH_OWNER}/{repo}/branches/{default_branch}")
-                if st == 200:
-                    default_head = b["commit"]["sha"]
-                    shas.append(default_head)
             heads = list(dict.fromkeys(shas))
             sigs = job_signatures(repo, heads)
             for sha in heads:
@@ -1081,10 +1144,7 @@ def main() -> int:
                 fails = POST_FAILS[0]
                 post_statuses(repo, sha)
                 post_autorerun_note(repo, sha)
-                post_compute_guard(repo, sha, default_branch, sha == default_head)
-                post_ci_hygiene(repo, sha, default_branch, sha == default_head)
-                post_birth_terms(repo, sha, default_branch, sha == default_head)
-                post_secret_guard(repo, sha, default_branch, sha == default_head)
+                post_guards(repo, sha, default_branch, sha == default_head)
                 processed += 1
                 if sig is not None and POST_FAILS[0] == fails and (repo, sha) in _STATUSES_CACHE:
                     state["heads"][key] = {"sig": sig, "read": now}
@@ -1093,8 +1153,19 @@ def main() -> int:
         except Exception as e:  # one repo's failure must not hide the others'
             print(f"  FAILED {repo}: {e}")
             failed = 1
+    g_read = g_cached = 0
+    for repo in GUARD_ONLY:
+        if repo in REPOS:
+            continue
+        try:
+            r, c = guard_only_pass(repo, pre, state, now, seen)
+            g_read, g_cached = g_read + r, g_cached + c
+        except Exception as e:  # one repo's failure must not hide the others'
+            print(f"  FAILED {repo} (guard-only): {e}")
+            failed = 1
     state["heads"] = {k: v for k, v in state["heads"].items() if k in seen}
     save_state(state)
+    print(f"  bridge: guard-only {len(GUARD_ONLY)} repos: {g_read} heads read, {g_cached} unchanged (cached)")
     print(f"  bridge: {processed} heads read, {skipped} unchanged (cached); GitHub calls this pass: "
           f"REST {CALLS['rest']}, GraphQL {CALLS['graphql']} ({'GraphQL prefetch' if pre else 'REST fallback'})")
     return failed
